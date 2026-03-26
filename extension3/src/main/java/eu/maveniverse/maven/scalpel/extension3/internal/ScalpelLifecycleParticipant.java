@@ -21,7 +21,6 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -29,7 +28,6 @@ import javax.inject.Singleton;
 import org.apache.maven.AbstractMavenLifecycleParticipant;
 import org.apache.maven.MavenExecutionException;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Model;
 import org.apache.maven.project.MavenProject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -41,21 +39,18 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final ScalpelCore scalpelCore;
     private final ModuleMapper moduleMapper;
-    private final OldModelBuilder oldModelBuilder;
-    private final EffectiveModelComparator modelComparator;
+    private final PomChangeAnalyzer pomChangeAnalyzer;
     private final ReactorTrimmer reactorTrimmer;
 
     @Inject
     public ScalpelLifecycleParticipant(
             ScalpelCore scalpelCore,
             ModuleMapper moduleMapper,
-            OldModelBuilder oldModelBuilder,
-            EffectiveModelComparator modelComparator,
+            PomChangeAnalyzer pomChangeAnalyzer,
             ReactorTrimmer reactorTrimmer) {
         this.scalpelCore = requireNonNull(scalpelCore, "scalpelCore");
         this.moduleMapper = requireNonNull(moduleMapper, "moduleMapper");
-        this.oldModelBuilder = requireNonNull(oldModelBuilder, "oldModelBuilder");
-        this.modelComparator = requireNonNull(modelComparator, "modelComparator");
+        this.pomChangeAnalyzer = requireNonNull(pomChangeAnalyzer, "pomChangeAnalyzer");
         this.reactorTrimmer = requireNonNull(reactorTrimmer, "reactorTrimmer");
     }
 
@@ -123,38 +118,20 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<MavenProject> affectedBySource = moduleMapper.mapToProjects(sourceChanges, allProjects, reactorRoot);
             logger.debug("Modules affected by source changes: {}", projectKeys(affectedBySource));
 
-            // Handle POM changes via effective model comparison
+            // Analyze POM changes directly (no model building needed)
             Set<MavenProject> affectedByPom = new LinkedHashSet<>();
             if (!pomChanges.isEmpty()) {
                 logger.debug("POM changes detected: {}", pomChanges);
                 try {
-                    Map<String, byte[]> oldPomContents = result.getOldPomContents();
-
-                    if (!oldPomContents.isEmpty()) {
-                        Map<String, Model> oldModels =
-                                oldModelBuilder.buildOldModels(oldPomContents, session, reactorRoot);
-
-                        // Compare each module's old vs current effective model
-                        for (MavenProject project : allProjects) {
-                            String key = project.getGroupId() + ":" + project.getArtifactId();
-                            Model oldModel = oldModels.get(key);
-                            if (oldModel == null) {
-                                // New module, it's affected
-                                affectedByPom.add(project);
-                                logger.debug("New module detected: {}", key);
-                            } else if (modelComparator.hasRelevantDifferences(oldModel, project.getModel())) {
-                                affectedByPom.add(project);
-                                logger.debug("POM changes affect module: {}", key);
-                            }
-                        }
-                    }
+                    affectedByPom = pomChangeAnalyzer.analyzeChanges(
+                            pomChanges, result.getOldPomContents(), allProjects, reactorRoot);
                 } catch (Exception e) {
                     if (config.isFailSafe()) {
-                        logger.warn("Scalpel: Error comparing POM models, building all modules: {}", e.getMessage());
-                        logger.debug("POM comparison error details", e);
+                        logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
+                        logger.debug("POM analysis error details", e);
                         return;
                     } else {
-                        throw new MavenExecutionException("Scalpel: Error comparing POM models", e);
+                        throw new MavenExecutionException("Scalpel: Error analyzing POM changes", e);
                     }
                 }
                 logger.debug("Modules affected by POM changes: {}", projectKeys(affectedByPom));

@@ -9,8 +9,13 @@ package eu.maveniverse.maven.scalpel.core;
 
 import static java.util.Objects.requireNonNull;
 
+import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
@@ -49,11 +54,7 @@ public class ScalpelCore {
             throws ScalpelException {
         Repository repository;
         try {
-            repository = new FileRepositoryBuilder()
-                    .readEnvironment()
-                    .findGitDir(reactorRoot.toFile())
-                    .setMustExist(true)
-                    .build();
+            repository = openRepository(reactorRoot);
         } catch (RepositoryNotFoundException e) {
             logger.info("Scalpel: Not a git repository, building all modules");
             return null;
@@ -102,6 +103,54 @@ public class ScalpelCore {
         } finally {
             repository.close();
         }
+    }
+
+    private Repository openRepository(Path reactorRoot) throws IOException {
+        FileRepositoryBuilder builder =
+                new FileRepositoryBuilder().readEnvironment().findGitDir(reactorRoot.toFile());
+
+        File gitDir = builder.getGitDir();
+
+        // Handle git worktrees: .git may be a file containing "gitdir: <path>"
+        if (gitDir == null) {
+            File dotGit = findDotGit(reactorRoot.toFile());
+            if (dotGit != null && dotGit.isFile()) {
+                String gitDirPath = readGitDirFromFile(dotGit);
+                if (gitDirPath != null) {
+                    Path resolvedPath = Paths.get(gitDirPath);
+                    if (!resolvedPath.isAbsolute()) {
+                        resolvedPath = dotGit.getParentFile().toPath().resolve(gitDirPath);
+                    }
+                    File resolved = resolvedPath.toFile();
+                    logger.debug("Detected git worktree, gitdir={}", resolved);
+                    builder.setGitDir(resolved);
+                }
+            }
+        }
+
+        return builder.setMustExist(true).build();
+    }
+
+    private static File findDotGit(File dir) {
+        Path current = dir.toPath();
+        while (current != null) {
+            Path dotGit = current.resolve(".git");
+            if (Files.exists(dotGit)) {
+                return dotGit.toFile();
+            }
+            current = current.getParent();
+        }
+        return null;
+    }
+
+    private static String readGitDirFromFile(File dotGitFile) throws IOException {
+        try (BufferedReader reader = Files.newBufferedReader(dotGitFile.toPath(), StandardCharsets.UTF_8)) {
+            String line = reader.readLine();
+            if (line != null && line.startsWith("gitdir:")) {
+                return line.substring("gitdir:".length()).trim();
+            }
+        }
+        return null;
     }
 
     private ChangeDetectionResult handleError(ScalpelConfiguration config, String message, Exception e)
