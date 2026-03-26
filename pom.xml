@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    Copyright (c) Maveniverse Org.
+    All rights reserved. This program and the accompanying materials
+    are made available under the terms of the Eclipse Public License v2.0
+    which accompanies this distribution, and is available at
+    https://www.eclipse.org/legal/epl-v20.html
+
+-->
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>eu.maveniverse.maven.parent</groupId>
+    <artifactId>parent</artifactId>
+    <version>51</version>
+  </parent>
+
+  <groupId>eu.maveniverse.maven.scalpel</groupId>
+  <artifactId>scalpel</artifactId>
+  <version>0.1.0-SNAPSHOT</version>
+  <packaging>pom</packaging>
+
+  <name>${project.groupId}:${project.artifactId}</name>
+  <description>Scalpel Maven Extension.</description>
+
+  <url>https://www.maveniverse.eu/scalpel</url>
+
+  <licenses>
+    <license>
+      <name>EPL-2.0</name>
+      <url>https://www.eclipse.org/legal/epl-2.0/</url>
+    </license>
+  </licenses>
+
+  <modules>
+    <module>core</module>
+    <module>extension3</module>
+    <module>extension</module>
+    <module>it</module>
+  </modules>
+
+  <scm>
+    <connection>scm:git:git@github.com:maveniverse/scalpel.git</connection>
+    <developerConnection>scm:git:git@github.com:maveniverse/scalpel.git</developerConnection>
+    <tag>HEAD</tag>
+    <url>https://github.com/maveniverse/scalpel</url>
+  </scm>
+
+  <issueManagement>
+    <system>Github</system>
+    <url>https://github.com/maveniverse/scalpel/issues</url>
+  </issueManagement>
+
+  <ciManagement>
+    <system>Github</system>
+    <url>https://github.com/maveniverse/scalpel/actions</url>
+  </ciManagement>
+
+  <properties>
+    <project.build.outputTimestamp>2025-12-19T13:39:09Z</project.build.outputTimestamp>
+
+    <maven.compiler.release>8</maven.compiler.release>
+    <requireRuntimeMavenVersion.range>[3.8,)</requireRuntimeMavenVersion.range>
+
+    <!-- Maven 3 versions -->
+    <maven3Version>3.9.14</maven3Version>
+    <maven3ResolverVersion>1.9.27</maven3ResolverVersion>
+
+    <version.slf4j>1.7.36</version.slf4j>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Internal -->
+      <dependency>
+        <groupId>eu.maveniverse.maven.scalpel</groupId>
+        <artifactId>core</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>eu.maveniverse.maven.scalpel</groupId>
+        <artifactId>extension3</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>eu.maveniverse.maven.scalpel</groupId>
+        <artifactId>extension</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>eu.maveniverse.maven.shared</groupId>
+        <artifactId>extension</artifactId>
+        <version>0.1.11</version>
+      </dependency>
+
+      <!-- Logging -->
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-api</artifactId>
+        <version>${version.slf4j}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.slf4j</groupId>
+        <artifactId>slf4j-simple</artifactId>
+        <version>${version.slf4j}</version>
+      </dependency>
+
+      <!-- DI -->
+      <dependency>
+        <groupId>javax.inject</groupId>
+        <artifactId>javax.inject</artifactId>
+        <version>1</version>
+      </dependency>
+      <dependency>
+        <groupId>org.eclipse.sisu</groupId>
+        <artifactId>org.eclipse.sisu.inject</artifactId>
+        <version>1.0.0</version>
+      </dependency>
+
+      <!-- JGit -->
+      <dependency>
+        <groupId>org.eclipse.jgit</groupId>
+        <artifactId>org.eclipse.jgit</artifactId>
+        <version>5.13.5.202508271544-r</version>
+      </dependency>
+
+      <!-- Test -->
+      <dependency>
+        <groupId>org.junit.jupiter</groupId>
+        <artifactId>junit-jupiter-api</artifactId>
+        <version>6.0.3</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-javadoc-plugin</artifactId>
+          <configuration>
+            <additionalOptions>
+              <additionalOption>-private</additionalOption>
+            </additionalOptions>
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+    <plugins>
+      <plugin>
+        <groupId>org.eclipse.sisu</groupId>
+        <artifactId>sisu-maven-plugin</artifactId>
+        <version>${version.sisu}</version>
+        <executions>
+          <execution>
+            <id>index-project</id>
+            <goals>
+              <goal>main-index</goal>
+              <goal>test-index</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
+</project>
