@@ -149,7 +149,8 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("module-a/pom.xml", readFile(moduleA.getFile()));
 
-        Set<MavenProject> affected = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.contains(moduleA), "Leaf module with changed POM should be affected");
         assertEquals(1, affected.size(), "Only the leaf module should be affected");
@@ -179,7 +180,8 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        Set<MavenProject> affected = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleB = projects.get(2);
         assertTrue(affected.contains(moduleB), "module-b references ${dep.version} and should be affected");
@@ -217,7 +219,8 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        Set<MavenProject> affected = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleB = projects.get(2);
         assertTrue(affected.contains(moduleB), "module-b uses managed dep com.example:lib-x and should be affected");
@@ -247,7 +250,8 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        Set<MavenProject> affected = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.isEmpty(), "Cosmetic parent POM change should not affect any module");
     }
@@ -261,9 +265,138 @@ class PomChangeAnalyzerTest {
         Set<String> changedPoms = Collections.singleton("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
 
-        Set<MavenProject> affected = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertEquals(3, affected.size(), "New parent POM should mark parent + all children");
+    }
+
+    @Test
+    void analyzeChanges_propertyIndirectionReturnsChangedGAs() throws Exception {
+        // Verify that the result includes the changed managed dep GAs for transitive checking
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithManagedDepPropertyIndirection(root);
+
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <spring.version>5.3.0</spring.version>\n"
+                + "  </properties>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>org.springframework</groupId>\n"
+                + "      <artifactId>spring-core</artifactId>\n"
+                + "      <version>${spring.version}</version>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getChangedManagedDependencyGAs().contains("org.springframework:spring-core"),
+                "Changed managed dep GAs should include spring-core (via property indirection)");
+    }
+
+    @Test
+    void analyzeChanges_propertyIndirectionThroughManagedDep() throws Exception {
+        // Parent defines <spring.version> used in depMgmt: <version>${spring.version}</version>
+        // module-b uses managed dep spring-core (no version in child POM)
+        // When spring.version changes, module-b should be affected
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithManagedDepPropertyIndirection(root);
+
+        // Old parent POM had spring.version=5.3.0
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <spring.version>5.3.0</spring.version>\n"
+                + "  </properties>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>org.springframework</groupId>\n"
+                + "      <artifactId>spring-core</artifactId>\n"
+                + "      <version>${spring.version}</version>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleB),
+                "module-b uses managed dep spring-core whose version comes from changed property spring.version");
+
+        MavenProject moduleA = projects.get(1);
+        assertFalse(affected.contains(moduleA), "module-a does not use spring-core and should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_propertyIndirectionThroughManagedPlugin() throws Exception {
+        // Parent defines <compiler.version> used in pluginMgmt
+        // module-b uses maven-compiler-plugin (managed)
+        // When compiler.version changes, module-b should be affected
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithManagedPluginPropertyIndirection(root);
+
+        // Old parent POM had compiler.version=3.11.0
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <compiler.version>3.11.0</compiler.version>\n"
+                + "  </properties>\n"
+                + "  <build><pluginManagement><plugins>\n"
+                + "    <plugin>\n"
+                + "      <groupId>org.apache.maven.plugins</groupId>\n"
+                + "      <artifactId>maven-compiler-plugin</artifactId>\n"
+                + "      <version>${compiler.version}</version>\n"
+                + "    </plugin>\n"
+                + "  </plugins></pluginManagement></build>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleB),
+                "module-b uses managed plugin maven-compiler-plugin whose version comes from changed property");
+
+        MavenProject moduleA = projects.get(1);
+        assertFalse(
+                affected.contains(moduleA), "module-a does not use maven-compiler-plugin and should NOT be affected");
     }
 
     // --- Helper methods ---
@@ -389,6 +522,103 @@ class PomChangeAnalyzerTest {
                 + "  <dependencies>\n"
                 + "    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId></dependency>\n"
                 + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        return buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+    }
+
+    private List<MavenProject> createReactorWithManagedDepPropertyIndirection(Path root) throws IOException {
+        // Parent POM: spring.version=6.0.0 (new), managed dep spring-core uses ${spring.version}
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <spring.version>6.0.0</spring.version>\n"
+                + "  </properties>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>org.springframework</groupId>\n"
+                + "      <artifactId>spring-core</artifactId>\n"
+                + "      <version>${spring.version}</version>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        // module-a: does NOT use spring-core
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // module-b: uses spring-core (managed, no version in child POM)
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>org.springframework</groupId><artifactId>spring-core</artifactId></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        return buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+    }
+
+    private List<MavenProject> createReactorWithManagedPluginPropertyIndirection(Path root) throws IOException {
+        // Parent POM: compiler.version=3.12.0 (new), managed plugin uses ${compiler.version}
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <compiler.version>3.12.0</compiler.version>\n"
+                + "  </properties>\n"
+                + "  <build><pluginManagement><plugins>\n"
+                + "    <plugin>\n"
+                + "      <groupId>org.apache.maven.plugins</groupId>\n"
+                + "      <artifactId>maven-compiler-plugin</artifactId>\n"
+                + "      <version>${compiler.version}</version>\n"
+                + "    </plugin>\n"
+                + "  </plugins></pluginManagement></build>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        // module-a: does NOT use maven-compiler-plugin
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // module-b: uses maven-compiler-plugin (managed, no version in child POM)
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "  <build><plugins>\n"
+                + "    <plugin>\n"
+                + "      <groupId>org.apache.maven.plugins</groupId>\n"
+                + "      <artifactId>maven-compiler-plugin</artifactId>\n"
+                + "    </plugin>\n"
+                + "  </plugins></build>\n"
                 + "</project>\n";
         writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
 

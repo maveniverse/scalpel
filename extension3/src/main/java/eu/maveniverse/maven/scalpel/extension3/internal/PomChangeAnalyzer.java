@@ -38,19 +38,54 @@ class PomChangeAnalyzer {
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
     /**
-     * Analyze POM changes and return the set of affected projects.
+     * Result of POM change analysis.
+     */
+    static class Result {
+        private final Set<MavenProject> affectedProjects;
+        private final Set<String> changedManagedDependencyGAs;
+        private final Set<String> changedManagedPluginGAs;
+
+        Result(
+                Set<MavenProject> affectedProjects,
+                Set<String> changedManagedDependencyGAs,
+                Set<String> changedManagedPluginGAs) {
+            this.affectedProjects = affectedProjects;
+            this.changedManagedDependencyGAs = changedManagedDependencyGAs;
+            this.changedManagedPluginGAs = changedManagedPluginGAs;
+        }
+
+        Set<MavenProject> getAffectedProjects() {
+            return affectedProjects;
+        }
+
+        Set<String> getChangedManagedDependencyGAs() {
+            return changedManagedDependencyGAs;
+        }
+
+        Set<String> getChangedManagedPluginGAs() {
+            return changedManagedPluginGAs;
+        }
+    }
+
+    /**
+     * Analyze POM changes and return the set of affected projects plus changed managed GAs.
      * <p>
      * For child/leaf POM changes: the module itself is marked as affected.
      * For parent/aggregator POM changes: only children that actually reference
      * changed properties, managed dependencies, or managed plugins are affected.
+     * <p>
+     * The changed managed dependency and plugin GAs are also returned so callers can check
+     * transitive dependency trees and effective plugins for additional affected modules.
      */
-    public Set<MavenProject> analyzeChanges(
+    public Result analyzeChanges(
             Set<String> changedPomPaths,
             Map<String, byte[]> oldPomContents,
             List<MavenProject> allProjects,
             Path reactorRoot) {
 
         Set<MavenProject> affected = new LinkedHashSet<>();
+        Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
+        Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
 
         // Build a map of relative POM path -> MavenProject
         Map<String, MavenProject> projectByPomPath = new LinkedHashMap<>();
@@ -88,7 +123,14 @@ class PomChangeAnalyzer {
             }
 
             try {
-                analyzeParentPomChange(project, oldPomBytes, allProjects, reactorRoot, affected);
+                analyzeParentPomChange(
+                        project,
+                        oldPomBytes,
+                        allProjects,
+                        reactorRoot,
+                        affected,
+                        allChangedManagedDepGAs,
+                        allChangedManagedPluginGAs);
             } catch (Exception e) {
                 // If we can't parse the old POM, be conservative and mark all children
                 logger.warn(
@@ -100,7 +142,7 @@ class PomChangeAnalyzer {
             }
         }
 
-        return affected;
+        return new Result(affected, allChangedManagedDepGAs, allChangedManagedPluginGAs);
     }
 
     private void analyzeParentPomChange(
@@ -108,7 +150,9 @@ class PomChangeAnalyzer {
             byte[] oldPomBytes,
             List<MavenProject> allProjects,
             Path reactorRoot,
-            Set<MavenProject> affected)
+            Set<MavenProject> affected,
+            Set<String> allChangedManagedDepGAs,
+            Set<String> allChangedManagedPluginGAs)
             throws IOException, XmlPullParserException {
 
         MavenXpp3Reader reader = new MavenXpp3Reader();
@@ -147,6 +191,20 @@ class PomChangeAnalyzer {
 
         // Find changed managed plugins (by groupId:artifactId)
         Set<String> changedManagedPlugins = diffPluginManagement(oldModel, newModel);
+
+        // Resolve property indirection: if a managed dep/plugin uses a changed property
+        // in its version (e.g. <version>${spring.version}</version>), it's effectively changed
+        // even though the raw XML string didn't change
+        if (!changedProperties.isEmpty()) {
+            augmentWithPropertyReferences(changedProperties, changedManagedDeps, getManagedDependencies(oldModel));
+            augmentWithPropertyReferences(changedProperties, changedManagedDeps, getManagedDependencies(newModel));
+            augmentWithPluginPropertyReferences(changedProperties, changedManagedPlugins, getManagedPlugins(oldModel));
+            augmentWithPluginPropertyReferences(changedProperties, changedManagedPlugins, getManagedPlugins(newModel));
+        }
+
+        // Collect all changed managed GAs for transitive dependency and plugin checking
+        allChangedManagedDepGAs.addAll(changedManagedDeps);
+        allChangedManagedPluginGAs.addAll(changedManagedPlugins);
 
         if (changedProperties.isEmpty() && changedManagedDeps.isEmpty() && changedManagedPlugins.isEmpty()) {
             logger.debug("No inherited changes in {}", key(parentProject));
@@ -355,6 +413,79 @@ class PomChangeAnalyzer {
             return model.getBuild().getPlugins();
         }
         return new ArrayList<>();
+    }
+
+    private List<Dependency> getManagedDependencies(Model model) {
+        if (model.getDependencyManagement() != null
+                && model.getDependencyManagement().getDependencies() != null) {
+            return model.getDependencyManagement().getDependencies();
+        }
+        return new ArrayList<>();
+    }
+
+    private List<Plugin> getManagedPlugins(Model model) {
+        if (model.getBuild() != null
+                && model.getBuild().getPluginManagement() != null
+                && model.getBuild().getPluginManagement().getPlugins() != null) {
+            return model.getBuild().getPluginManagement().getPlugins();
+        }
+        return new ArrayList<>();
+    }
+
+    private void augmentWithPropertyReferences(
+            Set<String> changedProperties, Set<String> changedGAs, List<Dependency> dependencies) {
+        for (Dependency dep : dependencies) {
+            String ga = dep.getGroupId() + ":" + dep.getArtifactId();
+            if (!changedGAs.contains(ga) && referencesAnyProperty(dep, changedProperties)) {
+                changedGAs.add(ga);
+            }
+        }
+    }
+
+    private void augmentWithPluginPropertyReferences(
+            Set<String> changedProperties, Set<String> changedGAs, List<Plugin> plugins) {
+        for (Plugin plugin : plugins) {
+            String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
+            if (!changedGAs.contains(ga) && referencesAnyProperty(plugin, changedProperties)) {
+                changedGAs.add(ga);
+            }
+        }
+    }
+
+    private boolean referencesAnyProperty(Dependency dep, Set<String> properties) {
+        for (String prop : properties) {
+            String ref = "${" + prop + "}";
+            if (containsRef(dep.getVersion(), ref)
+                    || containsRef(dep.getGroupId(), ref)
+                    || containsRef(dep.getArtifactId(), ref)
+                    || containsRef(dep.getScope(), ref)
+                    || containsRef(dep.getType(), ref)
+                    || containsRef(dep.getClassifier(), ref)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean referencesAnyProperty(Plugin plugin, Set<String> properties) {
+        for (String prop : properties) {
+            String ref = "${" + prop + "}";
+            if (containsRef(plugin.getVersion(), ref)
+                    || containsRef(plugin.getGroupId(), ref)
+                    || containsRef(plugin.getArtifactId(), ref)) {
+                return true;
+            }
+            // Check plugin configuration
+            if (plugin.getConfiguration() != null
+                    && containsRef(plugin.getConfiguration().toString(), ref)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean containsRef(String value, String ref) {
+        return value != null && value.contains(ref);
     }
 
     private Set<MavenProject> findParentProjects(List<MavenProject> allProjects) {

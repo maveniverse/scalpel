@@ -28,7 +28,13 @@ import javax.inject.Singleton;
 import org.apache.maven.AbstractMavenLifecycleParticipant;
 import org.apache.maven.MavenExecutionException;
 import org.apache.maven.execution.MavenSession;
+import org.apache.maven.model.Plugin;
+import org.apache.maven.project.DefaultDependencyResolutionRequest;
+import org.apache.maven.project.DependencyResolutionException;
+import org.apache.maven.project.DependencyResolutionResult;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.project.ProjectDependenciesResolver;
+import org.eclipse.aether.graph.Dependency;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,17 +47,20 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     private final ModuleMapper moduleMapper;
     private final PomChangeAnalyzer pomChangeAnalyzer;
     private final ReactorTrimmer reactorTrimmer;
+    private final ProjectDependenciesResolver dependenciesResolver;
 
     @Inject
     public ScalpelLifecycleParticipant(
             ScalpelCore scalpelCore,
             ModuleMapper moduleMapper,
             PomChangeAnalyzer pomChangeAnalyzer,
-            ReactorTrimmer reactorTrimmer) {
+            ReactorTrimmer reactorTrimmer,
+            ProjectDependenciesResolver dependenciesResolver) {
         this.scalpelCore = requireNonNull(scalpelCore, "scalpelCore");
         this.moduleMapper = requireNonNull(moduleMapper, "moduleMapper");
         this.pomChangeAnalyzer = requireNonNull(pomChangeAnalyzer, "pomChangeAnalyzer");
         this.reactorTrimmer = requireNonNull(reactorTrimmer, "reactorTrimmer");
+        this.dependenciesResolver = requireNonNull(dependenciesResolver, "dependenciesResolver");
     }
 
     @Override
@@ -64,7 +73,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             return;
         }
 
-        logger.info("Scalpel {} activated", Version.version());
+        logger.info("Scalpel {} activated (mode={})", Version.version(), config.getMode());
         logger.debug("Configuration: {}", config);
 
         Path reactorRoot = session.getRequest().getMultiModuleProjectDirectory().toPath();
@@ -120,11 +129,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Analyze POM changes directly (no model building needed)
             Set<MavenProject> affectedByPom = new LinkedHashSet<>();
+            Set<String> changedManagedDepGAs = new LinkedHashSet<>();
+            Set<String> changedManagedPluginGAs = new LinkedHashSet<>();
             if (!pomChanges.isEmpty()) {
                 logger.debug("POM changes detected: {}", pomChanges);
                 try {
-                    affectedByPom = pomChangeAnalyzer.analyzeChanges(
+                    PomChangeAnalyzer.Result pomResult = pomChangeAnalyzer.analyzeChanges(
                             pomChanges, result.getOldPomContents(), allProjects, reactorRoot);
+                    affectedByPom = pomResult.getAffectedProjects();
+                    changedManagedDepGAs = pomResult.getChangedManagedDependencyGAs();
+                    changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
                 } catch (Exception e) {
                     if (config.isFailSafe()) {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
@@ -135,6 +149,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                 }
                 logger.debug("Modules affected by POM changes: {}", projectKeys(affectedByPom));
+                if (!changedManagedDepGAs.isEmpty()) {
+                    logger.debug("Changed managed dependency GAs: {}", changedManagedDepGAs);
+                }
+                if (!changedManagedPluginGAs.isEmpty()) {
+                    logger.debug("Changed managed plugin GAs: {}", changedManagedPluginGAs);
+                }
             }
 
             // Combine
@@ -144,6 +164,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             if (directlyAffected.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
+                if (config.isModeSkipTests()) {
+                    skipTestsOnAll(allProjects);
+                }
                 return;
             }
 
@@ -153,26 +176,115 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     projectKeys(directlyAffected));
 
             // Compute full build set with upstream/downstream
-            List<MavenProject> trimmedList =
+            List<MavenProject> buildSet =
                     reactorTrimmer.computeBuildSet(directlyAffected, session.getProjectDependencyGraph(), config);
 
-            logger.info(
-                    "Scalpel: Building {} of {} modules: {}",
-                    trimmedList.size(),
-                    allProjects.size(),
-                    projectKeys(trimmedList));
-
-            session.setProjects(trimmedList);
+            if (config.isModeSkipTests()) {
+                applySkipTests(session, allProjects, buildSet, changedManagedDepGAs, changedManagedPluginGAs);
+            } else {
+                // trim mode: remove unaffected projects from reactor
+                logger.info(
+                        "Scalpel: Building {} of {} modules: {}",
+                        buildSet.size(),
+                        allProjects.size(),
+                        projectKeys(buildSet));
+                session.setProjects(buildSet);
+            }
 
         } catch (ScalpelException e) {
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
         }
     }
 
+    private void applySkipTests(
+            MavenSession session,
+            List<MavenProject> allProjects,
+            List<MavenProject> buildSet,
+            Set<String> changedManagedDepGAs,
+            Set<String> changedManagedPluginGAs) {
+
+        Set<MavenProject> buildSetLookup = new LinkedHashSet<>(buildSet);
+        List<MavenProject> testProjects = new ArrayList<>(buildSet);
+        List<MavenProject> skippedProjects = new ArrayList<>();
+
+        for (MavenProject project : allProjects) {
+            if (buildSetLookup.contains(project)) {
+                continue; // Already known to need tests
+            }
+
+            // Check effective build plugins against changed managed plugins
+            if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
+                testProjects.add(project);
+                continue;
+            }
+
+            // Check transitive dependencies if managed deps changed
+            if (!changedManagedDepGAs.isEmpty()
+                    && hasChangedTransitiveDependency(project, session, changedManagedDepGAs)) {
+                testProjects.add(project);
+                continue;
+            }
+
+            // Skip tests on this project
+            project.getProperties().setProperty("maven.test.skip", "true");
+            skippedProjects.add(project);
+        }
+
+        logger.info(
+                "Scalpel: Testing {} of {} modules, skipping tests on {} modules: {}",
+                testProjects.size(),
+                allProjects.size(),
+                skippedProjects.size(),
+                projectKeys(skippedProjects));
+    }
+
+    private boolean usesChangedPlugin(MavenProject project, Set<String> changedPluginGAs) {
+        for (Plugin plugin : project.getBuildPlugins()) {
+            String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
+            if (changedPluginGAs.contains(ga)) {
+                logger.debug("Module {} uses changed managed plugin {}", key(project), ga);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean hasChangedTransitiveDependency(MavenProject project, MavenSession session, Set<String> changedGAs) {
+        try {
+            DefaultDependencyResolutionRequest request =
+                    new DefaultDependencyResolutionRequest(project, session.getRepositorySession());
+            DependencyResolutionResult result = dependenciesResolver.resolve(request);
+
+            for (Dependency dep : result.getResolvedDependencies()) {
+                String ga =
+                        dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
+                if (changedGAs.contains(ga)) {
+                    logger.debug("Module {} has transitive dependency on changed managed dep {}", key(project), ga);
+                    return true;
+                }
+            }
+            return false;
+        } catch (DependencyResolutionException e) {
+            // Conservative: if we can't resolve, don't skip tests
+            logger.debug("Cannot resolve dependencies for {}, not skipping tests: {}", key(project), e.getMessage());
+            return true;
+        }
+    }
+
+    private void skipTestsOnAll(List<MavenProject> projects) {
+        for (MavenProject project : projects) {
+            project.getProperties().setProperty("maven.test.skip", "true");
+        }
+    }
+
+    private static String key(MavenProject project) {
+        return project.getGroupId() + ":" + project.getArtifactId();
+    }
+
     private static List<String> projectKeys(Iterable<MavenProject> projects) {
         List<String> keys = new ArrayList<>();
         for (MavenProject project : projects) {
-            keys.add(project.getGroupId() + ":" + project.getArtifactId());
+            keys.add(key(project));
         }
         return keys;
     }

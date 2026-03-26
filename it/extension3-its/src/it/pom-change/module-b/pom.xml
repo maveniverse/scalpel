@@ -14,9 +14,9 @@
 
     <dependencies>
         <dependency>
-            <groupId>eu.maveniverse.maven.scalpel.it.pomchange</groupId>
-            <artifactId>module-a</artifactId>
-            <version>${project.version}</version>
+            <groupId>com.example</groupId>
+            <artifactId>some-lib</artifactId>
+            <version>${dep.version}</version>
         </dependency>
     </dependencies>
 </project>

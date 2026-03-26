@@ -23,6 +23,10 @@ public final class ScalpelConfiguration {
     public static final String ALSO_MAKE_DEPENDENTS = PREFIX + "alsoMakeDependents";
     public static final String FULL_BUILD_TRIGGERS = PREFIX + "fullBuildTriggers";
     public static final String FAIL_SAFE = PREFIX + "failSafe";
+    public static final String MODE = PREFIX + "mode";
+
+    public static final String MODE_TRIM = "trim";
+    public static final String MODE_SKIP_TESTS = "skip-tests";
 
     private static final String DEFAULT_FULL_BUILD_TRIGGERS = ".mvn/**";
 
@@ -33,6 +37,7 @@ public final class ScalpelConfiguration {
     private final boolean alsoMakeDependents;
     private final List<String> fullBuildTriggers;
     private final boolean failSafe;
+    private final String mode;
 
     private ScalpelConfiguration(
             boolean enabled,
@@ -41,7 +46,8 @@ public final class ScalpelConfiguration {
             boolean alsoMake,
             boolean alsoMakeDependents,
             List<String> fullBuildTriggers,
-            boolean failSafe) {
+            boolean failSafe,
+            String mode) {
         this.enabled = enabled;
         this.baseBranch = baseBranch;
         this.head = head;
@@ -49,6 +55,7 @@ public final class ScalpelConfiguration {
         this.alsoMakeDependents = alsoMakeDependents;
         this.fullBuildTriggers = fullBuildTriggers;
         this.failSafe = failSafe;
+        this.mode = mode;
     }
 
     public static ScalpelConfiguration fromProperties(Properties system, Properties user) {
@@ -65,9 +72,10 @@ public final class ScalpelConfiguration {
                 ? Arrays.asList(triggers.split(","))
                 : Collections.<String>emptyList();
         boolean failSafe = Boolean.parseBoolean(resolve(system, user, FAIL_SAFE, "true"));
+        String mode = resolve(system, user, MODE, MODE_TRIM);
 
         return new ScalpelConfiguration(
-                enabled, baseBranch, head, alsoMake, alsoMakeDependents, fullBuildTriggers, failSafe);
+                enabled, baseBranch, head, alsoMake, alsoMakeDependents, fullBuildTriggers, failSafe, mode);
     }
 
     private static String resolve(Properties system, Properties user, String key, String defaultValue) {
@@ -129,12 +137,25 @@ public final class ScalpelConfiguration {
         return failSafe;
     }
 
+    public String getMode() {
+        return mode;
+    }
+
+    public boolean isModeTrim() {
+        return MODE_TRIM.equals(mode);
+    }
+
+    public boolean isModeSkipTests() {
+        return MODE_SKIP_TESTS.equals(mode);
+    }
+
     @Override
     public String toString() {
         return "ScalpelConfiguration{"
                 + "enabled=" + enabled
                 + ", baseBranch='" + baseBranch + '\''
                 + ", head='" + head + '\''
+                + ", mode='" + mode + '\''
                 + ", alsoMake=" + alsoMake
                 + ", alsoMakeDependents=" + alsoMakeDependents
                 + ", fullBuildTriggers=" + fullBuildTriggers
