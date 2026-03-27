@@ -13,12 +13,15 @@ import eu.maveniverse.maven.scalpel.core.ChangeDetectionResult;
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import eu.maveniverse.maven.scalpel.core.ScalpelCore;
 import eu.maveniverse.maven.scalpel.core.ScalpelException;
+import eu.maveniverse.maven.scalpel.core.ScalpelReport;
 import eu.maveniverse.maven.scalpel.core.Version;
+import java.io.IOException;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -107,6 +110,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 for (String changedFile : changedFiles) {
                     if (matcher.matches(Paths.get(changedFile))) {
                         logger.info("Scalpel: Full build triggered by change to {} (matches {})", changedFile, pattern);
+                        if (config.isModeReport()) {
+                            writeFullBuildReport(config, reactorRoot, changedFile, changedFiles);
+                        }
                         return;
                     }
                 }
@@ -131,6 +137,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<MavenProject> affectedByPom = new LinkedHashSet<>();
             Set<String> changedManagedDepGAs = new LinkedHashSet<>();
             Set<String> changedManagedPluginGAs = new LinkedHashSet<>();
+            Set<String> changedProperties = new LinkedHashSet<>();
             if (!pomChanges.isEmpty()) {
                 logger.debug("POM changes detected: {}", pomChanges);
                 try {
@@ -139,6 +146,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     affectedByPom = pomResult.getAffectedProjects();
                     changedManagedDepGAs = pomResult.getChangedManagedDependencyGAs();
                     changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
+                    changedProperties = pomResult.getChangedProperties();
                 } catch (Exception e) {
                     if (config.isFailSafe()) {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
@@ -164,7 +172,18 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             if (directlyAffected.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
-                if (config.isModeSkipTests()) {
+                if (config.isModeReport()) {
+                    writeReport(
+                            config,
+                            reactorRoot,
+                            changedFiles,
+                            changedProperties,
+                            changedManagedDepGAs,
+                            changedManagedPluginGAs,
+                            Collections.<MavenProject>emptySet(),
+                            Collections.<MavenProject>emptySet(),
+                            Collections.<MavenProject>emptySet());
+                } else if (config.isModeSkipTests()) {
                     skipTestsOnAll(allProjects);
                 }
                 return;
@@ -174,6 +193,20 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     "Scalpel: {} modules directly affected: {}",
                     directlyAffected.size(),
                     projectKeys(directlyAffected));
+
+            if (config.isModeReport()) {
+                writeReport(
+                        config,
+                        reactorRoot,
+                        changedFiles,
+                        changedProperties,
+                        changedManagedDepGAs,
+                        changedManagedPluginGAs,
+                        directlyAffected,
+                        affectedBySource,
+                        affectedByPom);
+                return;
+            }
 
             // Compute full build set with upstream/downstream
             List<MavenProject> buildSet =
@@ -268,6 +301,68 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // Conservative: if we can't resolve, don't skip tests
             logger.debug("Cannot resolve dependencies for {}, not skipping tests: {}", key(project), e.getMessage());
             return true;
+        }
+    }
+
+    private void writeFullBuildReport(
+            ScalpelConfiguration config, Path reactorRoot, String triggerFile, Set<String> changedFiles)
+            throws MavenExecutionException {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch(config.getBaseBranch())
+                .fullBuildTriggered(true)
+                .triggerFile(triggerFile)
+                .changedFiles(changedFiles)
+                .build();
+        try {
+            report.writeToFile(reactorRoot, config.getReportFile());
+            logger.info("Scalpel: Report written to {}", config.getReportFile());
+        } catch (IOException e) {
+            throw new MavenExecutionException("Scalpel: Failed to write report", e);
+        }
+    }
+
+    private void writeReport(
+            ScalpelConfiguration config,
+            Path reactorRoot,
+            Set<String> changedFiles,
+            Set<String> changedProperties,
+            Set<String> changedManagedDepGAs,
+            Set<String> changedManagedPluginGAs,
+            Set<MavenProject> directlyAffected,
+            Set<MavenProject> affectedBySource,
+            Set<MavenProject> affectedByPom)
+            throws MavenExecutionException {
+        ScalpelReport.Builder builder = ScalpelReport.builder()
+                .baseBranch(config.getBaseBranch())
+                .fullBuildTriggered(false)
+                .changedFiles(changedFiles)
+                .changedProperties(changedProperties)
+                .changedManagedDependencies(changedManagedDepGAs)
+                .changedManagedPlugins(changedManagedPluginGAs);
+
+        for (MavenProject project : directlyAffected) {
+            String path = reactorRoot
+                    .toAbsolutePath()
+                    .normalize()
+                    .relativize(project.getBasedir().toPath().toAbsolutePath().normalize())
+                    .toString();
+            List<String> reasons = new ArrayList<>();
+            if (affectedBySource.contains(project)) {
+                reasons.add(ScalpelReport.REASON_SOURCE_CHANGE);
+            }
+            if (affectedByPom.contains(project)) {
+                reasons.add(ScalpelReport.REASON_POM_CHANGE);
+            }
+            builder.addAffectedModule(
+                    new ScalpelReport.AffectedModule(project.getGroupId(), project.getArtifactId(), path, reasons));
+        }
+
+        try {
+            ScalpelReport report = builder.build();
+            report.writeToFile(reactorRoot, config.getReportFile());
+            logger.info("Scalpel: Report written to {}", config.getReportFile());
+        } catch (IOException e) {
+            throw new MavenExecutionException("Scalpel: Failed to write report", e);
         }
     }
 

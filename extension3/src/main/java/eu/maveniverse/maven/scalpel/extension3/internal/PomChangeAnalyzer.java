@@ -44,14 +44,17 @@ class PomChangeAnalyzer {
         private final Set<MavenProject> affectedProjects;
         private final Set<String> changedManagedDependencyGAs;
         private final Set<String> changedManagedPluginGAs;
+        private final Set<String> changedProperties;
 
         Result(
                 Set<MavenProject> affectedProjects,
                 Set<String> changedManagedDependencyGAs,
-                Set<String> changedManagedPluginGAs) {
+                Set<String> changedManagedPluginGAs,
+                Set<String> changedProperties) {
             this.affectedProjects = affectedProjects;
             this.changedManagedDependencyGAs = changedManagedDependencyGAs;
             this.changedManagedPluginGAs = changedManagedPluginGAs;
+            this.changedProperties = changedProperties;
         }
 
         Set<MavenProject> getAffectedProjects() {
@@ -64,6 +67,10 @@ class PomChangeAnalyzer {
 
         Set<String> getChangedManagedPluginGAs() {
             return changedManagedPluginGAs;
+        }
+
+        Set<String> getChangedProperties() {
+            return changedProperties;
         }
     }
 
@@ -86,6 +93,7 @@ class PomChangeAnalyzer {
         Set<MavenProject> affected = new LinkedHashSet<>();
         Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
         Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
+        Set<String> allChangedProperties = new LinkedHashSet<>();
 
         // Build a map of relative POM path -> MavenProject
         Map<String, MavenProject> projectByPomPath = new LinkedHashMap<>();
@@ -130,7 +138,8 @@ class PomChangeAnalyzer {
                         reactorRoot,
                         affected,
                         allChangedManagedDepGAs,
-                        allChangedManagedPluginGAs);
+                        allChangedManagedPluginGAs,
+                        allChangedProperties);
             } catch (Exception e) {
                 // If we can't parse the old POM, be conservative and mark all children
                 logger.warn(
@@ -142,7 +151,7 @@ class PomChangeAnalyzer {
             }
         }
 
-        return new Result(affected, allChangedManagedDepGAs, allChangedManagedPluginGAs);
+        return new Result(affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties);
     }
 
     private void analyzeParentPomChange(
@@ -152,7 +161,8 @@ class PomChangeAnalyzer {
             Path reactorRoot,
             Set<MavenProject> affected,
             Set<String> allChangedManagedDepGAs,
-            Set<String> allChangedManagedPluginGAs)
+            Set<String> allChangedManagedPluginGAs,
+            Set<String> allChangedProperties)
             throws IOException, XmlPullParserException {
 
         MavenXpp3Reader reader = new MavenXpp3Reader();
@@ -185,6 +195,7 @@ class PomChangeAnalyzer {
 
         // Find changed properties
         Set<String> changedProperties = diffProperties(oldModel.getProperties(), newModel.getProperties());
+        allChangedProperties.addAll(changedProperties);
 
         // Find changed managed dependencies (by groupId:artifactId)
         Set<String> changedManagedDeps = diffDependencyManagement(oldModel, newModel);

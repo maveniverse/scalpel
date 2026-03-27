@@ -25,10 +25,14 @@ public final class ScalpelConfiguration {
     public static final String FAIL_SAFE = PREFIX + "failSafe";
     public static final String MODE = PREFIX + "mode";
 
+    public static final String REPORT_FILE = PREFIX + "reportFile";
+
     public static final String MODE_TRIM = "trim";
     public static final String MODE_SKIP_TESTS = "skip-tests";
+    public static final String MODE_REPORT = "report";
 
     private static final String DEFAULT_FULL_BUILD_TRIGGERS = ".mvn/**";
+    private static final String DEFAULT_REPORT_FILE = "target/scalpel-report.json";
 
     private final boolean enabled;
     private final String baseBranch;
@@ -38,6 +42,7 @@ public final class ScalpelConfiguration {
     private final List<String> fullBuildTriggers;
     private final boolean failSafe;
     private final String mode;
+    private final String reportFile;
 
     private ScalpelConfiguration(
             boolean enabled,
@@ -47,7 +52,8 @@ public final class ScalpelConfiguration {
             boolean alsoMakeDependents,
             List<String> fullBuildTriggers,
             boolean failSafe,
-            String mode) {
+            String mode,
+            String reportFile) {
         this.enabled = enabled;
         this.baseBranch = baseBranch;
         this.head = head;
@@ -56,6 +62,7 @@ public final class ScalpelConfiguration {
         this.fullBuildTriggers = fullBuildTriggers;
         this.failSafe = failSafe;
         this.mode = mode;
+        this.reportFile = reportFile;
     }
 
     public static ScalpelConfiguration fromProperties(Properties system, Properties user) {
@@ -73,9 +80,10 @@ public final class ScalpelConfiguration {
                 : Collections.<String>emptyList();
         boolean failSafe = Boolean.parseBoolean(resolve(system, user, FAIL_SAFE, "true"));
         String mode = resolve(system, user, MODE, MODE_TRIM);
+        String reportFile = resolve(system, user, REPORT_FILE, DEFAULT_REPORT_FILE);
 
         return new ScalpelConfiguration(
-                enabled, baseBranch, head, alsoMake, alsoMakeDependents, fullBuildTriggers, failSafe, mode);
+                enabled, baseBranch, head, alsoMake, alsoMakeDependents, fullBuildTriggers, failSafe, mode, reportFile);
     }
 
     private static String resolve(Properties system, Properties user, String key, String defaultValue) {
@@ -149,6 +157,14 @@ public final class ScalpelConfiguration {
         return MODE_SKIP_TESTS.equals(mode);
     }
 
+    public boolean isModeReport() {
+        return MODE_REPORT.equals(mode);
+    }
+
+    public String getReportFile() {
+        return reportFile;
+    }
+
     @Override
     public String toString() {
         return "ScalpelConfiguration{"
@@ -160,6 +176,7 @@ public final class ScalpelConfiguration {
                 + ", alsoMakeDependents=" + alsoMakeDependents
                 + ", fullBuildTriggers=" + fullBuildTriggers
                 + ", failSafe=" + failSafe
+                + ", reportFile='" + reportFile + '\''
                 + '}';
     }
 }
