@@ -108,6 +108,13 @@
         <version>${version.slf4j}</version>
       </dependency>
 
+      <!-- Maven (overrides) -->
+      <dependency>
+        <groupId>org.codehaus.plexus</groupId>
+        <artifactId>plexus-utils</artifactId>
+        <version>3.6.1</version>
+      </dependency>
+
       <!-- DI -->
       <dependency>
         <groupId>javax.inject</groupId>
