@@ -22,8 +22,10 @@ import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -182,7 +184,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             changedManagedPluginGAs,
                             Collections.<MavenProject>emptySet(),
                             Collections.<MavenProject>emptySet(),
-                            Collections.<MavenProject>emptySet());
+                            Collections.<MavenProject>emptySet(),
+                            Collections.<MavenProject, List<String>>emptyMap());
                 } else if (config.isModeSkipTests()) {
                     skipTestsOnAll(allProjects);
                 }
@@ -195,6 +198,33 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     projectKeys(directlyAffected));
 
             if (config.isModeReport()) {
+                // Check remaining modules for transitive dependency/plugin impact
+                Map<MavenProject, List<String>> transitivelyAffected = new LinkedHashMap<>();
+                if (!changedManagedDepGAs.isEmpty() || !changedManagedPluginGAs.isEmpty()) {
+                    for (MavenProject project : allProjects) {
+                        if (directlyAffected.contains(project)) {
+                            continue;
+                        }
+                        List<String> reasons = new ArrayList<>();
+                        if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
+                            reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
+                        }
+                        if (!changedManagedDepGAs.isEmpty()
+                                && hasChangedTransitiveDependency(project, session, changedManagedDepGAs)) {
+                            reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
+                        }
+                        if (!reasons.isEmpty()) {
+                            transitivelyAffected.put(project, reasons);
+                        }
+                    }
+                    if (!transitivelyAffected.isEmpty()) {
+                        logger.info(
+                                "Scalpel: {} modules transitively affected: {}",
+                                transitivelyAffected.size(),
+                                projectKeys(transitivelyAffected.keySet()));
+                    }
+                }
+
                 writeReport(
                         config,
                         reactorRoot,
@@ -204,7 +234,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         changedManagedPluginGAs,
                         directlyAffected,
                         affectedBySource,
-                        affectedByPom);
+                        affectedByPom,
+                        transitivelyAffected);
                 return;
             }
 
@@ -330,7 +361,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedPluginGAs,
             Set<MavenProject> directlyAffected,
             Set<MavenProject> affectedBySource,
-            Set<MavenProject> affectedByPom)
+            Set<MavenProject> affectedByPom,
+            Map<MavenProject, List<String>> transitivelyAffected)
             throws MavenExecutionException {
         ScalpelReport.Builder builder = ScalpelReport.builder()
                 .baseBranch(config.getBaseBranch())
@@ -341,11 +373,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 .changedManagedPlugins(changedManagedPluginGAs);
 
         for (MavenProject project : directlyAffected) {
-            String path = reactorRoot
-                    .toAbsolutePath()
-                    .normalize()
-                    .relativize(project.getBasedir().toPath().toAbsolutePath().normalize())
-                    .toString();
+            String path = relativePath(reactorRoot, project);
             List<String> reasons = new ArrayList<>();
             if (affectedBySource.contains(project)) {
                 reasons.add(ScalpelReport.REASON_SOURCE_CHANGE);
@@ -357,6 +385,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     new ScalpelReport.AffectedModule(project.getGroupId(), project.getArtifactId(), path, reasons));
         }
 
+        for (Map.Entry<MavenProject, List<String>> entry : transitivelyAffected.entrySet()) {
+            MavenProject project = entry.getKey();
+            String path = relativePath(reactorRoot, project);
+            builder.addAffectedModule(new ScalpelReport.AffectedModule(
+                    project.getGroupId(), project.getArtifactId(), path, entry.getValue()));
+        }
+
         try {
             ScalpelReport report = builder.build();
             report.writeToFile(reactorRoot, config.getReportFile());
@@ -364,6 +399,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         } catch (IOException e) {
             throw new MavenExecutionException("Scalpel: Failed to write report", e);
         }
+    }
+
+    private static String relativePath(Path reactorRoot, MavenProject project) {
+        return reactorRoot
+                .toAbsolutePath()
+                .normalize()
+                .relativize(project.getBasedir().toPath().toAbsolutePath().normalize())
+                .toString();
     }
 
     private void skipTestsOnAll(List<MavenProject> projects) {
