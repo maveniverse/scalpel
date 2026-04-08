@@ -32,15 +32,18 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        SONAR_PR_KEY: ${{ github.event.pull_request.number }}
+        SONAR_PR_BRANCH: ${{ github.head_ref }}
+        SONAR_PR_BASE: ${{ github.base_ref }}
       run: >-
         ./mvnw --no-transfer-progress
         org.jacoco:jacoco-maven-plugin:prepare-agent verify org.jacoco:jacoco-maven-plugin:report sonar:sonar
         -Dsonar.projectKey=maveniverse_scalpel
         -Dsonar.organization=maveniverse
         -Dsonar.host.url=https://sonarcloud.io
-        -Dsonar.pullrequest.key=${{ github.event.pull_request.number }}
-        -Dsonar.pullrequest.branch=${{ github.head_ref }}
-        -Dsonar.pullrequest.base=${{ github.base_ref }}
+        "-Dsonar.pullrequest.key=$SONAR_PR_KEY"
+        "-Dsonar.pullrequest.branch=$SONAR_PR_BRANCH"
+        "-Dsonar.pullrequest.base=$SONAR_PR_BASE"
 
     - name: Build and analyze (push)
       if: github.event_name == 'push'
