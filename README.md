@@ -36,7 +36,7 @@ Add Scalpel to your project's `.mvn/extensions.xml`:
 <extensions>
     <extension>
         <groupId>eu.maveniverse.maven.scalpel</groupId>
-        <artifactId>extension3</artifactId>
+        <artifactId>extension</artifactId>
         <version>${version.scalpel}</version>
     </extension>
 </extensions>
