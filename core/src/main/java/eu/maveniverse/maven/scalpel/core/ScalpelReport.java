@@ -24,6 +24,9 @@ public final class ScalpelReport {
     public static final String REASON_FORCE_BUILD = "FORCE_BUILD";
     public static final String REASON_UPSTREAM_DEPENDENCY = "UPSTREAM_DEPENDENCY";
     public static final String REASON_DOWNSTREAM_DEPENDENT = "DOWNSTREAM_DEPENDENT";
+    public static final String REASON_TEST_CHANGE = "TEST_CHANGE";
+    public static final String REASON_DOWNSTREAM_TEST = "DOWNSTREAM_TEST";
+    public static final String REASON_TRANSITIVE_DEPENDENCY_TEST = "TRANSITIVE_DEPENDENCY_TEST";
 
     public static final String CATEGORY_DIRECT = "DIRECT";
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";

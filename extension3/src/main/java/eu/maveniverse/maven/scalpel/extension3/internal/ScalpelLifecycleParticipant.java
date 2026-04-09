@@ -199,9 +199,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 }
             }
 
-            // Map source changes to modules
-            Set<MavenProject> affectedBySource = moduleMapper.mapToProjects(sourceChanges, allProjects, reactorRoot);
+            // Map source changes to modules (classifying test-only vs main changes)
+            ModuleMapper.Result sourceResult =
+                    moduleMapper.mapToProjectsClassified(sourceChanges, allProjects, reactorRoot);
+            Set<MavenProject> affectedBySource = sourceResult.getAllAffected();
             logger.debug("Modules affected by source changes: {}", projectKeys(affectedBySource));
+            if (!sourceResult.getTestOnlyAffected().isEmpty()) {
+                logger.debug(
+                        "Test-only modules (no downstream propagation): {}",
+                        projectKeys(sourceResult.getTestOnlyAffected()));
+            }
 
             // Analyze POM changes directly (no model building needed)
             Set<MavenProject> affectedByPom = new LinkedHashSet<>();
@@ -240,6 +247,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             directlyAffected.addAll(affectedBySource);
             directlyAffected.addAll(affectedByPom);
 
+            // Compute test-only modules for downstream propagation control
+            // Modules with only test source changes don't propagate downstream
+            // (unless downstream depends on test-jar). Modules also affected by POM
+            // changes are NOT test-only since POM changes can affect production builds.
+            Set<MavenProject> testOnlyModules = new LinkedHashSet<>(sourceResult.getTestOnlyAffected());
+            testOnlyModules.removeAll(affectedByPom);
+
             // Force-include modules matching forceBuildModules patterns
             Set<MavenProject> forceIncluded = new LinkedHashSet<>();
             if (!config.getForceBuildModules().isEmpty()) {
@@ -258,6 +272,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 }
             }
 
+            // Force-included modules are not test-only
+            testOnlyModules.removeAll(forceIncluded);
+
             if (directlyAffected.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
                 if (config.isModeReport()) {
@@ -268,6 +285,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             changedProperties,
                             changedManagedDepGAs,
                             changedManagedPluginGAs,
+                            Collections.<MavenProject>emptySet(),
                             Collections.<MavenProject>emptySet(),
                             Collections.<MavenProject>emptySet(),
                             Collections.<MavenProject>emptySet(),
@@ -292,8 +310,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             if (config.isModeReport()) {
                 // Compute upstream/downstream categorization for report enrichment
-                TrimResult trimResult =
-                        reactorTrimmer.computeBuildSet(directlyAffected, session.getProjectDependencyGraph(), config);
+                TrimResult trimResult = reactorTrimmer.computeBuildSet(
+                        directlyAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
 
                 // Check remaining modules for transitive dependency/plugin impact
                 Map<MavenProject, List<String>> transitivelyAffected = new LinkedHashMap<>();
@@ -306,9 +324,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
                             reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
                         }
-                        if (!changedManagedDepGAs.isEmpty()
-                                && hasChangedTransitiveDependency(project, session, changedManagedDepGAs)) {
-                            reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
+                        if (!changedManagedDepGAs.isEmpty()) {
+                            String depScope =
+                                    getChangedTransitiveDependencyScope(project, session, changedManagedDepGAs);
+                            if (depScope != null) {
+                                if ("test".equals(depScope)) {
+                                    reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
+                                } else {
+                                    reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
+                                }
+                            }
                         }
                         if (!reasons.isEmpty()) {
                             transitivelyAffected.put(project, reasons);
@@ -331,6 +356,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         changedManagedPluginGAs,
                         directlyAffected,
                         affectedBySource,
+                        sourceResult.getTestOnlyAffected(),
                         affectedByPom,
                         forceIncluded,
                         transitivelyAffected,
@@ -339,8 +365,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
             // Compute full build set with upstream/downstream
-            TrimResult trimResult =
-                    reactorTrimmer.computeBuildSet(directlyAffected, session.getProjectDependencyGraph(), config);
+            TrimResult trimResult = reactorTrimmer.computeBuildSet(
+                    directlyAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
 
             if (config.isModeSkipTests()) {
                 applySkipTests(session, allProjects, trimResult, config, changedManagedDepGAs, changedManagedPluginGAs);
@@ -434,24 +460,44 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     }
 
     private boolean hasChangedTransitiveDependency(MavenProject project, MavenSession session, Set<String> changedGAs) {
+        return getChangedTransitiveDependencyScope(project, session, changedGAs) != null;
+    }
+
+    /**
+     * Returns the effective scope of the changed transitive dependency, or null if no match.
+     * If any matching dependency has compile/runtime/provided scope, returns that scope.
+     * If all matching dependencies are test-scoped, returns "test".
+     */
+    private String getChangedTransitiveDependencyScope(
+            MavenProject project, MavenSession session, Set<String> changedGAs) {
         try {
             DefaultDependencyResolutionRequest request =
                     new DefaultDependencyResolutionRequest(project, session.getRepositorySession());
             DependencyResolutionResult result = dependenciesResolver.resolve(request);
 
+            String narrowestScope = null;
             for (Dependency dep : result.getResolvedDependencies()) {
                 String ga =
                         dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
                 if (changedGAs.contains(ga)) {
-                    logger.debug("Module {} has transitive dependency on changed managed dep {}", key(project), ga);
-                    return true;
+                    String scope = dep.getScope();
+                    logger.debug(
+                            "Module {} has transitive dependency on changed managed dep {} (scope={})",
+                            key(project),
+                            ga,
+                            scope);
+                    // Non-test scope means production code is affected
+                    if (scope == null || !"test".equals(scope)) {
+                        return scope != null ? scope : "compile";
+                    }
+                    narrowestScope = "test";
                 }
             }
-            return false;
+            return narrowestScope;
         } catch (DependencyResolutionException e) {
             // Conservative: if we can't resolve, don't skip tests
             logger.debug("Cannot resolve dependencies for {}, not skipping tests: {}", key(project), e.getMessage());
-            return true;
+            return "compile";
         }
     }
 
@@ -501,6 +547,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedPluginGAs,
             Set<MavenProject> directlyAffected,
             Set<MavenProject> affectedBySource,
+            Set<MavenProject> testOnlyBySource,
             Set<MavenProject> affectedByPom,
             Set<MavenProject> forceIncluded,
             Map<MavenProject, List<String>> transitivelyAffected,
@@ -518,7 +565,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             String path = relativePath(reactorRoot, project);
             List<String> reasons = new ArrayList<>();
             if (affectedBySource.contains(project)) {
-                reasons.add(ScalpelReport.REASON_SOURCE_CHANGE);
+                if (testOnlyBySource.contains(project)) {
+                    reasons.add(ScalpelReport.REASON_TEST_CHANGE);
+                } else {
+                    reasons.add(ScalpelReport.REASON_SOURCE_CHANGE);
+                }
             }
             if (affectedByPom.contains(project)) {
                 reasons.add(ScalpelReport.REASON_POM_CHANGE);
@@ -569,6 +620,17 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             ScalpelReport.CATEGORY_DOWNSTREAM));
                 }
             }
+            for (MavenProject project : trimResult.getDownstreamTestOnly()) {
+                if (!directlyAffected.contains(project) && !transitivelyAffected.containsKey(project)) {
+                    String path = relativePath(reactorRoot, project);
+                    builder.addAffectedModule(new ScalpelReport.AffectedModule(
+                            project.getGroupId(),
+                            project.getArtifactId(),
+                            path,
+                            Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_TEST),
+                            ScalpelReport.CATEGORY_DOWNSTREAM));
+                }
+            }
         }
 
         try {
@@ -603,6 +665,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             String[] parts = arg.trim().split("=", 2);
             if (parts.length == 2) {
                 for (MavenProject project : trimResult.getDownstreamOnly()) {
+                    project.getProperties().setProperty(parts[0], parts[1]);
+                }
+                for (MavenProject project : trimResult.getDownstreamTestOnly()) {
                     project.getProperties().setProperty(parts[0], parts[1]);
                 }
             } else {
