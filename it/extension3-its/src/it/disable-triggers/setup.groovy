@@ -27,6 +27,7 @@ exec('git', 'commit', '-m', 'initial')
 exec('git', 'branch', 'base')
 
 // Add a .github/ci.yml file (should trigger disable)
+new File(dir, '.github').mkdirs()
 new File(dir, '.github/ci.yml').text = 'name: CI'
 // Also add a source file in module-b
 new File(dir, 'module-b/src/main/java').mkdirs()
