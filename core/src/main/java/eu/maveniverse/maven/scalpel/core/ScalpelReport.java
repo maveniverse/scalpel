@@ -19,6 +19,8 @@ public final class ScalpelReport {
 
     public static final String REASON_SOURCE_CHANGE = "SOURCE_CHANGE";
     public static final String REASON_POM_CHANGE = "POM_CHANGE";
+    public static final String REASON_TRANSITIVE_DEPENDENCY = "TRANSITIVE_DEPENDENCY";
+    public static final String REASON_MANAGED_PLUGIN = "MANAGED_PLUGIN";
 
     private final String baseBranch;
     private final boolean fullBuildTriggered;

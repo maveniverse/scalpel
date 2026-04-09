@@ -272,6 +272,34 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void analyzeChanges_returnsChangedProperties() throws Exception {
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root);
+
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <dep.version>1.0</dep.version>\n"
+                + "  </properties>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getChangedProperties().contains("dep.version"), "Changed properties should include dep.version");
+    }
+
+    @Test
     void analyzeChanges_propertyIndirectionReturnsChangedGAs() throws Exception {
         // Verify that the result includes the changed managed dep GAs for transitive checking
         Path root = setupReactorRoot();
