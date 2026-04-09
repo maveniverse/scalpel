@@ -192,15 +192,15 @@ class ScalpelLifecycleParticipantTest {
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
 
         // module-a should be directly affected (POM_CHANGE)
-        assertTrue(json.contains("\"module-a\""), "module-a should be in report");
-        assertTrue(json.contains("\"POM_CHANGE\""), "POM_CHANGE reason should be present");
+        assertTrue(moduleHasReason(json, "module-a", "POM_CHANGE"), "module-a should have POM_CHANGE reason");
 
         // module-b should be transitively affected
-        assertTrue(json.contains("\"module-b\""), "module-b should be in report");
-        assertTrue(json.contains("\"TRANSITIVE_DEPENDENCY\""), "TRANSITIVE_DEPENDENCY reason should be present");
+        assertTrue(
+                moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
+                "module-b should have TRANSITIVE_DEPENDENCY reason");
 
         // module-c should NOT be in the report
-        assertFalse(json.contains("\"module-c\""), "module-c should NOT be in report");
+        assertFalse(modulePresent(json, "module-c"), "module-c should NOT be in report");
     }
 
     @Test
@@ -309,11 +309,10 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(Files.exists(reportFile), "Report file should be created");
 
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
-        assertTrue(json.contains("\"module-b\""), "module-b should be in report");
         assertTrue(
-                json.contains("\"POM_CHANGE\""),
-                "POM_CHANGE reason should be present (PomChangeAnalyzer detects managed plugin use)");
-        assertFalse(json.contains("\"module-a\""), "module-a should NOT be in report (no plugin, no dep change)");
+                moduleHasReason(json, "module-b", "POM_CHANGE"),
+                "module-b should have POM_CHANGE reason (PomChangeAnalyzer detects managed plugin use)");
+        assertFalse(modulePresent(json, "module-a"), "module-a should NOT be in report (no plugin, no dep change)");
     }
 
     private void writePom(Path root, String relativePath, String content) throws Exception {
@@ -336,12 +335,31 @@ class ScalpelLifecycleParticipantTest {
         return project;
     }
 
+    private boolean modulePresent(String json, String artifactId) {
+        return json.contains("\"artifactId\": \"" + artifactId + "\"");
+    }
+
+    private boolean moduleHasReason(String json, String artifactId, String reason) {
+        String marker = "\"artifactId\": \"" + artifactId + "\"";
+        int idx = json.indexOf(marker);
+        if (idx < 0) {
+            return false;
+        }
+        int start = json.lastIndexOf("{", idx);
+        int end = json.indexOf("}", idx);
+        if (start < 0 || end < 0) {
+            return false;
+        }
+        String block = json.substring(start, end + 1);
+        return block.contains("\"" + reason + "\"");
+    }
+
     private Model parseModel(String xml) {
         try {
             return new org.apache.maven.model.io.xpp3.MavenXpp3Reader()
                     .read(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            throw new RuntimeException("Failed to parse POM XML: " + xml.substring(0, Math.min(xml.length(), 100)), e);
         }
     }
 }
