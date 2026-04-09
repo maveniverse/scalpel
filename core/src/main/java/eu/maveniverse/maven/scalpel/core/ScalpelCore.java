@@ -181,6 +181,7 @@ public class ScalpelCore {
         File gitDir = builder.getGitDir();
 
         // Handle git worktrees: .git may be a file containing "gitdir: <path>"
+        // JGit 5.x does not support worktrees natively, so we handle it manually
         if (gitDir == null) {
             File dotGit = findDotGit(reactorRoot.toFile());
             if (dotGit != null && dotGit.isFile()) {
