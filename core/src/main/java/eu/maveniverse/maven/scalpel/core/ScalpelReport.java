@@ -21,6 +21,13 @@ public final class ScalpelReport {
     public static final String REASON_POM_CHANGE = "POM_CHANGE";
     public static final String REASON_TRANSITIVE_DEPENDENCY = "TRANSITIVE_DEPENDENCY";
     public static final String REASON_MANAGED_PLUGIN = "MANAGED_PLUGIN";
+    public static final String REASON_FORCE_BUILD = "FORCE_BUILD";
+    public static final String REASON_UPSTREAM_DEPENDENCY = "UPSTREAM_DEPENDENCY";
+    public static final String REASON_DOWNSTREAM_DEPENDENT = "DOWNSTREAM_DEPENDENT";
+
+    public static final String CATEGORY_DIRECT = "DIRECT";
+    public static final String CATEGORY_UPSTREAM = "UPSTREAM";
+    public static final String CATEGORY_DOWNSTREAM = "DOWNSTREAM";
 
     private final String baseBranch;
     private final boolean fullBuildTriggered;
@@ -55,12 +62,18 @@ public final class ScalpelReport {
         private final String artifactId;
         private final String path;
         private final List<String> reasons;
+        private final String category;
 
         public AffectedModule(String groupId, String artifactId, String path, List<String> reasons) {
+            this(groupId, artifactId, path, reasons, null);
+        }
+
+        public AffectedModule(String groupId, String artifactId, String path, List<String> reasons, String category) {
             this.groupId = groupId;
             this.artifactId = artifactId;
             this.path = path;
             this.reasons = reasons;
+            this.category = category;
         }
 
         public String getGroupId() {
@@ -77,6 +90,10 @@ public final class ScalpelReport {
 
         public List<String> getReasons() {
             return reasons;
+        }
+
+        public String getCategory() {
+            return category;
         }
     }
 
@@ -113,9 +130,15 @@ public final class ScalpelReport {
                         .append(jsonString(m.artifactId))
                         .append(",\n");
                 sb.append("      \"path\": ").append(jsonString(m.path)).append(",\n");
-                sb.append("      \"reasons\": ")
-                        .append(jsonStringArray(m.reasons))
-                        .append("\n");
+                sb.append("      \"reasons\": ").append(jsonStringArray(m.reasons));
+                if (m.category != null) {
+                    sb.append(",\n");
+                    sb.append("      \"category\": ")
+                            .append(jsonString(m.category))
+                            .append("\n");
+                } else {
+                    sb.append("\n");
+                }
                 sb.append("    }");
                 if (i < affectedModules.size() - 1) {
                     sb.append(",");

@@ -10,6 +10,7 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -29,6 +30,7 @@ import java.util.Properties;
 import java.util.Set;
 import org.apache.maven.execution.MavenExecutionRequest;
 import org.apache.maven.execution.MavenSession;
+import org.apache.maven.execution.ProjectDependencyGraph;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
@@ -177,6 +179,11 @@ class ScalpelLifecycleParticipantTest {
         when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
 
         // Set report mode
         sysProps.setProperty("scalpel.mode", "report");
@@ -302,6 +309,11 @@ class ScalpelLifecycleParticipantTest {
         when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph2 = mock(ProjectDependencyGraph.class);
+        when(graph2.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph2.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph2.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph2);
 
         participant.afterProjectsRead(session);
 
