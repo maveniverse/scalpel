@@ -933,27 +933,35 @@ class PomChangeAnalyzer {
         }
 
         Map<MavenProject, List<MavenProject>> result = new LinkedHashMap<>();
-
         for (MavenProject project : allProjects) {
-            for (Dependency dep : getManagedDependencies(project.getOriginalModel())) {
-                if ("pom".equals(dep.getType()) && "import".equals(dep.getScope())) {
-                    String ga = dep.getGroupId() + ":" + dep.getArtifactId();
-                    MavenProject bomProject = projectByGA.get(ga);
-                    if (bomProject != null && bomProject != project) {
-                        List<MavenProject> importers = result.get(bomProject);
-                        if (importers == null) {
-                            importers = new ArrayList<>();
-                            result.put(bomProject, importers);
-                        }
-                        if (!importers.contains(project)) {
-                            importers.add(project);
-                        }
-                    }
+            collectBomImportsFrom(project, projectByGA, result);
+        }
+        return result;
+    }
+
+    private void collectBomImportsFrom(
+            MavenProject project, Map<String, MavenProject> projectByGA, Map<MavenProject, List<MavenProject>> result) {
+        for (Dependency dep : getManagedDependencies(project.getOriginalModel())) {
+            if (!isImportScopeBom(dep)) {
+                continue;
+            }
+            String ga = dep.getGroupId() + ":" + dep.getArtifactId();
+            MavenProject bomProject = projectByGA.get(ga);
+            if (bomProject != null && bomProject != project) {
+                List<MavenProject> importers = result.get(bomProject);
+                if (importers == null) {
+                    importers = new ArrayList<>();
+                    result.put(bomProject, importers);
+                }
+                if (!importers.contains(project)) {
+                    importers.add(project);
                 }
             }
         }
+    }
 
-        return result;
+    private boolean isImportScopeBom(Dependency dep) {
+        return "pom".equals(dep.getType()) && "import".equals(dep.getScope());
     }
 
     private List<MavenProject> findChildren(MavenProject parent, List<MavenProject> allProjects) {

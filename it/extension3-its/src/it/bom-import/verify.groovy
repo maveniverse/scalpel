@@ -21,15 +21,15 @@ assert log.contains('BUILD SUCCESS')
 
 // module-a should be directly affected (imports BOM with changed managed dependency)
 assert log.contains('directly affected')
-def directlyAffectedLine = log.readLines().find { it.contains('directly affected') }
-assert directlyAffectedLine != null : "Expected 'directly affected' log line"
-assert directlyAffectedLine.contains('module-a') : "module-a should be directly affected (imports BOM with changed managed dep)"
+def directlyAffectedLines = log.readLines().findAll { it.contains('directly affected') }
+assert !directlyAffectedLines.isEmpty() : "Expected 'directly affected' log line(s)"
+assert directlyAffectedLines.any { it.contains('module-a') } : "module-a should be directly affected (imports BOM with changed managed dep)"
 
 // module-b should be transitively affected (gets commons-lang through module-a)
 assert log.contains('transitively affected')
-def transitivelyAffectedLine = log.readLines().find { it.contains('transitively affected') }
-assert transitivelyAffectedLine != null : "Expected 'transitively affected' log line"
-assert transitivelyAffectedLine.contains('module-b') : "module-b should be transitively affected"
+def transitivelyAffectedLines = log.readLines().findAll { it.contains('transitively affected') }
+assert !transitivelyAffectedLines.isEmpty() : "Expected 'transitively affected' log line(s)"
+assert transitivelyAffectedLines.any { it.contains('module-b') } : "module-b should be transitively affected"
 
 // Check the report file
 File reportFile = new File(basedir, 'target/scalpel-report.json')

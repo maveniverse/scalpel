@@ -380,7 +380,7 @@ for parent-inherited managed dependencies.
 
 For example, given this reactor layout:
 
-```
+```text
 parent/
 ├── bom/          (defines managed deps: commons-lang ${lib.version})
 ├── module-a/     (imports bom via <scope>import</scope>, uses commons-lang)
