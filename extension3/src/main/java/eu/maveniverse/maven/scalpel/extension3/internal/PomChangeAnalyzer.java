@@ -127,18 +127,7 @@ class PomChangeAnalyzer {
             }
 
             // Determine all dependent modules (children via parent inheritance + BOM importers)
-            List<MavenProject> dependents = new ArrayList<>();
-            if (parents.contains(project)) {
-                dependents.addAll(findChildren(project, allProjects));
-            }
-            List<MavenProject> importers = bomImporters.get(project);
-            if (importers != null) {
-                for (MavenProject importer : importers) {
-                    if (!dependents.contains(importer)) {
-                        dependents.add(importer);
-                    }
-                }
-            }
+            List<MavenProject> dependents = collectDependents(project, parents, bomImporters, allProjects);
 
             if (dependents.isEmpty()) {
                 // Leaf module: its own POM changed, mark it as affected
@@ -151,7 +140,9 @@ class PomChangeAnalyzer {
             byte[] oldPomBytes = oldPomContents.get(changedPomPath);
             if (oldPomBytes == null) {
                 // New POM (didn't exist in base), mark all dependents as affected
-                logger.debug("New parent/BOM POM: {}, marking all dependents as affected", key(project));
+                if (logger.isDebugEnabled()) {
+                    logger.debug("New parent/BOM POM: {}, marking all dependents as affected", key(project));
+                }
                 affected.add(project);
                 affected.addAll(dependents);
                 continue;
@@ -926,6 +917,26 @@ class PomChangeAnalyzer {
      *
      * @return map of BOM module to the list of modules that import it
      */
+    private List<MavenProject> collectDependents(
+            MavenProject project,
+            Set<MavenProject> parents,
+            Map<MavenProject, List<MavenProject>> bomImporters,
+            List<MavenProject> allProjects) {
+        List<MavenProject> dependents = new ArrayList<>();
+        if (parents.contains(project)) {
+            dependents.addAll(findChildren(project, allProjects));
+        }
+        List<MavenProject> importers = bomImporters.get(project);
+        if (importers != null) {
+            for (MavenProject importer : importers) {
+                if (!dependents.contains(importer)) {
+                    dependents.add(importer);
+                }
+            }
+        }
+        return dependents;
+    }
+
     Map<MavenProject, List<MavenProject>> findBomImporters(List<MavenProject> allProjects) {
         Map<String, MavenProject> projectByGA = new LinkedHashMap<>();
         for (MavenProject project : allProjects) {
@@ -948,11 +959,7 @@ class PomChangeAnalyzer {
             String ga = dep.getGroupId() + ":" + dep.getArtifactId();
             MavenProject bomProject = projectByGA.get(ga);
             if (bomProject != null && bomProject != project) {
-                List<MavenProject> importers = result.get(bomProject);
-                if (importers == null) {
-                    importers = new ArrayList<>();
-                    result.put(bomProject, importers);
-                }
+                List<MavenProject> importers = result.computeIfAbsent(bomProject, k -> new ArrayList<>());
                 if (!importers.contains(project)) {
                     importers.add(project);
                 }
