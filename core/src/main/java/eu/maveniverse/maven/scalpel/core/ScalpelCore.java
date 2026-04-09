@@ -63,10 +63,63 @@ public class ScalpelCore {
         }
 
         try {
+            // Check branch-based disable conditions
+            if (!config.getDisableOnBranch().isEmpty()) {
+                String currentBranch = gitChangeDetector.getCurrentBranch(repository);
+                if (currentBranch != null) {
+                    for (String pattern : config.getDisableOnBranch()) {
+                        if (currentBranch.matches(pattern.trim())) {
+                            logger.info(
+                                    "Scalpel: Disabled because current branch '{}' matches pattern '{}'",
+                                    currentBranch,
+                                    pattern);
+                            return null;
+                        }
+                    }
+                }
+            }
+
             String baseBranch = config.getBaseBranch();
+
+            if (!config.getDisableOnBaseBranch().isEmpty() && baseBranch != null) {
+                // Strip remote prefix for matching (e.g., "origin/main" → "main")
+                String baseBranchName = baseBranch;
+                int slashIndex = baseBranchName.indexOf('/');
+                if (slashIndex >= 0) {
+                    baseBranchName = baseBranchName.substring(slashIndex + 1);
+                }
+                for (String pattern : config.getDisableOnBaseBranch()) {
+                    if (baseBranchName.matches(pattern.trim())) {
+                        logger.info(
+                                "Scalpel: Disabled because base branch '{}' matches pattern '{}'", baseBranch, pattern);
+                        return null;
+                    }
+                }
+            }
+
             if (baseBranch == null) {
                 logger.info("Scalpel: No base branch configured or detected, building all modules");
                 return null;
+            }
+
+            // Fetch base branch if configured and ref cannot be resolved
+            if (config.isFetchBaseBranch()) {
+                ObjectId baseId = repository.resolve(baseBranch);
+                if (baseId == null) {
+                    try {
+                        gitChangeDetector.fetchBranch(repository, baseBranch);
+                    } catch (IOException e) {
+                        if (config.isFailSafe()) {
+                            logger.warn(
+                                    "Scalpel: Failed to fetch {}, building all modules: {}",
+                                    baseBranch,
+                                    e.getMessage());
+                            return null;
+                        } else {
+                            throw new ScalpelException("Failed to fetch " + baseBranch, e);
+                        }
+                    }
+                }
             }
 
             String head = config.getHead();
@@ -85,6 +138,22 @@ public class ScalpelCore {
 
             ObjectId headId = repository.resolve(head);
             Set<String> changedFiles = gitChangeDetector.getChangedFiles(repository, mergeBase, headId);
+
+            // Merge in uncommitted/untracked files if configured
+            if (config.isUncommitted()) {
+                Set<String> uncommittedFiles = gitChangeDetector.getUncommittedFiles(repository);
+                if (!uncommittedFiles.isEmpty()) {
+                    logger.info("Scalpel: {} uncommitted files detected", uncommittedFiles.size());
+                    changedFiles.addAll(uncommittedFiles);
+                }
+            }
+            if (config.isUntracked()) {
+                Set<String> untrackedFiles = gitChangeDetector.getUntrackedFiles(repository);
+                if (!untrackedFiles.isEmpty()) {
+                    logger.info("Scalpel: {} untracked files detected", untrackedFiles.size());
+                    changedFiles.addAll(untrackedFiles);
+                }
+            }
 
             if (changedFiles.isEmpty()) {
                 logger.info("Scalpel: No changes detected between {} and {}", baseBranch, head);

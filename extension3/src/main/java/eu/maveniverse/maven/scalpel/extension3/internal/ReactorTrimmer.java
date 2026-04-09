@@ -25,17 +25,23 @@ class ReactorTrimmer {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
-    public List<MavenProject> computeBuildSet(
+    public TrimResult computeBuildSet(
             Set<MavenProject> directlyAffected, ProjectDependencyGraph graph, ScalpelConfiguration config) {
 
         Set<MavenProject> buildSet = new LinkedHashSet<>(directlyAffected);
+        Set<MavenProject> downstreamOnly = new LinkedHashSet<>();
+        Set<MavenProject> upstreamOnly = new LinkedHashSet<>();
 
         if (config.isAlsoMakeDependents()) {
             for (MavenProject project : new ArrayList<>(directlyAffected)) {
                 List<MavenProject> downstream = graph.getDownstreamProjects(project, true);
                 if (!downstream.isEmpty()) {
                     logger.debug("Adding downstream dependents of {}: {}", key(project), keys(downstream));
-                    buildSet.addAll(downstream);
+                    for (MavenProject ds : downstream) {
+                        if (!directlyAffected.contains(ds) && buildSet.add(ds)) {
+                            downstreamOnly.add(ds);
+                        }
+                    }
                 }
             }
         }
@@ -45,7 +51,11 @@ class ReactorTrimmer {
                 List<MavenProject> upstream = graph.getUpstreamProjects(project, true);
                 if (!upstream.isEmpty()) {
                     logger.debug("Adding upstream dependencies of {}: {}", key(project), keys(upstream));
-                    buildSet.addAll(upstream);
+                    for (MavenProject us : upstream) {
+                        if (!directlyAffected.contains(us) && !downstreamOnly.contains(us) && buildSet.add(us)) {
+                            upstreamOnly.add(us);
+                        }
+                    }
                 }
             }
         }
@@ -59,7 +69,7 @@ class ReactorTrimmer {
             }
         }
 
-        return result;
+        return new TrimResult(result, directlyAffected, upstreamOnly, downstreamOnly);
     }
 
     private static String key(MavenProject project) {

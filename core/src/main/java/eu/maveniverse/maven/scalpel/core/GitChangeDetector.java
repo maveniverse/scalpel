@@ -34,6 +34,10 @@ public class GitChangeDetector {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
 
+    public String getCurrentBranch(Repository repository) throws IOException {
+        return repository.getBranch();
+    }
+
     public ObjectId findMergeBase(Repository repository, String baseBranch, String head) throws IOException {
         ObjectId baseId = repository.resolve(baseBranch);
         if (baseId == null) {
@@ -106,6 +110,55 @@ public class GitChangeDetector {
                 loader.copyTo(out);
                 return out.toByteArray();
             }
+        }
+    }
+
+    public Set<String> getUncommittedFiles(Repository repository) throws IOException {
+        Set<String> files = new LinkedHashSet<>();
+        try (org.eclipse.jgit.api.Git git = new org.eclipse.jgit.api.Git(repository)) {
+            org.eclipse.jgit.api.Status status = git.status().call();
+            files.addAll(status.getModified());
+            files.addAll(status.getChanged());
+            files.addAll(status.getAdded());
+            files.addAll(status.getRemoved());
+        } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+            throw new IOException("Failed to get uncommitted files", e);
+        }
+        logger.debug("Uncommitted files: {}", files);
+        return files;
+    }
+
+    public Set<String> getUntrackedFiles(Repository repository) throws IOException {
+        Set<String> files = new LinkedHashSet<>();
+        try (org.eclipse.jgit.api.Git git = new org.eclipse.jgit.api.Git(repository)) {
+            org.eclipse.jgit.api.Status status = git.status().call();
+            files.addAll(status.getUntracked());
+        } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+            throw new IOException("Failed to get untracked files", e);
+        }
+        logger.debug("Untracked files: {}", files);
+        return files;
+    }
+
+    public void fetchBranch(Repository repository, String baseBranch) throws IOException {
+        // Parse "origin/main" → remote="origin", branch="main"
+        int slashIndex = baseBranch.indexOf('/');
+        if (slashIndex < 0) {
+            logger.debug("Cannot parse remote from baseBranch '{}', skipping fetch", baseBranch);
+            return;
+        }
+        String remote = baseBranch.substring(0, slashIndex);
+        String branch = baseBranch.substring(slashIndex + 1);
+        String refspec = "+refs/heads/" + branch + ":refs/remotes/" + remote + "/" + branch;
+
+        logger.info("Scalpel: Fetching {} from {}", branch, remote);
+        try (org.eclipse.jgit.api.Git git = new org.eclipse.jgit.api.Git(repository)) {
+            git.fetch()
+                    .setRemote(remote)
+                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec(refspec))
+                    .call();
+        } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+            throw new IOException("Failed to fetch " + baseBranch, e);
         }
     }
 
