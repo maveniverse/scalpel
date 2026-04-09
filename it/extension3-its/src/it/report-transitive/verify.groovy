@@ -36,18 +36,24 @@ File reportFile = new File(basedir, 'target/scalpel-report.json')
 assert reportFile.exists() : "Report file should have been created"
 
 String json = reportFile.text
-assert json.contains('"version": "1"') : "Report should contain version field"
-assert json.contains('"fullBuildTriggered": false') : "fullBuildTriggered should be false"
-assert json.contains('"changedManagedDependencies"') : "Report should contain changedManagedDependencies"
-assert json.contains('"commons-lang:commons-lang"') : "commons-lang:commons-lang should be in changedManagedDependencies"
+def report = new groovy.json.JsonSlurper().parseText(json)
 
-// module-a should be affected with POM_CHANGE reason
-assert json.contains('"module-a"') : "module-a should appear in the report"
-assert json.contains('"POM_CHANGE"') : "module-a should have POM_CHANGE reason"
+assert report.version == '1' : "Report should have version 1"
+assert report.fullBuildTriggered == false : "fullBuildTriggered should be false"
+assert report.changedManagedDependencies.contains('commons-lang:commons-lang') : "changedManagedDependencies should contain commons-lang"
 
-// module-b should be affected with TRANSITIVE_DEPENDENCY reason
-assert json.contains('"module-b"') : "module-b should appear in the report"
-assert json.contains('"TRANSITIVE_DEPENDENCY"') : "module-b should have TRANSITIVE_DEPENDENCY reason"
+def modules = report.affectedModules
+def moduleA = modules.find { it.artifactId == 'module-a' }
+def moduleB = modules.find { it.artifactId == 'module-b' }
+def moduleC = modules.find { it.artifactId == 'module-c' }
+
+// module-a should be affected with POM_CHANGE reason (directly uses changed managed dep)
+assert moduleA != null : "module-a should appear in the report"
+assert moduleA.reasons.contains('POM_CHANGE') : "module-a should have POM_CHANGE reason, got: ${moduleA.reasons}"
+
+// module-b should be affected with TRANSITIVE_DEPENDENCY reason (gets it through module-a)
+assert moduleB != null : "module-b should appear in the report"
+assert moduleB.reasons.contains('TRANSITIVE_DEPENDENCY') : "module-b should have TRANSITIVE_DEPENDENCY reason, got: ${moduleB.reasons}"
 
 // module-c should NOT appear in the report (no relationship to changed dependency)
-assert !json.contains('"module-c"') : "module-c should NOT appear in the report"
+assert moduleC == null : "module-c should NOT appear in the report"
