@@ -22,8 +22,8 @@ jobs:
       - name: Check if SNAPSHOT version
         id: check
         run: |
-          version=$(git describe --tags --always)
-          echo "Resolved version hint: $version"
+          version=$(sed -n '/<parent>/,/<\/parent>/d;s/.*<version>\(.*\)<\/version>.*/\1/p' pom.xml | head -1)
+          echo "Resolved version: $version"
           if [[ "$version" == *SNAPSHOT* ]]; then
             echo "is_snapshot=true" >> $GITHUB_OUTPUT
           else
