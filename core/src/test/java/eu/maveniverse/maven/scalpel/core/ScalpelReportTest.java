@@ -9,6 +9,7 @@ package eu.maveniverse.maven.scalpel.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -169,5 +170,184 @@ class ScalpelReportTest {
 
         String json = report.toJson();
         assertTrue(json.contains("path/with\\\"quotes.java"));
+    }
+
+    // ------------------------------------------------------------------
+    // Tests for new category field (added in this PR)
+    // ------------------------------------------------------------------
+
+    @Test
+    void toJson_affectedModuleWithCategoryDirect() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-a",
+                        "module-a",
+                        Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE),
+                        ScalpelReport.CATEGORY_DIRECT))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"category\": \"DIRECT\""), "Expected DIRECT category in JSON");
+        assertTrue(json.contains("\"SOURCE_CHANGE\""));
+    }
+
+    @Test
+    void toJson_affectedModuleWithCategoryUpstream() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-b/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-a",
+                        "module-a",
+                        Collections.singletonList(ScalpelReport.REASON_UPSTREAM_DEPENDENCY),
+                        ScalpelReport.CATEGORY_UPSTREAM))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"category\": \"UPSTREAM\""), "Expected UPSTREAM category in JSON");
+        assertTrue(json.contains("\"UPSTREAM_DEPENDENCY\""));
+    }
+
+    @Test
+    void toJson_affectedModuleWithCategoryDownstream() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-b",
+                        "module-b",
+                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        ScalpelReport.CATEGORY_DOWNSTREAM))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"category\": \"DOWNSTREAM\""), "Expected DOWNSTREAM category in JSON");
+        assertTrue(json.contains("\"DOWNSTREAM_DEPENDENT\""));
+    }
+
+    @Test
+    void toJson_affectedModuleWithNullCategory_omitsCategoryField() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-a",
+                        "module-a",
+                        Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE)))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("\"category\""), "Expected no 'category' key when null");
+    }
+
+    @Test
+    void toJson_affectedModuleWithForceBuildReason() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-c",
+                        "module-c",
+                        Collections.singletonList(ScalpelReport.REASON_FORCE_BUILD),
+                        ScalpelReport.CATEGORY_DIRECT))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"FORCE_BUILD\""), "Expected FORCE_BUILD reason in JSON");
+        assertTrue(json.contains("\"category\": \"DIRECT\""));
+    }
+
+    @Test
+    void affectedModule_getCategory_returnsCorrectValue() {
+        ScalpelReport.AffectedModule direct = new ScalpelReport.AffectedModule(
+                "com.example",
+                "module-a",
+                "module-a",
+                Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE),
+                ScalpelReport.CATEGORY_DIRECT);
+        assertEquals(ScalpelReport.CATEGORY_DIRECT, direct.getCategory());
+
+        ScalpelReport.AffectedModule upstream = new ScalpelReport.AffectedModule(
+                "com.example",
+                "module-b",
+                "module-b",
+                Collections.singletonList(ScalpelReport.REASON_UPSTREAM_DEPENDENCY),
+                ScalpelReport.CATEGORY_UPSTREAM);
+        assertEquals(ScalpelReport.CATEGORY_UPSTREAM, upstream.getCategory());
+
+        ScalpelReport.AffectedModule downstream = new ScalpelReport.AffectedModule(
+                "com.example",
+                "module-c",
+                "module-c",
+                Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                ScalpelReport.CATEGORY_DOWNSTREAM);
+        assertEquals(ScalpelReport.CATEGORY_DOWNSTREAM, downstream.getCategory());
+    }
+
+    @Test
+    void affectedModule_noArgCategory_isNull() {
+        ScalpelReport.AffectedModule module = new ScalpelReport.AffectedModule(
+                "com.example",
+                "module-a",
+                "module-a",
+                Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE));
+        assertNull(module.getCategory());
+    }
+
+    @Test
+    void toJson_multiplModulesWithMixedCategories() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-b/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-b",
+                        "module-b",
+                        Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE),
+                        ScalpelReport.CATEGORY_DIRECT))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-a",
+                        "module-a",
+                        Collections.singletonList(ScalpelReport.REASON_UPSTREAM_DEPENDENCY),
+                        ScalpelReport.CATEGORY_UPSTREAM))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-c",
+                        "module-c",
+                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        ScalpelReport.CATEGORY_DOWNSTREAM))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"DIRECT\""));
+        assertTrue(json.contains("\"UPSTREAM\""));
+        assertTrue(json.contains("\"DOWNSTREAM\""));
+        assertTrue(json.contains("\"SOURCE_CHANGE\""));
+        assertTrue(json.contains("\"UPSTREAM_DEPENDENCY\""));
+        assertTrue(json.contains("\"DOWNSTREAM_DEPENDENT\""));
+    }
+
+    @Test
+    void constantValues_forNewReasonAndCategory() {
+        assertEquals("FORCE_BUILD", ScalpelReport.REASON_FORCE_BUILD);
+        assertEquals("UPSTREAM_DEPENDENCY", ScalpelReport.REASON_UPSTREAM_DEPENDENCY);
+        assertEquals("DOWNSTREAM_DEPENDENT", ScalpelReport.REASON_DOWNSTREAM_DEPENDENT);
+        assertEquals("DIRECT", ScalpelReport.CATEGORY_DIRECT);
+        assertEquals("UPSTREAM", ScalpelReport.CATEGORY_UPSTREAM);
+        assertEquals("DOWNSTREAM", ScalpelReport.CATEGORY_DOWNSTREAM);
     }
 }

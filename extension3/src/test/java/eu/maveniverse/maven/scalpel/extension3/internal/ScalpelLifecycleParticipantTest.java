@@ -12,6 +12,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import eu.maveniverse.maven.scalpel.core.ChangeDetectionResult;
@@ -373,5 +375,472 @@ class ScalpelLifecycleParticipantTest {
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse POM XML: " + xml.substring(0, Math.min(xml.length(), 100)), e);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // Helper: build a minimal session for new feature tests
+    // ------------------------------------------------------------------
+
+    private MavenSession buildSession(
+            Path root, List<MavenProject> allProjects, Properties sysProps) throws Exception {
+        MavenSession session = mock(MavenSession.class);
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        org.apache.maven.execution.MavenExecutionRequest execRequest =
+                mock(org.apache.maven.execution.MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(execRequest.getSelectedProjects()).thenReturn(Collections.emptyList());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(org.eclipse.aether.RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+        return session;
+    }
+
+    // ------------------------------------------------------------------
+    // Test: disableTriggers — Scalpel bails out when changed file matches
+    // ------------------------------------------------------------------
+
+    @Test
+    void disableTriggers_stopsProcessingWhenChangedFileMatches() throws Exception {
+        Path root = tempDir.resolve("project-dt");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+
+        // Return changed files including a .github/** file
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add(".github/ci.yml");
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, Collections.emptyMap()));
+
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        sysProps.setProperty("scalpel.disableTriggers", ".github/**");
+        sysProps.setProperty("scalpel.fullBuildTriggers", ""); // disable default trigger
+
+        MavenSession session = buildSession(root, allProjects, sysProps);
+
+        participant.afterProjectsRead(session);
+
+        // Because Scalpel was disabled by the trigger, no report should be written
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertFalse(Files.exists(reportFile), "Report file should NOT be created when disable trigger fires");
+    }
+
+    // ------------------------------------------------------------------
+    // Test: excludePaths — matching files are filtered out
+    // ------------------------------------------------------------------
+
+    @Test
+    void excludePaths_filteredFilesDoNotAffectModules() throws Exception {
+        Path root = tempDir.resolve("project-ep");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        String moduleBPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        // Changed: README.md (should be excluded) + module-a source (not excluded)
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("README.md");
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, Collections.emptyMap()));
+
+        // Mock dependency resolution
+        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
+        when(emptyResolution.getResolvedDependencies())
+                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(dependenciesResolver.resolve(any(org.apache.maven.project.DefaultDependencyResolutionRequest.class)))
+                .thenReturn(emptyResolution);
+
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        sysProps.setProperty("scalpel.excludePaths", "*.md");
+        sysProps.setProperty("scalpel.fullBuildTriggers", ""); // disable default trigger
+
+        MavenSession session = buildSession(root, allProjects, sysProps);
+
+        participant.afterProjectsRead(session);
+
+        // Report should be created with module-a affected (source change), module-b not affected
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        assertTrue(moduleHasReason(json, "module-a", "SOURCE_CHANGE"), "module-a should have SOURCE_CHANGE reason");
+        assertFalse(modulePresent(json, "module-b"), "module-b should NOT be in report");
+    }
+
+    @Test
+    void excludePaths_allFilesExcluded_noModulesAffected() throws Exception {
+        Path root = tempDir.resolve("project-ep2");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+
+        // Only README.md changed — all should be excluded
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("README.md");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, Collections.emptyMap()));
+
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        sysProps.setProperty("scalpel.excludePaths", "*.md");
+        sysProps.setProperty("scalpel.fullBuildTriggers", ""); // disable default trigger
+
+        MavenSession session = buildSession(root, allProjects, sysProps);
+
+        participant.afterProjectsRead(session);
+
+        // When all files excluded, Scalpel returns without writing a report
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertFalse(Files.exists(reportFile), "Report file should NOT be created when all files excluded");
+    }
+
+    // ------------------------------------------------------------------
+    // Test: forceBuildModules — force-included module appears in report
+    // ------------------------------------------------------------------
+
+    @Test
+    void forceBuildModules_forceIncludedModuleAppearsInReport() throws Exception {
+        Path root = tempDir.resolve("project-fb");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-c</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        String moduleCPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-c</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-c/pom.xml", moduleCPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
+        moduleC.setParent(parentProject);
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleC);
+
+        // Only module-a source changed
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, Collections.emptyMap()));
+
+        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
+        when(emptyResolution.getResolvedDependencies())
+                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(dependenciesResolver.resolve(any(org.apache.maven.project.DefaultDependencyResolutionRequest.class)))
+                .thenReturn(emptyResolution);
+
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        sysProps.setProperty("scalpel.forceBuildModules", "module-c");
+        sysProps.setProperty("scalpel.fullBuildTriggers", ""); // disable default trigger
+
+        MavenSession session = buildSession(root, allProjects, sysProps);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-a directly affected by source change
+        assertTrue(moduleHasReason(json, "module-a", "SOURCE_CHANGE"), "module-a should have SOURCE_CHANGE");
+        // module-c force-included
+        assertTrue(modulePresent(json, "module-c"), "module-c should be in report (force-included)");
+        assertTrue(moduleHasReason(json, "module-c", "FORCE_BUILD"), "module-c should have FORCE_BUILD reason");
+    }
+
+    // ------------------------------------------------------------------
+    // Test: impactedLog — file is written with affected module paths
+    // ------------------------------------------------------------------
+
+    @Test
+    void impactedLog_fileWrittenWithAffectedModulePaths() throws Exception {
+        Path root = tempDir.resolve("project-il");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        String moduleBPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        // Only module-a source changed
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, Collections.emptyMap()));
+
+        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
+        when(emptyResolution.getResolvedDependencies())
+                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(dependenciesResolver.resolve(any(org.apache.maven.project.DefaultDependencyResolutionRequest.class)))
+                .thenReturn(emptyResolution);
+
+        String impactedLogPath = "target/scalpel-impacted.log";
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        sysProps.setProperty("scalpel.impactedLog", impactedLogPath);
+        sysProps.setProperty("scalpel.fullBuildTriggers", ""); // disable default trigger
+
+        MavenSession session = buildSession(root, allProjects, sysProps);
+
+        participant.afterProjectsRead(session);
+
+        Path logFile = root.resolve(impactedLogPath);
+        assertTrue(Files.exists(logFile), "Impacted log file should be created");
+
+        List<String> lines = Files.readAllLines(logFile, StandardCharsets.UTF_8);
+        assertTrue(lines.stream().anyMatch(l -> l.contains("module-a")), "Impacted log should contain module-a");
+        assertFalse(lines.stream().anyMatch(l -> l.contains("module-b")), "Impacted log should not contain module-b");
+    }
+
+    // ------------------------------------------------------------------
+    // Test: disableOnSelectedProjects — Scalpel disabled when -pl active
+    // ------------------------------------------------------------------
+
+    @Test
+    void disableOnSelectedProjects_disablesWhenPlActive() throws Exception {
+        Path root = tempDir.resolve("project-dsp");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        sysProps.setProperty("scalpel.disableOnSelectedProjects", "true");
+
+        // Setup session with selectedProjects NOT empty (simulates -pl usage)
+        MavenSession session = mock(MavenSession.class);
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        org.apache.maven.execution.MavenExecutionRequest execRequest =
+                mock(org.apache.maven.execution.MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(execRequest.getSelectedProjects()).thenReturn(Collections.singletonList("module-a"));
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(org.eclipse.aether.RepositorySystemSession.class));
+
+        participant.afterProjectsRead(session);
+
+        // Scalpel should have returned early — detectChanges never called
+        verify(scalpelCore, never()).detectChanges(any(), any(), any());
+        // No report file created
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertFalse(Files.exists(reportFile), "Report file should NOT be created when disableOnSelectedProjects active");
+    }
+
+    @Test
+    void disableOnSelectedProjects_doesNotDisableWhenNoPlProjects() throws Exception {
+        Path root = tempDir.resolve("project-dsp2");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+
+        // detectChanges returns null (no base branch configured effectively)
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        sysProps.setProperty("scalpel.disableOnSelectedProjects", "true");
+
+        // selectedProjects is empty → Scalpel should NOT be disabled
+        MavenSession session = buildSession(root, allProjects, sysProps);
+
+        participant.afterProjectsRead(session);
+
+        // detectChanges should have been called (Scalpel was not disabled by -pl)
+        verify(scalpelCore).detectChanges(any(), any(), any());
     }
 }
