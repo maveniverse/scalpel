@@ -357,7 +357,7 @@ aspects are compared:
 * Properties
 * Build configuration (plugins, plugin management, plugin executions)
 * Source directories (`sourceDirectory`, `testSourceDirectory`, `scriptSourceDirectory`)
-* Resource and test resource configuration (directory, includes, excludes, filtering)
+* Resource and test resource configuration (directory, targetPath, includes, excludes, filtering)
 * Repositories and plugin repositories (id, url, layout, snapshot/release policies)
 * Active profile sections (properties, dependencies, plugins within active profiles)
 

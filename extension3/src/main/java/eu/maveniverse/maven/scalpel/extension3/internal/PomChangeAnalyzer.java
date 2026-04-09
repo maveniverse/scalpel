@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -200,19 +201,25 @@ class PomChangeAnalyzer {
 
         // Check source directories
         if (!equalSourceDirectories(oldModel, newModel)) {
-            logger.debug("Source directories changed in {}", key(parentProject));
+            if (logger.isDebugEnabled()) {
+                logger.debug("Source directories changed in {}", key(parentProject));
+            }
             parentSelfAffected = true;
         }
 
         // Check repositories
         if (!equalRepositoryLists(safeRepositories(oldModel), safeRepositories(newModel))) {
-            logger.debug("Repositories changed in {}", key(parentProject));
+            if (logger.isDebugEnabled()) {
+                logger.debug("Repositories changed in {}", key(parentProject));
+            }
             parentSelfAffected = true;
         }
 
         // Check plugin repositories
         if (!equalRepositoryLists(safePluginRepositories(oldModel), safePluginRepositories(newModel))) {
-            logger.debug("Plugin repositories changed in {}", key(parentProject));
+            if (logger.isDebugEnabled()) {
+                logger.debug("Plugin repositories changed in {}", key(parentProject));
+            }
             parentSelfAffected = true;
         }
 
@@ -663,45 +670,37 @@ class PomChangeAnalyzer {
     }
 
     private boolean equalSourceDirectories(Model oldModel, Model newModel) {
-        String oldSrc = oldModel.getBuild() != null ? oldModel.getBuild().getSourceDirectory() : null;
-        String newSrc = newModel.getBuild() != null ? newModel.getBuild().getSourceDirectory() : null;
-        if (!Objects.equals(oldSrc, newSrc)) {
-            return false;
-        }
+        return Objects.equals(getSourceDirectory(oldModel), getSourceDirectory(newModel))
+                && Objects.equals(getTestSourceDirectory(oldModel), getTestSourceDirectory(newModel))
+                && Objects.equals(getScriptSourceDirectory(oldModel), getScriptSourceDirectory(newModel))
+                && equalResourceLists(getResourcesList(oldModel), getResourcesList(newModel))
+                && equalResourceLists(getTestResourcesList(oldModel), getTestResourcesList(newModel));
+    }
 
-        String oldTestSrc = oldModel.getBuild() != null ? oldModel.getBuild().getTestSourceDirectory() : null;
-        String newTestSrc = newModel.getBuild() != null ? newModel.getBuild().getTestSourceDirectory() : null;
-        if (!Objects.equals(oldTestSrc, newTestSrc)) {
-            return false;
-        }
+    private String getSourceDirectory(Model model) {
+        return model.getBuild() != null ? model.getBuild().getSourceDirectory() : null;
+    }
 
-        String oldScriptSrc = oldModel.getBuild() != null ? oldModel.getBuild().getScriptSourceDirectory() : null;
-        String newScriptSrc = newModel.getBuild() != null ? newModel.getBuild().getScriptSourceDirectory() : null;
-        if (!Objects.equals(oldScriptSrc, newScriptSrc)) {
-            return false;
-        }
+    private String getTestSourceDirectory(Model model) {
+        return model.getBuild() != null ? model.getBuild().getTestSourceDirectory() : null;
+    }
 
-        List<Resource> oldResources =
-                oldModel.getBuild() != null && oldModel.getBuild().getResources() != null
-                        ? oldModel.getBuild().getResources()
-                        : Collections.<Resource>emptyList();
-        List<Resource> newResources =
-                newModel.getBuild() != null && newModel.getBuild().getResources() != null
-                        ? newModel.getBuild().getResources()
-                        : Collections.<Resource>emptyList();
-        if (!equalResourceLists(oldResources, newResources)) {
-            return false;
-        }
+    private String getScriptSourceDirectory(Model model) {
+        return model.getBuild() != null ? model.getBuild().getScriptSourceDirectory() : null;
+    }
 
-        List<Resource> oldTestResources =
-                oldModel.getBuild() != null && oldModel.getBuild().getTestResources() != null
-                        ? oldModel.getBuild().getTestResources()
-                        : Collections.<Resource>emptyList();
-        List<Resource> newTestResources =
-                newModel.getBuild() != null && newModel.getBuild().getTestResources() != null
-                        ? newModel.getBuild().getTestResources()
-                        : Collections.<Resource>emptyList();
-        return equalResourceLists(oldTestResources, newTestResources);
+    private List<Resource> getResourcesList(Model model) {
+        if (model.getBuild() != null && model.getBuild().getResources() != null) {
+            return model.getBuild().getResources();
+        }
+        return Collections.<Resource>emptyList();
+    }
+
+    private List<Resource> getTestResourcesList(Model model) {
+        if (model.getBuild() != null && model.getBuild().getTestResources() != null) {
+            return model.getBuild().getTestResources();
+        }
+        return Collections.<Resource>emptyList();
     }
 
     private boolean equalResourceLists(List<Resource> a, List<Resource> b) {
@@ -719,9 +718,22 @@ class PomChangeAnalyzer {
     private boolean equalResource(Resource a, Resource b) {
         return Objects.equals(a.getDirectory(), b.getDirectory())
                 && Objects.equals(a.getTargetPath(), b.getTargetPath())
-                && Objects.equals(a.getIncludes(), b.getIncludes())
-                && Objects.equals(a.getExcludes(), b.getExcludes())
+                && equalStringListsUnordered(a.getIncludes(), b.getIncludes())
+                && equalStringListsUnordered(a.getExcludes(), b.getExcludes())
                 && a.isFiltering() == b.isFiltering();
+    }
+
+    private boolean equalStringListsUnordered(List<String> a, List<String> b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        if (a.size() != b.size()) {
+            return false;
+        }
+        return new HashSet<>(a).equals(new HashSet<>(b));
     }
 
     private boolean equalRepositoryLists(List<Repository> a, List<Repository> b) {
