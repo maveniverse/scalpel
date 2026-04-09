@@ -49,7 +49,7 @@ Add Scalpel to your project's `.mvn/extensions.xml`:
 Then run Maven as usual. On a feature branch, Scalpel will automatically detect the base branch on
 supported CI systems and trim the reactor:
 
-```
+```text
 $ mvn verify
 [INFO] Scalpel 0.1.0 activated (mode=trim)
 [INFO] Scalpel: 3 changed files detected
@@ -66,7 +66,7 @@ Scalpel supports three modes, selected via `-Dscalpel.mode=<mode>`:
 Removes unaffected modules from the reactor. Only affected modules and their upstream/downstream
 dependencies are built. This is the most aggressive mode — unaffected modules are completely skipped.
 
-```
+```bash
 mvn verify -Dscalpel.baseBranch=origin/main
 ```
 
@@ -76,7 +76,7 @@ Builds all modules but skips tests on modules that are not affected by changes. 
 transitive dependency or managed plugin changes also have their tests run. This is useful when you
 want a full compile but only want to test what changed.
 
-```
+```bash
 mvn verify -Dscalpel.mode=skip-tests -Dscalpel.baseBranch=origin/main
 ```
 
@@ -86,7 +86,7 @@ Writes a JSON report of affected modules to a file without modifying the reactor
 built normally. This is useful when a CI script needs Scalpel's change detection results but wants
 to control the build flow itself.
 
-```
+```bash
 mvn validate -Dscalpel.mode=report -Dscalpel.baseBranch=origin/main
 ```
 
@@ -97,12 +97,12 @@ The report is written to `target/scalpel-report.json` by default (configurable v
 For CI scripts that need a simple flat file (e.g. for GitHub Actions matrix filtering), Scalpel can
 write a list of directly impacted module paths — one per line:
 
-```
+```bash
 mvn validate -Dscalpel.mode=report -Dscalpel.impactedLog=target/scalpel-impacted.log
 ```
 
 Example output:
-```
+```text
 module-a
 module-b/sub-module
 ```
@@ -195,7 +195,7 @@ All properties can be set via `-D` on the command line or in `.mvn/maven.config`
 By default, Scalpel only considers committed changes (diff between merge base and HEAD).
 For local development, you can include uncommitted and/or untracked files:
 
-```
+```text
 # In .mvn/maven.config for local dev:
 -Dscalpel.uncommitted=true
 -Dscalpel.untracked=true
@@ -223,7 +223,7 @@ without affecting local developer builds.
 In CI environments with shallow clones or forks, the base branch may not exist locally.
 Scalpel can fetch it automatically before change detection:
 
-```
+```bash
 -Dscalpel.fetchBaseBranch=true
 ```
 
@@ -235,14 +235,14 @@ name, then fetches only that ref. If the ref already exists locally, no fetch is
 By default, changes to files under `.mvn/` (e.g. `extensions.xml`, `maven.config`) trigger a full
 build. You can customize this with comma-separated glob patterns:
 
-```
+```bash
 -Dscalpel.fullBuildTriggers=.mvn/**,Jenkinsfile,*.gradle
 ```
 
 > **Note:** Since Scalpel itself lives in `.mvn/extensions.xml`, any change to that file (e.g. a
 > Dependabot PR bumping Scalpel's version) will trigger a full build by default. If this is undesired,
 > override the triggers to be more specific or set them to empty:
-> ```
+> ```bash
 > -Dscalpel.fullBuildTriggers=
 > ```
 
@@ -253,7 +253,7 @@ comma-separated glob patterns:
 
 - **`scalpel.excludePaths`** — Ignore matching files from change detection. Use this for files
   that shouldn't trigger rebuilds (documentation, editor config, etc.):
-  ```
+  ```bash
   -Dscalpel.excludePaths=*.md,LICENSE,.sdkmanrc,.editorconfig
   ```
 
@@ -262,7 +262,7 @@ comma-separated glob patterns:
 
 - **`scalpel.disableTriggers`** — Disable Scalpel entirely if any changed file matches. Use this
   when certain changes (e.g. CI configuration) should always result in a full, unmodified build:
-  ```
+  ```bash
   -Dscalpel.disableTriggers=.github/**
   ```
 
@@ -274,14 +274,14 @@ removed, then full build triggers are checked on the remaining files.
 Some modules should always be built regardless of change detection (e.g. integration test runners).
 Use `forceBuildModules` with regex patterns matching artifactIds:
 
-```
+```bash
 -Dscalpel.forceBuildModules=.*-it,.*-tests
 ```
 
 For scheduled/cron builds where no changes may be detected, use `buildAllIfNoChanges` to fall back
 to a full build instead of building nothing:
 
-```
+```bash
 -Dscalpel.buildAllIfNoChanges=true
 ```
 
@@ -289,7 +289,7 @@ to a full build instead of building nothing:
 
 To run a full build without Scalpel:
 
-```
+```bash
 mvn verify -Dscalpel.enabled=false
 ```
 
@@ -298,7 +298,7 @@ mvn verify -Dscalpel.enabled=false
 Scalpel can automatically disable itself based on the current or base branch name. This is useful
 for CI systems where incremental builds should be skipped on main, release, or maintenance branches:
 
-```
+```bash
 # Disable on main and release branches
 -Dscalpel.disableOnBranch=main,release/.*
 
@@ -315,7 +315,7 @@ By default, when Maven is invoked with `-pl` (selected projects), Scalpel trims 
 the `-pl` scope — this is usually the correct behavior. However, in CI downstream test
 jobs where `-pl` selects a specific test module, you may want to disable Scalpel entirely:
 
-```
+```bash
 # In CI downstream test jobs:
 mvn verify -pl integration-tests/maven -Dscalpel.disableOnSelectedProjects=true
 ```
@@ -328,7 +328,7 @@ fine-grained control over how these categories are treated:
 
 **Skip tests on upstream modules:**
 
-```
+```bash
 mvn verify -Dscalpel.skipTestsForUpstream=true
 ```
 
@@ -336,7 +336,7 @@ This builds upstream dependencies but skips their tests, since they weren't dire
 
 **Inject properties per category:**
 
-```
+```bash
 mvn verify -Dscalpel.upstreamArgs=skipITs=true -Dscalpel.downstreamArgs=skipITs=true
 ```
 
@@ -399,7 +399,7 @@ rather than a directory.
 
 **Before (GIB in `.mvn/maven.config`):**
 
-```
+```text
 -Dgib.referenceBranch=refs/remotes/origin/main
 -Dgib.disableIfBranchMatches=main,release/.*
 -Dgib.fetchReferenceBranch=true
@@ -412,7 +412,7 @@ rather than a directory.
 
 **After (Scalpel in `.mvn/maven.config`):**
 
-```
+```text
 -Dscalpel.baseBranch=origin/main
 -Dscalpel.disableOnBranch=main,release/.*
 -Dscalpel.fetchBaseBranch=true

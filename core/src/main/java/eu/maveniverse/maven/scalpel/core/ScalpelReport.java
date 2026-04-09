@@ -22,6 +22,8 @@ public final class ScalpelReport {
     public static final String REASON_TRANSITIVE_DEPENDENCY = "TRANSITIVE_DEPENDENCY";
     public static final String REASON_MANAGED_PLUGIN = "MANAGED_PLUGIN";
     public static final String REASON_FORCE_BUILD = "FORCE_BUILD";
+    public static final String REASON_UPSTREAM_DEPENDENCY = "UPSTREAM_DEPENDENCY";
+    public static final String REASON_DOWNSTREAM_DEPENDENT = "DOWNSTREAM_DEPENDENT";
 
     public static final String CATEGORY_DIRECT = "DIRECT";
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";
