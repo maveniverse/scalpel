@@ -72,6 +72,9 @@
               <preBuildHookScript>setup</preBuildHookScript>
               <postBuildHookScript>verify</postBuildHookScript>
               <addTestClassPath>false</addTestClassPath>
+              <extraArtifacts>
+                <extraArtifact>eu.maveniverse.maven.scalpel:scalpel:${project.version}:pom</extraArtifact>
+              </extraArtifacts>
             </configuration>
             <executions>
               <execution>
