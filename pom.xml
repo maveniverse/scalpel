@@ -19,7 +19,7 @@
 
   <groupId>eu.maveniverse.maven.scalpel</groupId>
   <artifactId>scalpel</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>${nisse.jgit.dynamicVersion}</version>
   <packaging>pom</packaging>
 
   <name>${project.groupId}:${project.artifactId}</name>
@@ -44,7 +44,7 @@
   <scm>
     <connection>scm:git:git@github.com:maveniverse/scalpel.git</connection>
     <developerConnection>scm:git:git@github.com:maveniverse/scalpel.git</developerConnection>
-    <tag>HEAD</tag>
+    <tag>${nisse.jgit.dynamicVersion}</tag>
     <url>https://github.com/maveniverse/scalpel</url>
   </scm>
 

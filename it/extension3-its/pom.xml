@@ -14,7 +14,7 @@
   <parent>
     <groupId>eu.maveniverse.maven.scalpel.it</groupId>
     <artifactId>it</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>${nisse.jgit.dynamicVersion}</version>
   </parent>
 
   <artifactId>extension3-its</artifactId>

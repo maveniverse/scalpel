@@ -19,19 +19,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Check if SNAPSHOT version
-        id: check
-        run: |
-          version=$(sed -n '/<parent>/,/<\/parent>/d;s/.*<version>\(.*\)<\/version>.*/\1/p' pom.xml | head -1)
-          echo "Resolved version: $version"
-          if [[ "$version" == *SNAPSHOT* ]]; then
-            echo "is_snapshot=true" >> $GITHUB_OUTPUT
-          else
-            echo "is_snapshot=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Setup Java
-        if: steps.check.outputs.is_snapshot == 'true'
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
@@ -39,7 +27,6 @@ jobs:
           cache: 'maven'
 
       - name: Deploy snapshot
-        if: steps.check.outputs.is_snapshot == 'true'
         env:
           MAVEN_USER: ${{ secrets.MAVEN_USER }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
