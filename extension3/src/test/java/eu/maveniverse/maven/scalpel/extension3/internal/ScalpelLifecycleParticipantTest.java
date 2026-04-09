@@ -327,6 +327,203 @@ class ScalpelLifecycleParticipantTest {
         assertFalse(modulePresent(json, "module-a"), "module-a should NOT be in report (no plugin, no dep change)");
     }
 
+    @Test
+    void reportMode_testOnlySourceChangeProducesTestChangeReason() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        String moduleBPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        // module-a: test-only change (src/test/), module-b: main source change
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/test/java/com/example/MyTest.java");
+        changedFiles.add("module-b/src/main/java/com/example/Service.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+
+        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
+        when(emptyResolution.getResolvedDependencies())
+                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenReturn(emptyResolution);
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(
+                moduleHasReason(json, "module-a", "TEST_CHANGE"),
+                "module-a should have TEST_CHANGE reason (only test files changed)");
+        assertTrue(
+                moduleHasReason(json, "module-b", "SOURCE_CHANGE"),
+                "module-b should have SOURCE_CHANGE reason (main source changed)");
+    }
+
+    @Test
+    void reportMode_testScopedTransitiveDependencyProducesTestReason() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <lib.version>1.0</lib.version>\n"
+                + "  </properties>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>commons-lang</groupId>\n"
+                + "      <artifactId>commons-lang</artifactId>\n"
+                + "      <version>${lib.version}</version>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+
+        String newParentPom = oldParentPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
+        writePom(root, "pom.xml", newParentPom);
+
+        // module-a: uses managed dep directly
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        // module-b: gets commons-lang only via test scope transitively
+        String moduleBPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // module-b: commons-lang is only via test scope
+        DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
+        org.eclipse.aether.graph.Dependency testDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "test");
+        when(moduleBResolution.getResolvedDependencies()).thenReturn(Collections.singletonList(testDep));
+
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-b".equals(req.getMavenProject().getArtifactId())) {
+                        return moduleBResolution;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getResolvedDependencies())
+                            .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+                    return empty;
+                });
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(moduleHasReason(json, "module-a", "POM_CHANGE"));
+        assertTrue(
+                moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY_TEST"),
+                "module-b should have TRANSITIVE_DEPENDENCY_TEST (test-scoped transitive dep)");
+    }
+
     private void writePom(Path root, String relativePath, String content) throws Exception {
         Path pomFile = root.resolve(relativePath);
         Files.createDirectories(pomFile.getParent());
