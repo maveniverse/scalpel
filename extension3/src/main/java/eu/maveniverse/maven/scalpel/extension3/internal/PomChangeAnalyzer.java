@@ -911,11 +911,8 @@ class PomChangeAnalyzer {
     }
 
     /**
-     * Find reactor modules that are imported as BOMs by other reactor modules.
-     * Scans each module's raw POM {@code <dependencyManagement>} for entries with
-     * {@code <type>pom</type><scope>import</scope>} that reference another reactor module.
-     *
-     * @return map of BOM module to the list of modules that import it
+     * Collect all modules that depend on the given project, combining reactor children
+     * (via parent inheritance) and BOM importers (via import-scope dependency management).
      */
     private List<MavenProject> collectDependents(
             MavenProject project,
@@ -937,6 +934,13 @@ class PomChangeAnalyzer {
         return dependents;
     }
 
+    /**
+     * Find reactor modules that are imported as BOMs by other reactor modules.
+     * Scans each module's raw POM {@code <dependencyManagement>} for entries with
+     * {@code <type>pom</type><scope>import</scope>} that reference another reactor module.
+     *
+     * @return map of BOM module to the list of modules that import it
+     */
     Map<MavenProject, List<MavenProject>> findBomImporters(List<MavenProject> allProjects) {
         Map<String, MavenProject> projectByGA = new LinkedHashMap<>();
         for (MavenProject project : allProjects) {
