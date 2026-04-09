@@ -31,6 +31,5 @@ exec('git', 'branch', 'base')
 // Create an uncommitted (but tracked) source file in module-b
 new File(dir, 'module-b/src/main/java').mkdirs()
 new File(dir, 'module-b/src/main/java/Foo.java').text = 'public class Foo {}'
-// Do NOT git add or commit - this is an untracked file, but we test uncommitted here
-// Let's stage it to make it "uncommitted" (added but not committed)
+// Stage the file to make it "uncommitted" (added but not committed)
 exec('git', 'add', 'module-b/src/main/java/Foo.java')

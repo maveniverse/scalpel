@@ -22,3 +22,4 @@ assert directlyAffectedLine.contains('module-b') : "module-b should be directly 
 // The log should show that tests are skipped on some modules
 def skippingLine = log.readLines().find { it.contains('skipping tests on') }
 assert skippingLine != null : "Expected 'skipping tests on' log line"
+assert skippingLine.contains('module-a') : "Expected module-a to have tests skipped, got: $skippingLine"

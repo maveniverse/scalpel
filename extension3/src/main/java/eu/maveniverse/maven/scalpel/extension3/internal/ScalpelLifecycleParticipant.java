@@ -452,7 +452,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private void writeImpactedLog(ScalpelConfiguration config, Path reactorRoot, Set<MavenProject> affectedModules)
             throws MavenExecutionException {
-        Path logPath = reactorRoot.resolve(config.getImpactedLog());
+        String impactedLog = config.getImpactedLog();
+        if (impactedLog == null || impactedLog.trim().isEmpty()) {
+            return;
+        }
+        Path logPath = reactorRoot.resolve(impactedLog);
         try {
             java.nio.file.Files.createDirectories(logPath.getParent());
             List<String> lines = new ArrayList<>();

@@ -258,7 +258,7 @@ comma-separated glob patterns:
   ```
 
 - **`scalpel.fullBuildTriggers`** — Force a full build if any changed file matches (default:
-  `.mvn/**`). See [Full Build Triggers](#full-build-triggers) below.
+  `.mvn/**`). See [Full Build Triggers](#full-build-triggers).
 
 - **`scalpel.disableTriggers`** — Disable Scalpel entirely if any changed file matches. Use this
   when certain changes (e.g. CI configuration) should always result in a full, unmodified build:
