@@ -116,6 +116,9 @@ class PomChangeAnalyzer {
         // Build set of projects that have children in the reactor
         Set<MavenProject> parents = findParentProjects(allProjects);
 
+        // Build map of reactor modules imported as BOMs by other reactor modules
+        Map<MavenProject, List<MavenProject>> bomImporters = findBomImporters(allProjects);
+
         for (String changedPomPath : changedPomPaths) {
             MavenProject project = projectByPomPath.get(changedPomPath);
             if (project == null) {
@@ -123,20 +126,34 @@ class PomChangeAnalyzer {
                 continue;
             }
 
-            if (!parents.contains(project)) {
+            // Determine all dependent modules (children via parent inheritance + BOM importers)
+            List<MavenProject> dependents = new ArrayList<>();
+            if (parents.contains(project)) {
+                dependents.addAll(findChildren(project, allProjects));
+            }
+            List<MavenProject> importers = bomImporters.get(project);
+            if (importers != null) {
+                for (MavenProject importer : importers) {
+                    if (!dependents.contains(importer)) {
+                        dependents.add(importer);
+                    }
+                }
+            }
+
+            if (dependents.isEmpty()) {
                 // Leaf module: its own POM changed, mark it as affected
                 logger.debug("Leaf module POM changed: {}", key(project));
                 affected.add(project);
                 continue;
             }
 
-            // Parent/aggregator POM changed: analyze what actually changed
+            // Parent/BOM POM changed: analyze what actually changed
             byte[] oldPomBytes = oldPomContents.get(changedPomPath);
             if (oldPomBytes == null) {
-                // New POM (didn't exist in base), mark all children as affected
-                logger.debug("New parent POM: {}, marking all children as affected", key(project));
+                // New POM (didn't exist in base), mark all dependents as affected
+                logger.debug("New parent/BOM POM: {}, marking all dependents as affected", key(project));
                 affected.add(project);
-                affected.addAll(findChildren(project, allProjects));
+                affected.addAll(dependents);
                 continue;
             }
 
@@ -144,20 +161,20 @@ class PomChangeAnalyzer {
                 analyzeParentPomChange(
                         project,
                         oldPomBytes,
-                        allProjects,
+                        dependents,
                         reactorRoot,
                         affected,
                         allChangedManagedDepGAs,
                         allChangedManagedPluginGAs,
                         allChangedProperties);
             } catch (Exception e) {
-                // If we can't parse the old POM, be conservative and mark all children
+                // If we can't parse the old POM, be conservative and mark all dependents
                 logger.warn(
-                        "Cannot parse old POM for {}, marking all children as affected: {}",
+                        "Cannot parse old POM for {}, marking all dependents as affected: {}",
                         key(project),
                         e.getMessage());
                 affected.add(project);
-                affected.addAll(findChildren(project, allProjects));
+                affected.addAll(dependents);
             }
         }
 
@@ -167,7 +184,7 @@ class PomChangeAnalyzer {
     private void analyzeParentPomChange(
             MavenProject parentProject,
             byte[] oldPomBytes,
-            List<MavenProject> allProjects,
+            List<MavenProject> dependentProjects,
             Path reactorRoot,
             Set<MavenProject> affected,
             Set<String> allChangedManagedDepGAs,
@@ -293,9 +310,8 @@ class PomChangeAnalyzer {
                 changedManagedDeps,
                 changedManagedPlugins);
 
-        // Check each child to see if it's affected
-        List<MavenProject> children = findChildren(parentProject, allProjects);
-        for (MavenProject child : children) {
+        // Check each dependent (child or BOM importer) to see if it's affected
+        for (MavenProject child : dependentProjects) {
             if (affected.contains(child)) {
                 continue;
             }
@@ -901,6 +917,43 @@ class PomChangeAnalyzer {
             }
         }
         return parents;
+    }
+
+    /**
+     * Find reactor modules that are imported as BOMs by other reactor modules.
+     * Scans each module's raw POM {@code <dependencyManagement>} for entries with
+     * {@code <type>pom</type><scope>import</scope>} that reference another reactor module.
+     *
+     * @return map of BOM module to the list of modules that import it
+     */
+    Map<MavenProject, List<MavenProject>> findBomImporters(List<MavenProject> allProjects) {
+        Map<String, MavenProject> projectByGA = new LinkedHashMap<>();
+        for (MavenProject project : allProjects) {
+            projectByGA.put(project.getGroupId() + ":" + project.getArtifactId(), project);
+        }
+
+        Map<MavenProject, List<MavenProject>> result = new LinkedHashMap<>();
+
+        for (MavenProject project : allProjects) {
+            for (Dependency dep : getManagedDependencies(project.getOriginalModel())) {
+                if ("pom".equals(dep.getType()) && "import".equals(dep.getScope())) {
+                    String ga = dep.getGroupId() + ":" + dep.getArtifactId();
+                    MavenProject bomProject = projectByGA.get(ga);
+                    if (bomProject != null && bomProject != project) {
+                        List<MavenProject> importers = result.get(bomProject);
+                        if (importers == null) {
+                            importers = new ArrayList<>();
+                            result.put(bomProject, importers);
+                        }
+                        if (!importers.contains(project)) {
+                            importers.add(project);
+                        }
+                    }
+                }
+            }
+        }
+
+        return result;
     }
 
     private List<MavenProject> findChildren(MavenProject parent, List<MavenProject> allProjects) {
