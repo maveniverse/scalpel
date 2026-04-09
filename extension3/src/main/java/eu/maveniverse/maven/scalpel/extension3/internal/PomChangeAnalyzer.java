@@ -198,7 +198,6 @@ class PomChangeAnalyzer {
 
         // Find changed properties
         Set<String> changedProperties = diffProperties(oldModel.getProperties(), newModel.getProperties());
-        allChangedProperties.addAll(changedProperties);
 
         // Find changed managed dependencies (by groupId:artifactId)
         Set<String> changedManagedDeps = diffDependencyManagement(oldModel, newModel);
@@ -216,6 +215,9 @@ class PomChangeAnalyzer {
                         changedProperties,
                         changedManagedDeps,
                         changedManagedPlugins);
+
+        // Collect all changed properties (after profile analysis has augmented the set)
+        allChangedProperties.addAll(changedProperties);
 
         if (parentSelfAffected) {
             affected.add(parentProject);

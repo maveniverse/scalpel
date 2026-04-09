@@ -28,8 +28,12 @@ import org.apache.maven.model.Dependency;
 import org.apache.maven.model.DependencyManagement;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
+import org.apache.maven.model.PluginExecution;
 import org.apache.maven.model.PluginManagement;
+import org.apache.maven.model.Profile;
+import org.apache.maven.model.Resource;
 import org.apache.maven.project.MavenProject;
+import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -427,6 +431,433 @@ class PomChangeAnalyzerTest {
                 affected.contains(moduleA), "module-a does not use maven-compiler-plugin and should NOT be affected");
     }
 
+    // --- Profile-aware POM comparison tests ---
+
+    @Test
+    void analyzeChanges_activeProfilePropertyChangeAffectsChild() throws Exception {
+        Path root = setupReactorRoot();
+
+        // Parent POM with profile "my-profile" having dep.version=2.0 (new value)
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <profiles><profile>\n"
+                + "    <id>my-profile</id>\n"
+                + "    <properties><dep.version>2.0</dep.version></properties>\n"
+                + "  </profile></profiles>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // module-b references ${dep.version}
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId><version>${dep.version}</version></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        // Set profile as active on parent
+        Profile activeProfile = new Profile();
+        activeProfile.setId("my-profile");
+        projects.get(0).setActiveProfiles(Collections.singletonList(activeProfile));
+
+        // Old parent POM had dep.version=1.0 in the profile
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <profiles><profile>\n"
+                + "    <id>my-profile</id>\n"
+                + "    <properties><dep.version>1.0</dep.version></properties>\n"
+                + "  </profile></profiles>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(2)),
+                "module-b references ${dep.version} and should be affected by active profile change");
+        assertFalse(
+                result.getAffectedProjects().contains(projects.get(1)), "module-a does NOT reference ${dep.version}");
+        assertTrue(result.getChangedProperties().contains("dep.version"));
+    }
+
+    @Test
+    void analyzeChanges_inactiveProfileChangeIgnored() throws Exception {
+        Path root = setupReactorRoot();
+
+        // Parent POM with profile "my-profile" having dep.version=2.0
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <profiles><profile>\n"
+                + "    <id>my-profile</id>\n"
+                + "    <properties><dep.version>2.0</dep.version></properties>\n"
+                + "  </profile></profiles>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId><version>${dep.version}</version></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+        // Do NOT set active profiles - the profile is inactive
+
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <profiles><profile>\n"
+                + "    <id>my-profile</id>\n"
+                + "    <properties><dep.version>1.0</dep.version></properties>\n"
+                + "  </profile></profiles>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        assertTrue(affected.isEmpty(), "Inactive profile change should not affect any module");
+    }
+
+    @Test
+    void analyzeChanges_activeProfileManagedDepChangeAffectsChild() throws Exception {
+        Path root = setupReactorRoot();
+
+        // Parent POM with profile that has managed dep lib-x:2.0
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <profiles><profile>\n"
+                + "    <id>my-profile</id>\n"
+                + "    <dependencyManagement><dependencies>\n"
+                + "      <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId><version>2.0</version></dependency>\n"
+                + "    </dependencies></dependencyManagement>\n"
+                + "  </profile></profiles>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // module-b uses lib-x
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+        Profile activeProfile = new Profile();
+        activeProfile.setId("my-profile");
+        projects.get(0).setActiveProfiles(Collections.singletonList(activeProfile));
+
+        // Old parent POM had lib-x:1.0 in the profile
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <profiles><profile>\n"
+                + "    <id>my-profile</id>\n"
+                + "    <dependencyManagement><dependencies>\n"
+                + "      <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId><version>1.0</version></dependency>\n"
+                + "    </dependencies></dependencyManagement>\n"
+                + "  </profile></profiles>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(2)),
+                "module-b uses managed dep lib-x from active profile and should be affected");
+        assertFalse(result.getAffectedProjects().contains(projects.get(1)), "module-a does NOT use lib-x");
+        assertTrue(result.getChangedManagedDependencyGAs().contains("com.example:lib-x"));
+    }
+
+    // --- Plugin configuration semantic diff tests ---
+
+    @Test
+    void diffPluginManagement_whitespaceConfigChangeIgnored() {
+        Model old =
+                modelWithManagedPluginConfig("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0", "  11  ");
+        Model now = modelWithManagedPluginConfig("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0", "11");
+        assertTrue(
+                analyzer.diffPluginManagement(old, now).isEmpty(),
+                "Whitespace-only config change should not trigger diff");
+    }
+
+    @Test
+    void diffPluginManagement_configValueChangeDetected() {
+        Model old = modelWithManagedPluginConfig("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0", "11");
+        Model now = modelWithManagedPluginConfig("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0", "17");
+        Set<String> changed = analyzer.diffPluginManagement(old, now);
+        assertEquals(
+                Collections.singleton("org.apache.maven.plugins:maven-compiler-plugin"),
+                changed,
+                "Config value change should be detected");
+    }
+
+    @Test
+    void diffPluginManagement_executionChangeDetected() {
+        Model old = modelWithManagedPluginExecution(
+                "org.apache.maven.plugins", "maven-surefire-plugin", "3.0.0", "default-test", "test");
+        Model now = modelWithManagedPluginExecution(
+                "org.apache.maven.plugins", "maven-surefire-plugin", "3.0.0", "default-test", "integration-test");
+        Set<String> changed = analyzer.diffPluginManagement(old, now);
+        assertEquals(
+                Collections.singleton("org.apache.maven.plugins:maven-surefire-plugin"),
+                changed,
+                "Execution phase change should be detected");
+    }
+
+    @Test
+    void diffPluginManagement_sameExecutionNoChange() {
+        Model old = modelWithManagedPluginExecution(
+                "org.apache.maven.plugins", "maven-surefire-plugin", "3.0.0", "default-test", "test");
+        Model now = modelWithManagedPluginExecution(
+                "org.apache.maven.plugins", "maven-surefire-plugin", "3.0.0", "default-test", "test");
+        assertTrue(analyzer.diffPluginManagement(old, now).isEmpty(), "Identical executions should not trigger diff");
+    }
+
+    // --- Resource filtering property tracking tests ---
+
+    @Test
+    void analyzeChanges_filteredResourcePropertyChangeAffectsChild() throws Exception {
+        Path root = setupReactorRoot();
+
+        // Parent POM with app.version=2.0 (new)
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <app.version>2.0</app.version>\n"
+                + "  </properties>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        // module-a: no filtered resources
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // module-b: has filtered resources
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        // Create filtered resource file referencing ${app.version}
+        Path resourceDir = root.resolve("module-b/src/main/resources");
+        Files.createDirectories(resourceDir);
+        Files.write(
+                resourceDir.resolve("application.properties"),
+                "app.version=${app.version}\n".getBytes(StandardCharsets.UTF_8));
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        // Set up filtered resource on module-b
+        MavenProject moduleB = projects.get(2);
+        Resource resource = new Resource();
+        resource.setDirectory(root.resolve("module-b/src/main/resources").toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleB.getModel().setBuild(build);
+
+        // Old parent POM had app.version=1.0
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <app.version>1.0</app.version>\n"
+                + "  </properties>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        assertTrue(
+                affected.contains(moduleB),
+                "module-b has filtered resource with ${app.version} and should be affected");
+        assertFalse(
+                affected.contains(projects.get(1)), "module-a has no filtered resources and should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_filteredResourceWithoutPropertyRefNotAffected() throws Exception {
+        Path root = setupReactorRoot();
+
+        // Parent POM with app.version=2.0
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <app.version>2.0</app.version>\n"
+                + "  </properties>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        // Create filtered resource that does NOT reference ${app.version}
+        Path resourceDir = root.resolve("module-b/src/main/resources");
+        Files.createDirectories(resourceDir);
+        Files.write(resourceDir.resolve("config.properties"), "key=value\n".getBytes(StandardCharsets.UTF_8));
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        // Set up filtered resource on module-b
+        MavenProject moduleB = projects.get(2);
+        Resource resource = new Resource();
+        resource.setDirectory(root.resolve("module-b/src/main/resources").toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleB.getModel().setBuild(build);
+
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <properties>\n"
+                + "    <app.version>1.0</app.version>\n"
+                + "  </properties>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        assertFalse(
+                affected.contains(moduleB),
+                "module-b's filtered resources don't reference ${app.version} - should NOT be affected");
+    }
+
     // --- Helper methods ---
 
     private Path setupReactorRoot() throws IOException {
@@ -732,6 +1163,44 @@ class PomChangeAnalyzerTest {
         plugin.setGroupId(groupId);
         plugin.setArtifactId(artifactId);
         plugin.setVersion(version);
+        pm.addPlugin(plugin);
+        build.setPluginManagement(pm);
+        model.setBuild(build);
+        return model;
+    }
+
+    private Model modelWithManagedPluginConfig(String groupId, String artifactId, String version, String sourceValue) {
+        Model model = new Model();
+        Build build = new Build();
+        PluginManagement pm = new PluginManagement();
+        Plugin plugin = new Plugin();
+        plugin.setGroupId(groupId);
+        plugin.setArtifactId(artifactId);
+        plugin.setVersion(version);
+        Xpp3Dom config = new Xpp3Dom("configuration");
+        Xpp3Dom source = new Xpp3Dom("source");
+        source.setValue(sourceValue);
+        config.addChild(source);
+        plugin.setConfiguration(config);
+        pm.addPlugin(plugin);
+        build.setPluginManagement(pm);
+        model.setBuild(build);
+        return model;
+    }
+
+    private Model modelWithManagedPluginExecution(
+            String groupId, String artifactId, String version, String execId, String phase) {
+        Model model = new Model();
+        Build build = new Build();
+        PluginManagement pm = new PluginManagement();
+        Plugin plugin = new Plugin();
+        plugin.setGroupId(groupId);
+        plugin.setArtifactId(artifactId);
+        plugin.setVersion(version);
+        PluginExecution execution = new PluginExecution();
+        execution.setId(execId);
+        execution.setPhase(phase);
+        plugin.addExecution(execution);
         pm.addPlugin(plugin);
         build.setPluginManagement(pm);
         model.setBuild(build);
