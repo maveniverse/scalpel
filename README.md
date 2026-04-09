@@ -146,10 +146,13 @@ not as a replacement. It contains only directly affected modules (not upstream/d
 
 | Reason | Description |
 |--------|-------------|
-| `SOURCE_CHANGE` | A non-POM file changed in this module's directory |
+| `SOURCE_CHANGE` | A non-POM, non-test file changed in this module's directory |
+| `TEST_CHANGE` | Only test source files (`src/test/**`) changed; production artifact is unchanged |
 | `POM_CHANGE` | This module's POM is affected by a POM change (property, dependency, or plugin) |
-| `TRANSITIVE_DEPENDENCY` | A changed managed dependency reaches this module transitively |
+| `TRANSITIVE_DEPENDENCY` | A changed managed dependency reaches this module transitively (compile/runtime scope) |
+| `TRANSITIVE_DEPENDENCY_TEST` | A changed managed dependency reaches this module transitively via test scope only |
 | `MANAGED_PLUGIN` | This module uses a plugin whose managed version changed |
+| `DOWNSTREAM_TEST` | Included as a downstream dependent via test-scoped dependency only |
 | `FORCE_BUILD` | This module was force-included via `forceBuildModules` |
 
 **Affected module categories:**
@@ -352,11 +355,19 @@ aspects are compared:
 * Packaging
 * Dependencies and dependency management
 * Properties
-* Build configuration (plugins, plugin management, source directories)
+* Build configuration (plugins, plugin management, plugin executions, source directories)
+* Active profile sections (properties, dependencies, plugins within active profiles)
 * Repositories and plugin repositories
 
 This means cosmetic POM changes (reformatting, reordering, adding comments) won't trigger unnecessary
-rebuilds.
+rebuilds. Plugin configurations are compared semantically (Xpp3Dom structure), so whitespace-only
+changes in plugin XML configuration are ignored.
+
+### Profile Awareness
+
+Scalpel only considers changes inside profiles that are currently active. Changes to inactive profiles
+are ignored, preventing unnecessary rebuilds when modifying profiles that don't apply to the current
+build.
 
 ### Property Indirection
 
@@ -364,6 +375,14 @@ Scalpel resolves property indirection in managed dependencies and plugins. For e
 changes `<kafka.version>3.6.0</kafka.version>` to `<kafka.version>3.7.0</kafka.version>`, and a managed
 dependency uses `<version>${kafka.version}</version>`, Scalpel detects that the managed dependency's
 effective version changed and marks child modules that use it as affected.
+
+### Resource Filtering
+
+When a property changes in a parent POM, Scalpel checks child modules that have resource filtering
+enabled (`<filtering>true</filtering>`). If any filtered resource file contains a `${property}`
+reference to the changed property, the module is marked as affected. This ensures that changes to
+properties used in filtered resources (e.g. configuration files with `${app.version}`) trigger a
+rebuild of the affected module.
 
 ## Git Worktree Support
 

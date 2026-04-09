@@ -10,9 +10,12 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -25,8 +28,12 @@ import javax.inject.Singleton;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
+import org.apache.maven.model.PluginExecution;
+import org.apache.maven.model.Profile;
+import org.apache.maven.model.Resource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
 import org.apache.maven.project.MavenProject;
+import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -189,10 +196,6 @@ class PomChangeAnalyzer {
             parentSelfAffected = true;
         }
 
-        if (parentSelfAffected) {
-            affected.add(parentProject);
-        }
-
         // Find changed properties
         Set<String> changedProperties = diffProperties(oldModel.getProperties(), newModel.getProperties());
         allChangedProperties.addAll(changedProperties);
@@ -203,6 +206,21 @@ class PomChangeAnalyzer {
         // Find changed managed plugins (by groupId:artifactId)
         Set<String> changedManagedPlugins = diffPluginManagement(oldModel, newModel);
 
+        // Analyze active profile changes (inactive profile changes are ignored)
+        Set<String> activeProfileIds = getActiveProfileIds(parentProject);
+        parentSelfAffected = parentSelfAffected
+                || analyzeProfileChanges(
+                        oldModel,
+                        newModel,
+                        activeProfileIds,
+                        changedProperties,
+                        changedManagedDeps,
+                        changedManagedPlugins);
+
+        if (parentSelfAffected) {
+            affected.add(parentProject);
+        }
+
         // Resolve property indirection: if a managed dep/plugin uses a changed property
         // in its version (e.g. <version>${spring.version}</version>), it's effectively changed
         // even though the raw XML string didn't change
@@ -211,6 +229,23 @@ class PomChangeAnalyzer {
             augmentWithPropertyReferences(changedProperties, changedManagedDeps, getManagedDependencies(newModel));
             augmentWithPluginPropertyReferences(changedProperties, changedManagedPlugins, getManagedPlugins(oldModel));
             augmentWithPluginPropertyReferences(changedProperties, changedManagedPlugins, getManagedPlugins(newModel));
+            // Also check active profile-level managed deps/plugins for property indirection
+            for (Profile profile : safeProfiles(oldModel)) {
+                if (activeProfileIds.contains(profile.getId())) {
+                    augmentWithPropertyReferences(
+                            changedProperties, changedManagedDeps, getProfileManagedDependencies(profile));
+                    augmentWithPluginPropertyReferences(
+                            changedProperties, changedManagedPlugins, getProfileManagedPlugins(profile));
+                }
+            }
+            for (Profile profile : safeProfiles(newModel)) {
+                if (activeProfileIds.contains(profile.getId())) {
+                    augmentWithPropertyReferences(
+                            changedProperties, changedManagedDeps, getProfileManagedDependencies(profile));
+                    augmentWithPluginPropertyReferences(
+                            changedProperties, changedManagedPlugins, getProfileManagedPlugins(profile));
+                }
+            }
         }
 
         // Collect all changed managed GAs for transitive dependency and plugin checking
@@ -278,10 +313,109 @@ class PomChangeAnalyzer {
                 }
             }
 
+            // Check if child has filtered resources referencing changed properties
+            if (!childAffected && !changedProperties.isEmpty()) {
+                if (hasFilteredResourcesWithChangedProperty(child, changedProperties)) {
+                    logger.debug("Child {} has filtered resources referencing changed properties", key(child));
+                    childAffected = true;
+                }
+            }
+
             if (childAffected) {
                 affected.add(child);
             }
         }
+    }
+
+    /**
+     * Analyze changes in active profiles between old and new POM models.
+     * Returns true if the parent itself is affected (direct deps or plugins changed).
+     * Accumulates property, managed dep, and managed plugin changes into the provided sets.
+     */
+    private boolean analyzeProfileChanges(
+            Model oldModel,
+            Model newModel,
+            Set<String> activeProfileIds,
+            Set<String> changedProperties,
+            Set<String> changedManagedDeps,
+            Set<String> changedManagedPlugins) {
+
+        boolean selfAffected = false;
+
+        Map<String, Profile> oldProfiles = new LinkedHashMap<>();
+        for (Profile p : safeProfiles(oldModel)) {
+            oldProfiles.put(p.getId(), p);
+        }
+        Map<String, Profile> newProfiles = new LinkedHashMap<>();
+        for (Profile p : safeProfiles(newModel)) {
+            newProfiles.put(p.getId(), p);
+        }
+
+        for (String profileId : activeProfileIds) {
+            Profile oldProfile = oldProfiles.get(profileId);
+            Profile newProfile = newProfiles.get(profileId);
+
+            if (oldProfile == null && newProfile == null) {
+                continue;
+            }
+
+            if (oldProfile == null || newProfile == null) {
+                // Profile added or removed while active
+                logger.debug("Active profile {} was {}", profileId, oldProfile == null ? "added" : "removed");
+                if (newProfile != null) {
+                    changedProperties.addAll(diffProperties(null, newProfile.getProperties()));
+                    changedManagedDeps.addAll(diffDependencies(
+                            Collections.<Dependency>emptyList(), getProfileManagedDependencies(newProfile)));
+                    changedManagedPlugins.addAll(
+                            diffPlugins(Collections.<Plugin>emptyList(), getProfileManagedPlugins(newProfile)));
+                    if (!newProfile.getDependencies().isEmpty()
+                            || !getProfilePlugins(newProfile).isEmpty()) {
+                        selfAffected = true;
+                    }
+                } else {
+                    changedProperties.addAll(diffProperties(oldProfile.getProperties(), null));
+                    changedManagedDeps.addAll(diffDependencies(
+                            getProfileManagedDependencies(oldProfile), Collections.<Dependency>emptyList()));
+                    changedManagedPlugins.addAll(
+                            diffPlugins(getProfileManagedPlugins(oldProfile), Collections.<Plugin>emptyList()));
+                    if (!oldProfile.getDependencies().isEmpty()
+                            || !getProfilePlugins(oldProfile).isEmpty()) {
+                        selfAffected = true;
+                    }
+                }
+                continue;
+            }
+
+            // Both exist — diff them
+            changedProperties.addAll(diffProperties(oldProfile.getProperties(), newProfile.getProperties()));
+            changedManagedDeps.addAll(diffDependencies(
+                    getProfileManagedDependencies(oldProfile), getProfileManagedDependencies(newProfile)));
+            changedManagedPlugins.addAll(
+                    diffPlugins(getProfileManagedPlugins(oldProfile), getProfileManagedPlugins(newProfile)));
+
+            if (!equalDependencyLists(oldProfile.getDependencies(), newProfile.getDependencies())) {
+                logger.debug("Direct dependencies changed in active profile {}", profileId);
+                selfAffected = true;
+            }
+
+            if (!equalPluginLists(getProfilePlugins(oldProfile), getProfilePlugins(newProfile))) {
+                logger.debug("Direct plugins changed in active profile {}", profileId);
+                selfAffected = true;
+            }
+        }
+
+        return selfAffected;
+    }
+
+    private Set<String> getActiveProfileIds(MavenProject project) {
+        Set<String> ids = new LinkedHashSet<>();
+        List<Profile> activeProfiles = project.getActiveProfiles();
+        if (activeProfiles != null) {
+            for (Profile profile : activeProfiles) {
+                ids.add(profile.getId());
+            }
+        }
+        return ids;
     }
 
     Set<String> diffProperties(Properties oldProps, Properties newProps) {
@@ -390,9 +524,84 @@ class PomChangeAnalyzer {
         return Objects.equals(a.getGroupId(), b.getGroupId())
                 && Objects.equals(a.getArtifactId(), b.getArtifactId())
                 && Objects.equals(a.getVersion(), b.getVersion())
-                && Objects.equals(
-                        a.getConfiguration() != null ? a.getConfiguration().toString() : null,
-                        b.getConfiguration() != null ? b.getConfiguration().toString() : null);
+                && equalConfiguration(a.getConfiguration(), b.getConfiguration())
+                && equalExecutions(a.getExecutions(), b.getExecutions());
+    }
+
+    private boolean equalConfiguration(Object a, Object b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        if (a instanceof Xpp3Dom && b instanceof Xpp3Dom) {
+            return equalXpp3Dom((Xpp3Dom) a, (Xpp3Dom) b);
+        }
+        return Objects.equals(a.toString(), b.toString());
+    }
+
+    private boolean equalXpp3Dom(Xpp3Dom a, Xpp3Dom b) {
+        if (!Objects.equals(a.getName(), b.getName())) {
+            return false;
+        }
+        // Compare values, treating null and empty/whitespace-only as equivalent
+        String aVal = a.getValue() != null ? a.getValue().trim() : null;
+        String bVal = b.getValue() != null ? b.getValue().trim() : null;
+        if (aVal != null && aVal.isEmpty()) {
+            aVal = null;
+        }
+        if (bVal != null && bVal.isEmpty()) {
+            bVal = null;
+        }
+        if (!Objects.equals(aVal, bVal)) {
+            return false;
+        }
+        // Compare attributes
+        String[] aAttrs = a.getAttributeNames();
+        String[] bAttrs = b.getAttributeNames();
+        if (aAttrs.length != bAttrs.length) {
+            return false;
+        }
+        for (String attr : aAttrs) {
+            if (!Objects.equals(a.getAttribute(attr), b.getAttribute(attr))) {
+                return false;
+            }
+        }
+        // Compare children recursively
+        if (a.getChildCount() != b.getChildCount()) {
+            return false;
+        }
+        for (int i = 0; i < a.getChildCount(); i++) {
+            if (!equalXpp3Dom(a.getChild(i), b.getChild(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean equalExecutions(List<PluginExecution> a, List<PluginExecution> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        Map<String, PluginExecution> mapA = new LinkedHashMap<>();
+        for (PluginExecution e : a) {
+            mapA.put(e.getId(), e);
+        }
+        for (PluginExecution e : b) {
+            PluginExecution other = mapA.remove(e.getId());
+            if (other == null || !equalExecution(other, e)) {
+                return false;
+            }
+        }
+        return mapA.isEmpty();
+    }
+
+    private boolean equalExecution(PluginExecution a, PluginExecution b) {
+        return Objects.equals(a.getId(), b.getId())
+                && Objects.equals(a.getPhase(), b.getPhase())
+                && Objects.equals(a.getGoals(), b.getGoals())
+                && equalConfiguration(a.getConfiguration(), b.getConfiguration());
     }
 
     private boolean equalDependencyLists(List<Dependency> a, List<Dependency> b) {
@@ -453,6 +662,35 @@ class PomChangeAnalyzer {
             return model.getBuild().getPluginManagement().getPlugins();
         }
         return new ArrayList<>();
+    }
+
+    private List<Profile> safeProfiles(Model model) {
+        List<Profile> profiles = model.getProfiles();
+        return profiles != null ? profiles : Collections.<Profile>emptyList();
+    }
+
+    private List<Dependency> getProfileManagedDependencies(Profile profile) {
+        if (profile.getDependencyManagement() != null
+                && profile.getDependencyManagement().getDependencies() != null) {
+            return profile.getDependencyManagement().getDependencies();
+        }
+        return Collections.<Dependency>emptyList();
+    }
+
+    private List<Plugin> getProfileManagedPlugins(Profile profile) {
+        if (profile.getBuild() != null
+                && profile.getBuild().getPluginManagement() != null
+                && profile.getBuild().getPluginManagement().getPlugins() != null) {
+            return profile.getBuild().getPluginManagement().getPlugins();
+        }
+        return Collections.<Plugin>emptyList();
+    }
+
+    private List<Plugin> getProfilePlugins(Profile profile) {
+        if (profile.getBuild() != null && profile.getBuild().getPlugins() != null) {
+            return profile.getBuild().getPlugins();
+        }
+        return Collections.<Plugin>emptyList();
     }
 
     private void augmentWithPropertyReferences(
@@ -539,6 +777,81 @@ class PomChangeAnalyzer {
                 return true;
             }
             current = current.getParent();
+        }
+        return false;
+    }
+
+    private boolean hasFilteredResourcesWithChangedProperty(MavenProject project, Set<String> changedProperties) {
+        List<String> refs = new ArrayList<>();
+        for (String prop : changedProperties) {
+            refs.add("${" + prop + "}");
+        }
+
+        List<Resource> allResources = new ArrayList<>();
+        if (project.getResources() != null) {
+            allResources.addAll(project.getResources());
+        }
+        if (project.getTestResources() != null) {
+            allResources.addAll(project.getTestResources());
+        }
+
+        for (Resource resource : allResources) {
+            if (!resource.isFiltering()) {
+                continue;
+            }
+            String dir = resource.getDirectory();
+            if (dir == null) {
+                continue;
+            }
+            Path resourceDir = Paths.get(dir);
+            if (!resourceDir.isAbsolute()) {
+                resourceDir = project.getBasedir().toPath().resolve(resourceDir);
+            }
+            if (!Files.isDirectory(resourceDir)) {
+                continue;
+            }
+            if (scanDirectoryForPropertyRefs(resourceDir, refs)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
+        List<Path> stack = new ArrayList<>();
+        stack.add(dir);
+        while (!stack.isEmpty()) {
+            Path current = stack.remove(stack.size() - 1);
+            DirectoryStream<Path> stream = null;
+            try {
+                stream = Files.newDirectoryStream(current);
+                for (Path entry : stream) {
+                    if (Files.isDirectory(entry)) {
+                        stack.add(entry);
+                    } else if (Files.isRegularFile(entry)) {
+                        try {
+                            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
+                            for (String ref : refs) {
+                                if (content.contains(ref)) {
+                                    return true;
+                                }
+                            }
+                        } catch (IOException e) {
+                            // Skip binary or unreadable files
+                        }
+                    }
+                }
+            } catch (IOException e) {
+                // Skip unreadable directories
+            } finally {
+                if (stream != null) {
+                    try {
+                        stream.close();
+                    } catch (IOException e) {
+                        // ignore
+                    }
+                }
+            }
         }
         return false;
     }
