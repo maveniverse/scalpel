@@ -858,6 +858,331 @@ class PomChangeAnalyzerTest {
                 "module-b's filtered resources don't reference ${app.version} - should NOT be affected");
     }
 
+    // --- New POM and edge case tests ---
+
+    @Test
+    void analyzeChanges_newPomMarksAllChildrenAffected() throws Exception {
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+
+        // No old POM bytes = new POM file
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        // Intentionally no entry for "pom.xml" (null = new file)
+
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        assertTrue(affected.contains(projects.get(0)), "Parent should be affected");
+        assertTrue(affected.contains(projects.get(1)), "module-a should be affected (new parent POM)");
+        assertTrue(affected.contains(projects.get(2)), "module-b should be affected (new parent POM)");
+    }
+
+    @Test
+    void analyzeChanges_profileRemovedWhileActiveAffectsParent() throws Exception {
+        Path root = setupReactorRoot();
+
+        // New parent POM: profile 'prod' removed
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        // Profile 'prod' is active but has been removed from the POM
+        Profile activeProfile = new Profile();
+        activeProfile.setId("prod");
+        projects.get(0).setActiveProfiles(Collections.singletonList(activeProfile));
+
+        // Old parent POM had profile 'prod' with direct dependencies
+        String oldParentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <profiles><profile>\n"
+                + "    <id>prod</id>\n"
+                + "    <properties><prod.version>1.0</prod.version></properties>\n"
+                + "    <dependencies>\n"
+                + "      <dependency><groupId>com.prod</groupId><artifactId>lib</artifactId><version>1.0</version></dependency>\n"
+                + "    </dependencies>\n"
+                + "  </profile></profiles>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        // Parent should be self-affected because the removed profile had direct dependencies
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(0)),
+                "Parent should be affected (active profile with deps removed)");
+        assertTrue(
+                result.getChangedProperties().contains("prod.version"),
+                "Removed profile properties should be detected");
+    }
+
+    @Test
+    void analyzeChanges_profileDirectDepsChangeAffectsParent() throws Exception {
+        Path root = setupReactorRoot();
+
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <profiles><profile>\n"
+                + "    <id>prod</id>\n"
+                + "    <dependencies>\n"
+                + "      <dependency><groupId>com.prod</groupId><artifactId>lib</artifactId><version>2.0</version></dependency>\n"
+                + "    </dependencies>\n"
+                + "  </profile></profiles>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+        Profile activeProfile = new Profile();
+        activeProfile.setId("prod");
+        projects.get(0).setActiveProfiles(Collections.singletonList(activeProfile));
+
+        // Old POM: profile had lib version 1.0
+        String oldParentPom = parentPomXml.replace("<version>2.0</version>", "<version>1.0</version>");
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(0)),
+                "Parent should be self-affected (direct deps changed in active profile)");
+    }
+
+    @Test
+    void analyzeChanges_leafModulePomChangeAffectsOnlySelf() throws Exception {
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+
+        // Change only module-a's POM (leaf module)
+        Set<String> changedPoms = Collections.singleton("module-a/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        assertTrue(affected.contains(projects.get(1)), "module-a should be affected");
+        assertFalse(affected.contains(projects.get(2)), "module-b should NOT be affected");
+        assertEquals(1, affected.size());
+    }
+
+    @Test
+    void analyzeChanges_directPluginChangeAffectsParent() throws Exception {
+        Path root = setupReactorRoot();
+
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <build><plugins>\n"
+                + "    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>3.12.0</version></plugin>\n"
+                + "  </plugins></build>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        String oldParentPom = parentPomXml.replace("3.12.0", "3.11.0");
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(0)),
+                "Parent should be self-affected (direct plugin changed)");
+    }
+
+    @Test
+    void analyzeChanges_directDependencyChangeAffectsParent() throws Exception {
+        Path root = setupReactorRoot();
+
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>junit</groupId><artifactId>junit</artifactId><version>4.13.2</version></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        String oldParentPom = parentPomXml.replace("4.13.2", "4.13.1");
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(0)),
+                "Parent should be self-affected (direct dependency changed)");
+    }
+
+    @Test
+    void analyzeChanges_packagingChangeAffectsParent() throws Exception {
+        Path root = setupReactorRoot();
+
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        // Old POM had jar packaging
+        String oldParentPom = parentPomXml.replace("<packaging>pom</packaging>", "<packaging>jar</packaging>");
+
+        Set<String> changedPoms = Collections.singleton("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(0)),
+                "Parent should be self-affected (packaging changed)");
+    }
+
+    @Test
+    void analyzeChanges_unmatchedPomSkipped() throws Exception {
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+
+        // POM path doesn't match any reactor project
+        Set<String> changedPoms = Collections.singleton("nonexistent/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+
+        Set<MavenProject> affected =
+                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        assertTrue(affected.isEmpty(), "Unmatched POM path should not affect any module");
+    }
+
     // --- Helper methods ---
 
     private Path setupReactorRoot() throws IOException {
