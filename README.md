@@ -355,9 +355,8 @@ aspects are compared:
 * Packaging
 * Dependencies and dependency management
 * Properties
-* Build configuration (plugins, plugin management, plugin executions, source directories)
+* Build configuration (plugins, plugin management, plugin executions)
 * Active profile sections (properties, dependencies, plugins within active profiles)
-* Repositories and plugin repositories
 
 This means cosmetic POM changes (reformatting, reordering, adding comments) won't trigger unnecessary
 rebuilds. Plugin configurations are compared semantically (Xpp3Dom structure), so whitespace-only
