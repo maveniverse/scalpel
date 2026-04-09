@@ -32,6 +32,7 @@ import org.apache.maven.execution.MavenExecutionRequest;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.execution.ProjectDependencyGraph;
 import org.apache.maven.model.Build;
+import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
@@ -522,6 +523,102 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY_TEST"),
                 "module-b should have TRANSITIVE_DEPENDENCY_TEST (test-scoped transitive dep)");
+    }
+
+    @Test
+    void reportMode_downstreamTestScopedModuleProducesDownstreamTestReason() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        // module-b depends on module-a via test scope
+        String moduleBPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version><scope>test</scope></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+        // Add test-scoped dependency on module-a to module-b's model
+        Dependency dep = new Dependency();
+        dep.setGroupId("com.example");
+        dep.setArtifactId("module-a");
+        dep.setVersion("1.0");
+        dep.setScope("test");
+        moduleB.getDependencies().add(dep);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        // module-a has a source change
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/com/example/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+
+        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
+        when(emptyResolution.getResolvedDependencies())
+                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenReturn(emptyResolution);
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+
+        // Graph: module-b is downstream of module-a
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.singletonList(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(moduleHasReason(json, "module-a", "SOURCE_CHANGE"), "module-a should have SOURCE_CHANGE");
+        assertTrue(
+                moduleHasReason(json, "module-b", "DOWNSTREAM_TEST"),
+                "module-b should have DOWNSTREAM_TEST (test-scoped downstream of module-a)");
     }
 
     private void writePom(Path root, String relativePath, String content) throws Exception {
