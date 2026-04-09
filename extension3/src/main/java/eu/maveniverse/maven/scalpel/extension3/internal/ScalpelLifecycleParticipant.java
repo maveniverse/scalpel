@@ -78,6 +78,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             return;
         }
 
+        if (!config.isModeTrim() && !config.isModeSkipTests() && !config.isModeReport()) {
+            logger.warn(
+                    "Scalpel: Unknown mode '{}', expected one of: trim, skip-tests, report. Scalpel will not activate.",
+                    config.getMode());
+            return;
+        }
+
         logger.info("Scalpel {} activated (mode={})", Version.version(), config.getMode());
         logger.debug("Configuration: {}", config);
 

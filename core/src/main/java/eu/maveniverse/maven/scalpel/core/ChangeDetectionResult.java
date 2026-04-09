@@ -7,6 +7,9 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -16,8 +19,8 @@ public final class ChangeDetectionResult {
     private final Map<String, byte[]> oldPomContents;
 
     public ChangeDetectionResult(Set<String> changedFiles, Map<String, byte[]> oldPomContents) {
-        this.changedFiles = changedFiles;
-        this.oldPomContents = oldPomContents;
+        this.changedFiles = Collections.unmodifiableSet(new LinkedHashSet<>(changedFiles));
+        this.oldPomContents = Collections.unmodifiableMap(new LinkedHashMap<>(oldPomContents));
     }
 
     public Set<String> getChangedFiles() {

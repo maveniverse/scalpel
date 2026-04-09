@@ -240,7 +240,7 @@ class PomChangeAnalyzer {
 
             // Check if child POM references any changed property
             if (!changedProperties.isEmpty()) {
-                String childPomText = readPomText(child, reactorRoot);
+                String childPomText = readPomText(child);
                 if (childPomText != null) {
                     for (String prop : changedProperties) {
                         if (childPomText.contains("${" + prop + "}")) {
@@ -399,24 +399,36 @@ class PomChangeAnalyzer {
         if (a.size() != b.size()) {
             return false;
         }
-        for (int i = 0; i < a.size(); i++) {
-            if (!equalDependency(a.get(i), b.get(i))) {
+        Map<String, Dependency> mapA = new LinkedHashMap<>();
+        for (Dependency dep : a) {
+            mapA.put(dep.getGroupId() + ":" + dep.getArtifactId(), dep);
+        }
+        for (Dependency dep : b) {
+            String key = dep.getGroupId() + ":" + dep.getArtifactId();
+            Dependency other = mapA.remove(key);
+            if (other == null || !equalDependency(other, dep)) {
                 return false;
             }
         }
-        return true;
+        return mapA.isEmpty();
     }
 
     private boolean equalPluginLists(List<Plugin> a, List<Plugin> b) {
         if (a.size() != b.size()) {
             return false;
         }
-        for (int i = 0; i < a.size(); i++) {
-            if (!equalPlugin(a.get(i), b.get(i))) {
+        Map<String, Plugin> mapA = new LinkedHashMap<>();
+        for (Plugin plugin : a) {
+            mapA.put(plugin.getGroupId() + ":" + plugin.getArtifactId(), plugin);
+        }
+        for (Plugin plugin : b) {
+            String key = plugin.getGroupId() + ":" + plugin.getArtifactId();
+            Plugin other = mapA.remove(key);
+            if (other == null || !equalPlugin(other, plugin)) {
                 return false;
             }
         }
-        return true;
+        return mapA.isEmpty();
     }
 
     private List<Plugin> getPlugins(Model model) {
@@ -531,7 +543,7 @@ class PomChangeAnalyzer {
         return false;
     }
 
-    private String readPomText(MavenProject project, Path reactorRoot) {
+    private String readPomText(MavenProject project) {
         try {
             return new String(Files.readAllBytes(project.getFile().toPath()), StandardCharsets.UTF_8);
         } catch (IOException e) {

@@ -20,6 +20,12 @@
   <artifactId>extension</artifactId>
 
   <name>${project.groupId}:${project.artifactId}</name>
+  <description>Scalpel Maven extension (placeholder for future Maven 4 support).</description>
+
+  <properties>
+    <maven.install.skip>true</maven.install.skip>
+    <maven.deploy.skip>true</maven.deploy.skip>
+  </properties>
 
   <dependencies>
     <!-- Scalpel -->

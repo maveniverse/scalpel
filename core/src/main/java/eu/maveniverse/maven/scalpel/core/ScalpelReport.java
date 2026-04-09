@@ -239,6 +239,9 @@ public final class ScalpelReport {
         }
 
         public ScalpelReport build() {
+            if (baseBranch == null) {
+                throw new IllegalStateException("baseBranch is required");
+            }
             return new ScalpelReport(
                     baseBranch,
                     fullBuildTriggered,
