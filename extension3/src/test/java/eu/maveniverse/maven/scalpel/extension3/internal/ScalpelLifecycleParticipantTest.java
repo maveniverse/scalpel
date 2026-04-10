@@ -7,7 +7,9 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -1031,12 +1033,14 @@ class ScalpelLifecycleParticipantTest {
         participant.afterProjectsRead(session);
 
         // module-b (excluded downstream) should have tests skipped
-        assertTrue(
-                "true".equals(moduleB.getProperties().getProperty("maven.test.skip")),
+        assertEquals(
+                "true",
+                moduleB.getProperties().getProperty("maven.test.skip"),
                 "module-b should have maven.test.skip=true (excluded downstream)");
         // module-c (downstream, not excluded) should NOT have tests skipped
-        assertFalse(
-                "true".equals(moduleC.getProperties().getProperty("maven.test.skip")),
+        assertNotEquals(
+                "true",
+                moduleC.getProperties().getProperty("maven.test.skip"),
                 "module-c should NOT have maven.test.skip=true (not excluded)");
     }
 
@@ -1082,8 +1086,9 @@ class ScalpelLifecycleParticipantTest {
         participant.afterProjectsRead(session);
 
         // module-a is DIRECT, so tests should NOT be skipped even though it's in exclusion list
-        assertFalse(
-                "true".equals(moduleA.getProperties().getProperty("maven.test.skip")),
+        assertNotEquals(
+                "true",
+                moduleA.getProperties().getProperty("maven.test.skip"),
                 "module-a should NOT have tests skipped (DIRECT overrides exclusion)");
     }
 
@@ -1128,8 +1133,9 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        assertTrue(
-                "true".equals(moduleB.getProperties().getProperty("maven.test.skip")),
+        assertEquals(
+                "true",
+                moduleB.getProperties().getProperty("maven.test.skip"),
                 "module-b should have tests skipped (matched by groupId:artifactId)");
     }
 
@@ -1320,8 +1326,9 @@ class ScalpelLifecycleParticipantTest {
 
         // module-b is excluded downstream BUT also uses a changed managed plugin
         // Safety guard: tests should NOT be skipped
-        assertFalse(
-                "true".equals(moduleB.getProperties().getProperty("maven.test.skip")),
+        assertNotEquals(
+                "true",
+                moduleB.getProperties().getProperty("maven.test.skip"),
                 "module-b should NOT have tests skipped (uses changed managed plugin, safety guard)");
     }
 

@@ -163,28 +163,7 @@ public final class ScalpelReport {
         } else {
             sb.append("[\n");
             for (int i = 0; i < affectedModules.size(); i++) {
-                AffectedModule m = affectedModules.get(i);
-                sb.append("    {\n");
-                sb.append("      \"groupId\": ").append(jsonString(m.groupId)).append(",\n");
-                sb.append("      \"artifactId\": ")
-                        .append(jsonString(m.artifactId))
-                        .append(",\n");
-                sb.append("      \"path\": ").append(jsonString(m.path)).append(",\n");
-                sb.append("      \"reasons\": ").append(jsonStringArray(m.reasons));
-                if (m.category != null) {
-                    sb.append(",\n");
-                    sb.append("      \"category\": ").append(jsonString(m.category));
-                }
-                if (m.sourceSet != null) {
-                    sb.append(",\n");
-                    sb.append("      \"sourceSet\": ").append(jsonString(m.sourceSet));
-                }
-                if (m.testsSkippedReason != null) {
-                    sb.append(",\n");
-                    sb.append("      \"testsSkippedReason\": ").append(jsonString(m.testsSkippedReason));
-                }
-                sb.append("\n");
-                sb.append("    }");
+                appendModuleJson(sb, affectedModules.get(i));
                 if (i < affectedModules.size() - 1) {
                     sb.append(",");
                 }
@@ -194,6 +173,26 @@ public final class ScalpelReport {
         }
         sb.append("\n}\n");
         return sb.toString();
+    }
+
+    private static void appendModuleJson(StringBuilder sb, AffectedModule m) {
+        sb.append("    {\n");
+        sb.append("      \"groupId\": ").append(jsonString(m.groupId)).append(",\n");
+        sb.append("      \"artifactId\": ").append(jsonString(m.artifactId)).append(",\n");
+        sb.append("      \"path\": ").append(jsonString(m.path)).append(",\n");
+        sb.append("      \"reasons\": ").append(jsonStringArray(m.reasons));
+        appendOptionalField(sb, "category", m.category);
+        appendOptionalField(sb, "sourceSet", m.sourceSet);
+        appendOptionalField(sb, "testsSkippedReason", m.testsSkippedReason);
+        sb.append("\n");
+        sb.append("    }");
+    }
+
+    private static void appendOptionalField(StringBuilder sb, String name, String value) {
+        if (value != null) {
+            sb.append(",\n");
+            sb.append("      \"").append(name).append("\": ").append(jsonString(value));
+        }
     }
 
     public void writeToFile(Path reactorRoot, String reportFile) throws IOException {

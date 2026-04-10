@@ -408,17 +408,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 // Skip tests on upstream-only modules if configured
                 project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
                 skippedProjects.add(project);
-            } else if (!config.getSkipTestsForDownstreamModules().isEmpty()
-                    && (trimResult.getDownstreamOnly().contains(project)
-                            || trimResult.getDownstreamTestOnly().contains(project))
-                    && matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())
-                    && !(!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs))
-                    && !(!changedManagedDepGAs.isEmpty()
-                            && hasChangedTransitiveDependency(project, session, changedManagedDepGAs))) {
+            } else if (shouldSkipTestsForExcludedDownstream(
+                    project, trimResult, config, session, changedManagedPluginGAs, changedManagedDepGAs)) {
                 // Skip tests on excluded downstream modules (unless they also have plugin/dep changes)
                 project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
                 skippedProjects.add(project);
-                logger.debug("Scalpel: Skipping tests on excluded downstream module {}", key(project));
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Scalpel: Skipping tests on excluded downstream module {}", key(project));
+                }
             } else {
                 // Downstream modules run tests by default
                 testProjects.add(project);
@@ -484,6 +481,33 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
         }
         return false;
+    }
+
+    private boolean shouldSkipTestsForExcludedDownstream(
+            MavenProject project,
+            TrimResult trimResult,
+            ScalpelConfiguration config,
+            MavenSession session,
+            Set<String> changedManagedPluginGAs,
+            Set<String> changedManagedDepGAs) {
+        if (config.getSkipTestsForDownstreamModules().isEmpty()) {
+            return false;
+        }
+        if (!trimResult.getDownstreamOnly().contains(project)
+                && !trimResult.getDownstreamTestOnly().contains(project)) {
+            return false;
+        }
+        if (!matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
+            return false;
+        }
+        // Safety guard: don't skip tests if the module also has changed managed plugins or deps
+        if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
+            return false;
+        }
+        if (!changedManagedDepGAs.isEmpty() && hasChangedTransitiveDependency(project, session, changedManagedDepGAs)) {
+            return false;
+        }
+        return true;
     }
 
     private boolean hasChangedTransitiveDependency(MavenProject project, MavenSession session, Set<String> changedGAs) {
