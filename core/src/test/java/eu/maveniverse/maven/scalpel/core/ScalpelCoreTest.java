@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Properties;
 import java.util.Set;
 import org.eclipse.jgit.api.Git;
@@ -152,18 +153,21 @@ class ScalpelCoreTest {
 
     @Test
     void detectChanges_notAGitRepo_returnsNull() throws Exception {
-        // A directory that is not a git repo
-        Path nonGitDir = tempDir.resolve("not-a-repo");
-        Files.createDirectories(nonGitDir);
+        // Create a temp directory outside the project tree to avoid JGit walking up
+        // and discovering the project's own .git (java.io.tmpdir may be inside the repo)
+        Path nonGitDir = Files.createTempDirectory(Paths.get("/tmp"), "scalpel-test-no-git");
+        try {
+            ScalpelCore core = new ScalpelCore(new GitChangeDetector());
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
 
-        ScalpelCore core = new ScalpelCore(new GitChangeDetector());
-        Properties sys = new Properties();
-        sys.setProperty("scalpel.baseBranch", "main");
-        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+            ChangeDetectionResult result = core.detectChanges(nonGitDir, config, Set.of());
 
-        ChangeDetectionResult result = core.detectChanges(nonGitDir, config, Set.of());
-
-        assertNull(result, "Should return null for non-git directory");
+            assertNull(result, "Should return null for non-git directory");
+        } finally {
+            Files.deleteIfExists(nonGitDir);
+        }
     }
 
     @Test
