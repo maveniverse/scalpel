@@ -7,7 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
@@ -160,6 +160,10 @@ public final class ScalpelConfiguration {
         String impactedLog = resolve(system, user, IMPACTED_LOG, null);
         boolean failSafe = Boolean.parseBoolean(resolve(system, user, FAIL_SAFE, "true"));
         String mode = resolve(system, user, MODE, MODE_TRIM);
+        if (!MODE_TRIM.equals(mode) && !MODE_SKIP_TESTS.equals(mode) && !MODE_REPORT.equals(mode)) {
+            throw new IllegalArgumentException("Invalid scalpel.mode '" + mode + "', expected one of: " + MODE_TRIM
+                    + ", " + MODE_SKIP_TESTS + ", " + MODE_REPORT);
+        }
         String reportFile = resolve(system, user, REPORT_FILE, DEFAULT_REPORT_FILE);
 
         return new ScalpelConfiguration(
@@ -205,7 +209,12 @@ public final class ScalpelConfiguration {
         if (value == null || value.isEmpty()) {
             return Collections.emptyList();
         }
-        return Arrays.asList(value.split(","));
+        String[] parts = value.split(",");
+        List<String> result = new ArrayList<>(parts.length);
+        for (String part : parts) {
+            result.add(part.trim());
+        }
+        return Collections.unmodifiableList(result);
     }
 
     private static String detectBaseBranch(Properties system) {

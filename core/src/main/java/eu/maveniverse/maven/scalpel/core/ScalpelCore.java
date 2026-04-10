@@ -17,8 +17,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.PatternSyntaxException;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -68,12 +70,19 @@ public class ScalpelCore {
                 String currentBranch = gitChangeDetector.getCurrentBranch(repository);
                 if (currentBranch != null) {
                     for (String pattern : config.getDisableOnBranch()) {
-                        if (currentBranch.matches(pattern.trim())) {
-                            logger.info(
-                                    "Scalpel: Disabled because current branch '{}' matches pattern '{}'",
-                                    currentBranch,
-                                    pattern);
-                            return null;
+                        try {
+                            if (currentBranch.matches(pattern)) {
+                                logger.info(
+                                        "Scalpel: Disabled because current branch '{}' matches pattern '{}'",
+                                        currentBranch,
+                                        pattern);
+                                return null;
+                            }
+                        } catch (PatternSyntaxException e) {
+                            logger.warn(
+                                    "Scalpel: Invalid regex pattern '{}' in disableOnBranch: {}",
+                                    pattern,
+                                    e.getMessage());
                         }
                     }
                 }
@@ -89,10 +98,19 @@ public class ScalpelCore {
                     baseBranchName = baseBranchName.substring(slashIndex + 1);
                 }
                 for (String pattern : config.getDisableOnBaseBranch()) {
-                    if (baseBranchName.matches(pattern.trim())) {
-                        logger.info(
-                                "Scalpel: Disabled because base branch '{}' matches pattern '{}'", baseBranch, pattern);
-                        return null;
+                    try {
+                        if (baseBranchName.matches(pattern)) {
+                            logger.info(
+                                    "Scalpel: Disabled because base branch '{}' matches pattern '{}'",
+                                    baseBranch,
+                                    pattern);
+                            return null;
+                        }
+                    } catch (PatternSyntaxException e) {
+                        logger.warn(
+                                "Scalpel: Invalid regex pattern '{}' in disableOnBaseBranch: {}",
+                                pattern,
+                                e.getMessage());
                     }
                 }
             }
@@ -137,21 +155,24 @@ public class ScalpelCore {
             }
 
             ObjectId headId = repository.resolve(head);
-            Set<String> changedFiles = gitChangeDetector.getChangedFiles(repository, mergeBase, headId);
+            // Copy the set to avoid mutating the return value of getChangedFiles()
+            Set<String> changedFiles =
+                    new LinkedHashSet<>(gitChangeDetector.getChangedFiles(repository, mergeBase, headId));
 
             // Merge in uncommitted/untracked files if configured
-            if (config.isUncommitted()) {
-                Set<String> uncommittedFiles = gitChangeDetector.getUncommittedFiles(repository);
-                if (!uncommittedFiles.isEmpty()) {
-                    logger.info("Scalpel: {} uncommitted files detected", uncommittedFiles.size());
-                    changedFiles.addAll(uncommittedFiles);
+            if (config.isUncommitted() || config.isUntracked()) {
+                GitChangeDetector.StatusResult statusResult = gitChangeDetector.getStatusFiles(repository);
+                if (config.isUncommitted() && !statusResult.getUncommitted().isEmpty()) {
+                    logger.info(
+                            "Scalpel: {} uncommitted files detected",
+                            statusResult.getUncommitted().size());
+                    changedFiles.addAll(statusResult.getUncommitted());
                 }
-            }
-            if (config.isUntracked()) {
-                Set<String> untrackedFiles = gitChangeDetector.getUntrackedFiles(repository);
-                if (!untrackedFiles.isEmpty()) {
-                    logger.info("Scalpel: {} untracked files detected", untrackedFiles.size());
-                    changedFiles.addAll(untrackedFiles);
+                if (config.isUntracked() && !statusResult.getUntracked().isEmpty()) {
+                    logger.info(
+                            "Scalpel: {} untracked files detected",
+                            statusResult.getUntracked().size());
+                    changedFiles.addAll(statusResult.getUntracked());
                 }
             }
 

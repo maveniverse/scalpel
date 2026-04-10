@@ -113,31 +113,46 @@ public class GitChangeDetector {
         }
     }
 
-    public Set<String> getUncommittedFiles(Repository repository) throws IOException {
-        Set<String> files = new LinkedHashSet<>();
-        try (org.eclipse.jgit.api.Git git = new org.eclipse.jgit.api.Git(repository)) {
-            org.eclipse.jgit.api.Status status = git.status().call();
-            files.addAll(status.getModified());
-            files.addAll(status.getChanged());
-            files.addAll(status.getAdded());
-            files.addAll(status.getRemoved());
-        } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
-            throw new IOException("Failed to get uncommitted files", e);
+    /**
+     * Result of a git status query, containing both uncommitted and untracked files.
+     */
+    public static class StatusResult {
+        private final Set<String> uncommitted;
+        private final Set<String> untracked;
+
+        StatusResult(Set<String> uncommitted, Set<String> untracked) {
+            this.uncommitted = uncommitted;
+            this.untracked = untracked;
         }
-        logger.debug("Uncommitted files: {}", files);
-        return files;
+
+        public Set<String> getUncommitted() {
+            return uncommitted;
+        }
+
+        public Set<String> getUntracked() {
+            return untracked;
+        }
     }
 
-    public Set<String> getUntrackedFiles(Repository repository) throws IOException {
-        Set<String> files = new LinkedHashSet<>();
+    /**
+     * Computes git status once and returns both uncommitted and untracked files.
+     */
+    public StatusResult getStatusFiles(Repository repository) throws IOException {
+        Set<String> uncommitted = new LinkedHashSet<>();
+        Set<String> untracked = new LinkedHashSet<>();
         try (org.eclipse.jgit.api.Git git = new org.eclipse.jgit.api.Git(repository)) {
             org.eclipse.jgit.api.Status status = git.status().call();
-            files.addAll(status.getUntracked());
+            uncommitted.addAll(status.getModified());
+            uncommitted.addAll(status.getChanged());
+            uncommitted.addAll(status.getAdded());
+            uncommitted.addAll(status.getRemoved());
+            untracked.addAll(status.getUntracked());
         } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
-            throw new IOException("Failed to get untracked files", e);
+            throw new IOException("Failed to get git status", e);
         }
-        logger.debug("Untracked files: {}", files);
-        return files;
+        logger.debug("Uncommitted files: {}", uncommitted);
+        logger.debug("Untracked files: {}", untracked);
+        return new StatusResult(uncommitted, untracked);
     }
 
     public void fetchBranch(Repository repository, String baseBranch) throws IOException {

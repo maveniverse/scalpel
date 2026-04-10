@@ -7,7 +7,9 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import org.apache.maven.project.MavenProject;
@@ -39,11 +41,11 @@ final class TrimResult {
             Set<MavenProject> upstreamOnly,
             Set<MavenProject> downstreamOnly,
             Set<MavenProject> downstreamTestOnly) {
-        this.buildSet = buildSet;
-        this.directlyAffected = directlyAffected;
-        this.upstreamOnly = upstreamOnly;
-        this.downstreamOnly = downstreamOnly;
-        this.downstreamTestOnly = downstreamTestOnly;
+        this.buildSet = Collections.unmodifiableList(new ArrayList<>(buildSet));
+        this.directlyAffected = Collections.unmodifiableSet(new LinkedHashSet<>(directlyAffected));
+        this.upstreamOnly = Collections.unmodifiableSet(new LinkedHashSet<>(upstreamOnly));
+        this.downstreamOnly = Collections.unmodifiableSet(new LinkedHashSet<>(downstreamOnly));
+        this.downstreamTestOnly = Collections.unmodifiableSet(new LinkedHashSet<>(downstreamTestOnly));
     }
 
     List<MavenProject> getBuildSet() {

@@ -7,6 +7,8 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
+import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -500,25 +502,39 @@ class PomChangeAnalyzer {
         Set<String> changed = new LinkedHashSet<>();
         Map<String, Dependency> oldMap = new LinkedHashMap<>();
         for (Dependency d : oldDeps) {
-            oldMap.put(d.getGroupId() + ":" + d.getArtifactId(), d);
+            oldMap.put(dependencyKey(d), d);
         }
         Map<String, Dependency> newMap = new LinkedHashMap<>();
         for (Dependency d : newDeps) {
-            newMap.put(d.getGroupId() + ":" + d.getArtifactId(), d);
+            newMap.put(dependencyKey(d), d);
         }
 
         for (Map.Entry<String, Dependency> e : oldMap.entrySet()) {
             Dependency newDep = newMap.get(e.getKey());
             if (newDep == null || !equalDependency(e.getValue(), newDep)) {
-                changed.add(e.getKey());
+                // Report the GA (not the full key) for downstream matching
+                changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
             }
         }
-        for (String ga : newMap.keySet()) {
-            if (!oldMap.containsKey(ga)) {
-                changed.add(ga);
+        for (Map.Entry<String, Dependency> e : newMap.entrySet()) {
+            if (!oldMap.containsKey(e.getKey())) {
+                changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
             }
         }
         return changed;
+    }
+
+    /**
+     * Returns a key that distinguishes dependencies with the same GA but different classifier/type.
+     */
+    private static String dependencyKey(Dependency d) {
+        String key = d.getGroupId() + ":" + d.getArtifactId();
+        String type = d.getType();
+        String classifier = d.getClassifier();
+        if ((type != null && !"jar".equals(type)) || classifier != null) {
+            key += ":" + (type != null ? type : "jar") + ":" + (classifier != null ? classifier : "");
+        }
+        return key;
     }
 
     private Set<String> diffPlugins(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
@@ -646,11 +662,10 @@ class PomChangeAnalyzer {
         }
         Map<String, Dependency> mapA = new LinkedHashMap<>();
         for (Dependency dep : a) {
-            mapA.put(dep.getGroupId() + ":" + dep.getArtifactId(), dep);
+            mapA.put(dependencyKey(dep), dep);
         }
         for (Dependency dep : b) {
-            String key = dep.getGroupId() + ":" + dep.getArtifactId();
-            Dependency other = mapA.remove(key);
+            Dependency other = mapA.remove(dependencyKey(dep));
             if (other == null || !equalDependency(other, dep)) {
                 return false;
             }
@@ -900,10 +915,11 @@ class PomChangeAnalyzer {
     }
 
     private Set<MavenProject> findParentProjects(List<MavenProject> allProjects) {
+        Set<MavenProject> allProjectsSet = new HashSet<>(allProjects);
         Set<MavenProject> parents = new LinkedHashSet<>();
         for (MavenProject project : allProjects) {
             MavenProject parent = project.getParent();
-            if (parent != null && allProjects.contains(parent)) {
+            if (parent != null && allProjectsSet.contains(parent)) {
                 parents.add(parent);
             }
         }
@@ -1032,19 +1048,23 @@ class PomChangeAnalyzer {
         return false;
     }
 
+    private static final long MAX_RESOURCE_FILE_SIZE = 1024 * 1024; // 1 MB
+
     private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
         List<Path> stack = new ArrayList<>();
         stack.add(dir);
         while (!stack.isEmpty()) {
             Path current = stack.remove(stack.size() - 1);
-            DirectoryStream<Path> stream = null;
-            try {
-                stream = Files.newDirectoryStream(current);
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(current)) {
                 for (Path entry : stream) {
                     if (Files.isDirectory(entry)) {
                         stack.add(entry);
                     } else if (Files.isRegularFile(entry)) {
                         try {
+                            long size = Files.size(entry);
+                            if (size > MAX_RESOURCE_FILE_SIZE) {
+                                continue; // Skip large files (likely binaries)
+                            }
                             String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
                             for (String ref : refs) {
                                 if (content.contains(ref)) {
@@ -1058,14 +1078,6 @@ class PomChangeAnalyzer {
                 }
             } catch (IOException e) {
                 // Skip unreadable directories
-            } finally {
-                if (stream != null) {
-                    try {
-                        stream.close();
-                    } catch (IOException e) {
-                        // ignore
-                    }
-                }
             }
         }
         return false;
@@ -1078,9 +1090,5 @@ class PomChangeAnalyzer {
             logger.debug("Cannot read POM file for {}: {}", key(project), e.getMessage());
             return null;
         }
-    }
-
-    private static String key(MavenProject project) {
-        return project.getGroupId() + ":" + project.getArtifactId();
     }
 }
