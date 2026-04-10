@@ -198,7 +198,7 @@ public final class ScalpelConfiguration {
         if (value == null || value.isEmpty()) {
             return Collections.emptyList();
         }
-        return Arrays.asList(value.split(","));
+        return Collections.unmodifiableList(Arrays.asList(value.split(",")));
     }
 
     private static String detectBaseBranch(Properties system) {
