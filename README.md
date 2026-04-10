@@ -371,6 +371,29 @@ Scalpel only considers changes inside profiles that are currently active. Change
 are ignored, preventing unnecessary rebuilds when modifying profiles that don't apply to the current
 build.
 
+### Import-Scope BOM Detection
+
+Scalpel detects managed dependency changes in reactor modules that are imported as BOMs via
+`<scope>import</scope>` in another module's `<dependencyManagement>`. When a BOM module's managed
+dependencies change, Scalpel propagates those changes to all importing modules — just as it does
+for parent-inherited managed dependencies.
+
+For example, given this reactor layout:
+
+```text
+parent/
+├── bom/          (defines managed deps: commons-lang ${lib.version})
+├── module-a/     (imports bom via <scope>import</scope>, uses commons-lang)
+└── module-b/     (no BOM import)
+```
+
+If `bom/pom.xml` changes `lib.version` from `3.12` to `3.14`, Scalpel detects that:
+- `module-a` is directly affected (it imports the BOM and uses `commons-lang`)
+- `module-b` is not affected (it doesn't import the BOM or use the dependency)
+
+This works with all POM analysis features: property indirection, managed plugin changes,
+and transitive dependency checking.
+
 ### Property Indirection
 
 Scalpel resolves property indirection in managed dependencies and plugins. For example, if a parent POM

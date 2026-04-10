@@ -810,6 +810,166 @@ class ScalpelLifecycleParticipantTest {
         assertFalse(modulePresent(json, "module-a"), "module-a should NOT be in report (excluded .md)");
     }
 
+    @Test
+    void reportMode_bomImportScopeDetected() throws Exception {
+        // BOM module defines managed dep commons-lang. module-a imports the BOM and uses it.
+        // module-b depends on module-a (gets commons-lang transitively).
+        // module-c has no relationship to the BOM.
+        // When BOM's managed dep version changes, module-a should be directly affected
+        // and module-b should be transitively affected.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // Parent POM (no managed deps — those are in the BOM)
+        String parentPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>bom</module><module>module-a</module><module>module-b</module><module>module-c</module></modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", parentPom);
+
+        // Old BOM POM (before version change)
+        String oldBomPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>bom</artifactId>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <properties><lib.version>1.0</lib.version></properties>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId><version>${lib.version}</version></dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+
+        // New BOM POM (after version bump)
+        String newBomPom = oldBomPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
+        writePom(root, "bom/pom.xml", newBomPom);
+
+        // module-a: imports BOM, uses commons-lang
+        String moduleAPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency><groupId>com.example</groupId><artifactId>bom</artifactId>"
+                + "<version>${project.version}</version><type>pom</type><scope>import</scope></dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        // module-b: depends on module-a (gets commons-lang transitively)
+        String moduleBPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        // module-c: no dependencies
+        String moduleCPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-c</artifactId>\n"
+                + "</project>\n";
+        writePom(root, "module-c/pom.xml", moduleCPom);
+
+        // Build MavenProject objects
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject bomProject = createProject("com.example", "bom", "1.0", root, "bom/pom.xml", newBomPom);
+        bomProject.getModel().setPackaging("pom");
+        bomProject.setParent(parentProject);
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+        MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
+        moduleC.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, bomProject, moduleA, moduleB, moduleC);
+
+        // Mock ScalpelCore to return changed BOM POM
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("bom/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // Mock dependency resolution: module-b has commons-lang transitively
+        DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
+        org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
+        when(moduleBResolution.getResolvedDependencies()).thenReturn(Collections.singletonList(commonsLangDep));
+
+        // Other modules: no matching deps
+        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
+        when(emptyResolution.getResolvedDependencies())
+                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-b".equals(req.getMavenProject().getArtifactId())) {
+                        return moduleBResolution;
+                    }
+                    return emptyResolution;
+                });
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-a should be directly affected (uses changed managed dep from imported BOM)
+        assertTrue(
+                moduleHasReason(json, "module-a", "POM_CHANGE"),
+                "module-a should have POM_CHANGE reason (imports BOM with changed managed dep)");
+
+        // module-b should be transitively affected (gets commons-lang through module-a)
+        assertTrue(
+                moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
+                "module-b should have TRANSITIVE_DEPENDENCY reason");
+
+        // module-c should NOT be in the report
+        assertFalse(modulePresent(json, "module-c"), "module-c should NOT be in report");
+
+        // The report should show the changed managed dependency GA
+        assertTrue(json.contains("commons-lang:commons-lang"), "Report should include changed managed dep GA");
+    }
+
     // --- Helper methods ---
 
     private void setupEmptyDependencyResolution() throws Exception {

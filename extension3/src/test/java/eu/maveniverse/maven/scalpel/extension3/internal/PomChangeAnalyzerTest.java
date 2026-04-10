@@ -2209,7 +2209,310 @@ class PomChangeAnalyzerTest {
         assertTrue(affected.isEmpty(), "Unmatched POM path should not affect any module");
     }
 
+    // --- Import-scope BOM detection tests ---
+
+    @Test
+    void analyzeChanges_bomImportScopeManagedDepChangeAffectsImporter() throws Exception {
+        // BOM module defines managed dep lib-x. module-a imports the BOM and uses lib-x.
+        // When BOM's managed dep version changes, module-a should be affected.
+        Path root = setupReactorRootWithBom();
+        List<MavenProject> projects = createReactorWithBomImport(root);
+
+        // Old BOM POM had lib-x:1.0
+        String oldBomPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>bom</artifactId>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>com.example</groupId>\n"
+                + "      <artifactId>lib-x</artifactId>\n"
+                + "      <version>1.0</version>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("bom/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        MavenProject moduleA = projects.get(2);
+        MavenProject moduleB = projects.get(3);
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a imports BOM and uses managed dep lib-x, should be affected");
+        assertFalse(
+                result.getAffectedProjects().contains(moduleB), "module-b does not import BOM, should NOT be affected");
+        assertTrue(
+                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                "Changed managed dep GAs should include lib-x");
+    }
+
+    @Test
+    void analyzeChanges_bomImportScopeNoChangeNotAffected() throws Exception {
+        // BOM POM changed cosmetically (same managed deps), importers should not be affected
+        Path root = setupReactorRootWithBom();
+        List<MavenProject> projects = createReactorWithBomImport(root);
+
+        // Old BOM POM is identical to current (lib-x:2.0)
+        String oldBomPom = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>bom</artifactId>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>com.example</groupId>\n"
+                + "      <artifactId>lib-x</artifactId>\n"
+                + "      <version>2.0</version>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+
+        Set<String> changedPoms = Collections.singleton("bom/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(result.getAffectedProjects().isEmpty(), "Cosmetic BOM change should not affect any module");
+    }
+
+    @Test
+    void analyzeChanges_bomImportScopePropertyIndirection() throws Exception {
+        // BOM uses property for managed dep version. When property changes,
+        // importing module using that managed dep should be affected.
+        Path root = setupReactorRootWithBom();
+
+        // BOM with property-based version
+        String bomPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>bom</artifactId>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <properties>\n"
+                + "    <lib.version>2.0</lib.version>\n"
+                + "  </properties>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>com.example</groupId>\n"
+                + "      <artifactId>lib-x</artifactId>\n"
+                + "      <version>${lib.version}</version>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+        writePom(root.resolve("bom/pom.xml"), bomPomXml);
+
+        List<MavenProject> projects = createReactorWithBomImportCustomBom(root, bomPomXml);
+
+        // Old BOM POM had lib.version=1.0
+        String oldBomPom = bomPomXml.replace("<lib.version>2.0</lib.version>", "<lib.version>1.0</lib.version>");
+
+        Set<String> changedPoms = Collections.singleton("bom/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        MavenProject moduleA = projects.get(2);
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a uses managed dep lib-x whose version comes from changed property in BOM");
+        assertTrue(
+                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                "Changed managed dep GAs should include lib-x (via property indirection in BOM)");
+    }
+
+    @Test
+    void analyzeChanges_bomImportScopeNewBomMarksAllImporters() throws Exception {
+        // New BOM POM (no old bytes) should mark all importers as affected
+        Path root = setupReactorRootWithBom();
+        List<MavenProject> projects = createReactorWithBomImport(root);
+
+        Set<String> changedPoms = Collections.singleton("bom/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        // No entry for bom/pom.xml = new file
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        MavenProject bom = projects.get(1);
+        MavenProject moduleA = projects.get(2);
+
+        assertTrue(result.getAffectedProjects().contains(bom), "BOM should be affected");
+        assertTrue(result.getAffectedProjects().contains(moduleA), "module-a (BOM importer) should be affected");
+    }
+
+    @Test
+    void findBomImporters_detectsImportScopeEntries() {
+        // Verify findBomImporters correctly detects import-scope BOM entries
+        MavenProject parent = createProject(
+                "com.example", "parent", "1.0", tempDir.resolve("pom.xml").toFile());
+        parent.setOriginalModel(parseModel("<?xml version=\"1.0\"?>\n"
+                + "<project><modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "</project>"));
+
+        MavenProject bom = createProject(
+                "com.example", "bom", "1.0", tempDir.resolve("bom/pom.xml").toFile());
+        bom.setOriginalModel(parseModel("<?xml version=\"1.0\"?>\n"
+                + "<project><modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId><artifactId>bom</artifactId><version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "</project>"));
+
+        MavenProject moduleA = createProject(
+                "com.example",
+                "module-a",
+                "1.0",
+                tempDir.resolve("module-a/pom.xml").toFile());
+        moduleA.setOriginalModel(parseModel("<?xml version=\"1.0\"?>\n"
+                + "<project><modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency><groupId>com.example</groupId><artifactId>bom</artifactId>"
+                + "<version>1.0</version><type>pom</type><scope>import</scope></dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>"));
+
+        MavenProject moduleB = createProject(
+                "com.example",
+                "module-b",
+                "1.0",
+                tempDir.resolve("module-b/pom.xml").toFile());
+        moduleB.setOriginalModel(parseModel("<?xml version=\"1.0\"?>\n"
+                + "<project><modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId><artifactId>module-b</artifactId><version>1.0</version>\n"
+                + "</project>"));
+
+        List<MavenProject> projects = new ArrayList<>();
+        projects.add(parent);
+        projects.add(bom);
+        projects.add(moduleA);
+        projects.add(moduleB);
+
+        Map<MavenProject, List<MavenProject>> result = analyzer.findBomImporters(projects);
+
+        assertTrue(result.containsKey(bom), "BOM should be detected as imported");
+        assertEquals(1, result.get(bom).size(), "BOM should have exactly one importer");
+        assertTrue(result.get(bom).contains(moduleA), "module-a should be an importer of BOM");
+        assertFalse(result.containsKey(parent), "parent should not be detected as a BOM");
+    }
+
     // --- Helper methods ---
+
+    private Path setupReactorRootWithBom() throws IOException {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+        Files.createDirectories(root.resolve("bom"));
+        Files.createDirectories(root.resolve("module-a"));
+        Files.createDirectories(root.resolve("module-b"));
+        return root;
+    }
+
+    private List<MavenProject> createReactorWithBomImport(Path root) throws IOException {
+        String bomPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>bom</artifactId>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>com.example</groupId>\n"
+                + "      <artifactId>lib-x</artifactId>\n"
+                + "      <version>2.0</version>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "</project>\n";
+        return createReactorWithBomImportCustomBom(root, bomPomXml);
+    }
+
+    private List<MavenProject> createReactorWithBomImportCustomBom(Path root, String bomPomXml) throws IOException {
+        String parentPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>com.example</groupId>\n"
+                + "  <artifactId>parent</artifactId>\n"
+                + "  <version>1.0</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules><module>bom</module><module>module-a</module><module>module-b</module></modules>\n"
+                + "</project>\n";
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        writePom(root.resolve("bom/pom.xml"), bomPomXml);
+
+        // module-a: imports BOM, uses lib-x
+        String moduleAPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-a</artifactId>\n"
+                + "  <dependencyManagement><dependencies>\n"
+                + "    <dependency>\n"
+                + "      <groupId>com.example</groupId>\n"
+                + "      <artifactId>bom</artifactId>\n"
+                + "      <version>${project.version}</version>\n"
+                + "      <type>pom</type>\n"
+                + "      <scope>import</scope>\n"
+                + "    </dependency>\n"
+                + "  </dependencies></dependencyManagement>\n"
+                + "  <dependencies>\n"
+                + "    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId></dependency>\n"
+                + "  </dependencies>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // module-b: no BOM import, no lib-x
+        String moduleBPomXml = "<?xml version=\"1.0\"?>\n"
+                + "<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>module-b</artifactId>\n"
+                + "</project>\n";
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        MavenProject parent = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+        parent.setOriginalModel(parseModel(parentPomXml));
+        parent.getModel().setPackaging("pom");
+
+        MavenProject bom = createProject(
+                "com.example", "bom", "1.0", root.resolve("bom/pom.xml").toFile());
+        bom.setOriginalModel(parseModel(bomPomXml));
+        bom.getModel().setPackaging("pom");
+        bom.setParent(parent);
+
+        MavenProject moduleA = createProject(
+                "com.example",
+                "module-a",
+                "1.0",
+                root.resolve("module-a/pom.xml").toFile());
+        moduleA.setOriginalModel(parseModel(moduleAPomXml));
+        moduleA.setParent(parent);
+
+        MavenProject moduleB = createProject(
+                "com.example",
+                "module-b",
+                "1.0",
+                root.resolve("module-b/pom.xml").toFile());
+        moduleB.setOriginalModel(parseModel(moduleBPomXml));
+        moduleB.setParent(parent);
+
+        List<MavenProject> projects = new ArrayList<>();
+        projects.add(parent);
+        projects.add(bom);
+        projects.add(moduleA);
+        projects.add(moduleB);
+        return projects;
+    }
 
     private Path setupReactorRoot() throws IOException {
         Path root = tempDir.resolve("project");
