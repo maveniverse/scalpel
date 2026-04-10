@@ -1332,6 +1332,156 @@ class ScalpelLifecycleParticipantTest {
                 "module-b should NOT have tests skipped (uses changed managed plugin, safety guard)");
     }
 
+    @Test
+    void reportMode_forceBuildModulesIncludesMatchingModule() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        // Only module-a has a source change
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        // Force module-b to be included even though it has no changes
+        session.getSystemProperties().setProperty("scalpel.forceBuildModules", "module-b");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(modulePresent(json, "module-a"), "module-a should be in report");
+        assertTrue(modulePresent(json, "module-b"), "module-b should be force-included");
+        assertTrue(moduleHasReason(json, "module-b", "FORCE_BUILD"), "module-b should have FORCE_BUILD reason");
+    }
+
+    @Test
+    void reportMode_excludePathsFiltersChanges() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+
+        // Changes include an excluded path and a module source
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("README.md");
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.excludePaths", "*.md");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        // module-a should still be affected (its source file is not excluded)
+        assertTrue(modulePresent(json, "module-a"));
+        // README.md should be filtered from changedFiles
+        assertFalse(json.contains("README.md"), "README.md should be excluded from changed files");
+    }
+
+    @Test
+    void reportMode_disableTriggerCausesFullBuild() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        // A CI config file changed, matching the disable trigger
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add(".github/workflows/ci.yml");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", ".github/**");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"fullBuildTriggered\": true"), "Full build should be triggered");
+    }
+
+    @Test
+    void reportMode_nullDetectionResultSkipsProcessing() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+
+        // Null detection result (e.g., no git repo or no base branch)
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        // No report should be written when detection returns null
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertFalse(Files.exists(reportFile), "Report file should not be created when detection returns null");
+    }
+
     // --- Helper methods ---
 
     private void setupEmptyDependencyResolution() throws Exception {
