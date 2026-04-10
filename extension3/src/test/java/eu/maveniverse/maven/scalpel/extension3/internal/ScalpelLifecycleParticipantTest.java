@@ -1262,64 +1262,38 @@ class ScalpelLifecycleParticipantTest {
         return json.contains("\"artifactId\": \"" + artifactId + "\"");
     }
 
-    private boolean moduleHasReason(String json, String artifactId, String reason) {
+    private String extractModuleBlock(String json, String artifactId) {
         String marker = "\"artifactId\": \"" + artifactId + "\"";
         int idx = json.indexOf(marker);
         if (idx < 0) {
-            return false;
+            return null;
         }
         int start = json.lastIndexOf("{", idx);
         int end = json.indexOf("}", idx);
         if (start < 0 || end < 0) {
-            return false;
+            return null;
         }
-        String block = json.substring(start, end + 1);
-        return block.contains("\"" + reason + "\"");
+        return json.substring(start, end + 1);
+    }
+
+    private boolean moduleHasReason(String json, String artifactId, String reason) {
+        String block = extractModuleBlock(json, artifactId);
+        return block != null && block.contains("\"" + reason + "\"");
     }
 
     private boolean moduleHasAnySourceSet(String json, String artifactId) {
-        String marker = "\"artifactId\": \"" + artifactId + "\"";
-        int idx = json.indexOf(marker);
-        if (idx < 0) {
-            return false;
-        }
-        int start = json.lastIndexOf("{", idx);
-        int end = json.indexOf("}", idx);
-        if (start < 0 || end < 0) {
-            return false;
-        }
-        String block = json.substring(start, end + 1);
-        return block.contains("\"sourceSet\":");
+        String block = extractModuleBlock(json, artifactId);
+        return block != null && block.contains("\"sourceSet\":");
     }
 
     private boolean moduleHasSourceSet(String json, String artifactId, String sourceSet) {
-        String marker = "\"artifactId\": \"" + artifactId + "\"";
-        int idx = json.indexOf(marker);
-        if (idx < 0) {
-            return false;
-        }
-        int start = json.lastIndexOf("{", idx);
-        int end = json.indexOf("}", idx);
-        if (start < 0 || end < 0) {
-            return false;
-        }
-        String block = json.substring(start, end + 1);
-        return block.contains("\"sourceSet\": \"" + sourceSet + "\"");
+        String block = extractModuleBlock(json, artifactId);
+        return block != null && block.contains("\"sourceSet\": \"" + sourceSet + "\"");
     }
 
     private boolean moduleHasField(String json, String artifactId, String field, String value) {
-        String marker = "\"artifactId\": \"" + artifactId + "\"";
-        int idx = json.indexOf(marker);
-        if (idx < 0) {
-            return false;
-        }
-        int start = json.lastIndexOf("{", idx);
-        int end = json.indexOf("}", idx);
-        if (start < 0 || end < 0) {
-            return false;
-        }
-        String block = json.substring(start, end + 1);
-        return block.contains("\"" + field + "\": \"" + value + "\"");
+        String block = extractModuleBlock(json, artifactId);
+        return block != null && block.contains("\"" + field + "\": \"" + value + "\"");
     }
 
     private Model parseModel(String xml) {

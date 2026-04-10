@@ -299,6 +299,28 @@ class ScalpelReportTest {
     }
 
     @Test
+    void toJson_bothSourceSetAndTestsSkippedReason() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-b",
+                        "module-b",
+                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        ScalpelReport.CATEGORY_DOWNSTREAM,
+                        "main",
+                        ScalpelReport.REASON_EXCLUDED_DOWNSTREAM))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"sourceSet\": \"main\""));
+        assertTrue(json.contains("\"testsSkippedReason\": \"EXCLUDED_DOWNSTREAM\""));
+        assertTrue(json.contains("\"category\": \"DOWNSTREAM\""));
+    }
+
+    @Test
     void toJson_escapesSpecialCharacters() {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
