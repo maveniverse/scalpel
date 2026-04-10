@@ -219,6 +219,86 @@ class ScalpelReportTest {
     }
 
     @Test
+    void toJson_testsSkippedReasonIncludedWhenSet() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-b",
+                        "module-b",
+                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        ScalpelReport.CATEGORY_DOWNSTREAM,
+                        null,
+                        ScalpelReport.REASON_EXCLUDED_DOWNSTREAM))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"testsSkippedReason\": \"EXCLUDED_DOWNSTREAM\""));
+        assertTrue(json.contains("\"category\": \"DOWNSTREAM\""));
+    }
+
+    @Test
+    void toJson_testsSkippedReasonOmittedWhenNull() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-b",
+                        "module-b",
+                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        ScalpelReport.CATEGORY_DOWNSTREAM))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("testsSkippedReason"));
+        assertTrue(json.contains("\"category\": \"DOWNSTREAM\""));
+    }
+
+    @Test
+    void toJson_testsSkippedReasonWithoutCategory() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-b",
+                        "module-b",
+                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        null,
+                        null,
+                        ScalpelReport.REASON_EXCLUDED_DOWNSTREAM))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"testsSkippedReason\": \"EXCLUDED_DOWNSTREAM\""));
+        assertFalse(json.contains("\"category\""));
+    }
+
+    @Test
+    void affectedModule_gettersReturnCorrectValues() {
+        ScalpelReport.AffectedModule module = new ScalpelReport.AffectedModule(
+                "com.example",
+                "module-a",
+                "module-a",
+                Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                ScalpelReport.CATEGORY_DOWNSTREAM,
+                null,
+                ScalpelReport.REASON_EXCLUDED_DOWNSTREAM);
+
+        assertEquals("com.example", module.getGroupId());
+        assertEquals("module-a", module.getArtifactId());
+        assertEquals("module-a", module.getPath());
+        assertEquals(Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT), module.getReasons());
+        assertEquals(ScalpelReport.CATEGORY_DOWNSTREAM, module.getCategory());
+        assertEquals(ScalpelReport.REASON_EXCLUDED_DOWNSTREAM, module.getTestsSkippedReason());
+    }
+
+    @Test
     void toJson_escapesSpecialCharacters() {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")

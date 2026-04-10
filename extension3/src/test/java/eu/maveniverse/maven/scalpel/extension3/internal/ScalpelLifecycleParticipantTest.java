@@ -982,6 +982,206 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(json.contains("commons-lang:commons-lang"), "Report should include changed managed dep GA");
     }
 
+    @Test
+    void skipTestsMode_excludedDownstreamModulesHaveTestsSkipped() throws Exception {
+        // module-a is directly changed, module-b and module-c are downstream.
+        // module-b is in the exclusion list, module-c is not.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b", "module-c");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+        String moduleCPom = simpleChildPomWithDep("module-c", "module-a");
+        writePom(root, "module-c/pom.xml", moduleCPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+        MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
+        moduleC.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB, moduleC);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
+        session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
+
+        // Graph: module-b and module-c are downstream of module-a
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Arrays.asList(moduleB, moduleC));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getDownstreamProjects(moduleC, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        // module-b (excluded downstream) should have tests skipped
+        assertTrue(
+                "true".equals(moduleB.getProperties().getProperty("maven.test.skip")),
+                "module-b should have maven.test.skip=true (excluded downstream)");
+        // module-c (downstream, not excluded) should NOT have tests skipped
+        assertFalse(
+                "true".equals(moduleC.getProperties().getProperty("maven.test.skip")),
+                "module-c should NOT have maven.test.skip=true (not excluded)");
+    }
+
+    @Test
+    void skipTestsMode_directModuleOverridesDownstreamExclusion() throws Exception {
+        // module-a has source changes (DIRECT) and is also in the exclusion list.
+        // DIRECT should win — tests should still run.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
+        // module-a is in the exclusion list but also directly changed
+        session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-a");
+
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        // module-a is DIRECT, so tests should NOT be skipped even though it's in exclusion list
+        assertFalse(
+                "true".equals(moduleA.getProperties().getProperty("maven.test.skip")),
+                "module-a should NOT have tests skipped (DIRECT overrides exclusion)");
+    }
+
+    @Test
+    void skipTestsMode_groupIdColonArtifactIdExclusionPattern() throws Exception {
+        // Test that groupId:artifactId pattern matching works
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
+        session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "com.example:module-b");
+
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.singletonList(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        assertTrue(
+                "true".equals(moduleB.getProperties().getProperty("maven.test.skip")),
+                "module-b should have tests skipped (matched by groupId:artifactId)");
+    }
+
+    @Test
+    void reportMode_excludedDownstreamHasTestsSkippedReason() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
+
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.singletonList(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(moduleHasReason(json, "module-a", "SOURCE_CHANGE"), "module-a should have SOURCE_CHANGE");
+        assertTrue(
+                moduleHasField(json, "module-b", "testsSkippedReason", "EXCLUDED_DOWNSTREAM"),
+                "module-b should have testsSkippedReason=EXCLUDED_DOWNSTREAM in report");
+    }
+
     // --- Helper methods ---
 
     private void setupEmptyDependencyResolution() throws Exception {
@@ -1028,6 +1228,14 @@ class ScalpelLifecycleParticipantTest {
         return "<?xml version=\"1.0\"?>\n<project>\n  <modelVersion>4.0.0</modelVersion>\n"
                 + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
                 + "  <artifactId>" + artifactId + "</artifactId>\n</project>\n";
+    }
+
+    private String simpleChildPomWithDep(String artifactId, String depArtifactId) {
+        return "<?xml version=\"1.0\"?>\n<project>\n  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
+                + "  <artifactId>" + artifactId + "</artifactId>\n"
+                + "  <dependencies><dependency><groupId>com.example</groupId><artifactId>" + depArtifactId
+                + "</artifactId><version>1.0</version></dependency></dependencies>\n</project>\n";
     }
 
     private void writePom(Path root, String relativePath, String content) throws Exception {
@@ -1097,6 +1305,21 @@ class ScalpelLifecycleParticipantTest {
         }
         String block = json.substring(start, end + 1);
         return block.contains("\"sourceSet\": \"" + sourceSet + "\"");
+    }
+
+    private boolean moduleHasField(String json, String artifactId, String field, String value) {
+        String marker = "\"artifactId\": \"" + artifactId + "\"";
+        int idx = json.indexOf(marker);
+        if (idx < 0) {
+            return false;
+        }
+        int start = json.lastIndexOf("{", idx);
+        int end = json.indexOf("}", idx);
+        if (start < 0 || end < 0) {
+            return false;
+        }
+        String block = json.substring(start, end + 1);
+        return block.contains("\"" + field + "\": \"" + value + "\"");
     }
 
     private Model parseModel(String xml) {

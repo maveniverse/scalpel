@@ -411,8 +411,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             } else if (!config.getSkipTestsForDownstreamModules().isEmpty()
                     && (trimResult.getDownstreamOnly().contains(project)
                             || trimResult.getDownstreamTestOnly().contains(project))
-                    && matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
-                // Skip tests on excluded downstream modules
+                    && matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())
+                    && !(!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs))
+                    && !(!changedManagedDepGAs.isEmpty()
+                            && hasChangedTransitiveDependency(project, session, changedManagedDepGAs))) {
+                // Skip tests on excluded downstream modules (unless they also have plugin/dep changes)
                 project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
                 skippedProjects.add(project);
                 logger.debug("Scalpel: Skipping tests on excluded downstream module {}", key(project));
@@ -617,25 +620,18 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenProject project = entry.getKey();
             String path = relativePath(reactorRoot, project);
             String category = null;
-            String testsSkippedReason = null;
             if (trimResult != null) {
                 if (trimResult.getUpstreamOnly().contains(project)) {
                     category = ScalpelReport.CATEGORY_UPSTREAM;
-                } else if (trimResult.getDownstreamOnly().contains(project)) {
+                } else if (trimResult.getDownstreamOnly().contains(project)
+                        || trimResult.getDownstreamTestOnly().contains(project)) {
                     category = ScalpelReport.CATEGORY_DOWNSTREAM;
-                    if (matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
-                        testsSkippedReason = ScalpelReport.REASON_EXCLUDED_DOWNSTREAM;
-                    }
                 }
             }
+            // Transitively affected modules have additional reasons (plugin/dep changes),
+            // so they are not "only DOWNSTREAM" — don't mark as excluded
             builder.addAffectedModule(new ScalpelReport.AffectedModule(
-                    project.getGroupId(),
-                    project.getArtifactId(),
-                    path,
-                    entry.getValue(),
-                    category,
-                    null,
-                    testsSkippedReason));
+                    project.getGroupId(), project.getArtifactId(), path, entry.getValue(), category));
         }
 
         // Add upstream/downstream modules from trimResult that aren't already covered
