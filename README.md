@@ -119,24 +119,26 @@ not as a replacement. It contains only directly affected modules (not upstream/d
   "baseBranch": "origin/main",
   "fullBuildTriggered": false,
   "triggerFile": null,
-  "changedFiles": ["parent/pom.xml"],
-  "changedProperties": ["kafka-version"],
-  "changedManagedDependencies": ["org.apache.kafka:kafka-clients"],
+  "changedFiles": ["module-a/src/main/java/Foo.java", "module-b/src/test/java/BarTest.java"],
+  "changedProperties": [],
+  "changedManagedDependencies": [],
   "changedManagedPlugins": [],
   "affectedModules": [
     {
       "groupId": "com.example",
       "artifactId": "module-a",
       "path": "module-a",
-      "reasons": ["POM_CHANGE"],
-      "category": "DIRECT"
+      "reasons": ["SOURCE_CHANGE"],
+      "category": "DIRECT",
+      "sourceSet": "main"
     },
     {
       "groupId": "com.example",
       "artifactId": "module-b",
       "path": "module-b",
-      "reasons": ["TRANSITIVE_DEPENDENCY"],
-      "category": "DOWNSTREAM"
+      "reasons": ["TEST_CHANGE"],
+      "category": "DIRECT",
+      "sourceSet": "test"
     }
   ]
 }
@@ -152,8 +154,17 @@ not as a replacement. It contains only directly affected modules (not upstream/d
 | `TRANSITIVE_DEPENDENCY` | A changed managed dependency reaches this module transitively (compile/runtime scope) |
 | `TRANSITIVE_DEPENDENCY_TEST` | A changed managed dependency reaches this module transitively via test scope only |
 | `MANAGED_PLUGIN` | This module uses a plugin whose managed version changed |
+| `UPSTREAM_DEPENDENCY` | Included as an upstream dependency (via `alsoMake`) |
+| `DOWNSTREAM_DEPENDENT` | Included as a downstream dependent (via `alsoMakeDependents`) |
 | `DOWNSTREAM_TEST` | Included as a downstream dependent via test-scoped dependency only |
 | `FORCE_BUILD` | This module was force-included via `forceBuildModules` |
+
+**Affected module source sets** (present on directly affected modules with source changes):
+
+| Source Set | Description |
+|------------|-------------|
+| `main` | Main source files (`src/main/**`) changed; all downstream dependents are affected |
+| `test` | Only test source files (`src/test/**`) changed; only test-jar dependents are affected |
 
 **Affected module categories:**
 
@@ -162,6 +173,38 @@ not as a replacement. It contains only directly affected modules (not upstream/d
 | `DIRECT` | Directly affected by a change |
 | `UPSTREAM` | Included as an upstream dependency (via `alsoMake`) |
 | `DOWNSTREAM` | Included as a downstream dependent (via `alsoMakeDependents`) |
+
+## Source-Set-Aware Downstream Propagation
+
+Scalpel distinguishes between main source changes (`src/main/`) and test-only changes (`src/test/`)
+when propagating changes to downstream modules:
+
+- **Test-only changes** (`src/test/` only): the module itself is built and tested (DIRECT), but
+  only downstream modules that declare a `<type>test-jar</type>` dependency on it are included.
+  Regular dependents are NOT affected, since the main artifact is unchanged.
+
+- **Main source changes** (`src/main/` with or without `src/test/`): all downstream dependents
+  (regular and test-jar) are included, as the main artifact may have changed.
+
+- **POM or resource changes**: treated like main source changes — all dependents are included.
+
+This dramatically reduces unnecessary builds. For example, in Apache Camel, `camel-core` has ~500
+regular dependents but only ~23 test-jar dependents. A change to a test base class in `camel-core`
+triggers testing of only those 23 modules instead of all 500+.
+
+Test-jar dependencies are declared in Maven as:
+
+```xml
+<dependency>
+    <groupId>org.apache.camel</groupId>
+    <artifactId>camel-core</artifactId>
+    <type>test-jar</type>
+    <scope>test</scope>
+</dependency>
+```
+
+In `report` mode, each directly affected module includes a `"sourceSet"` field (`"main"` or `"test"`)
+indicating which source set triggered the change.
 
 ## Configuration
 

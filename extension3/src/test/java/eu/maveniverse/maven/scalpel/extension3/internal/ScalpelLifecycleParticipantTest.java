@@ -410,8 +410,14 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasReason(json, "module-a", "TEST_CHANGE"),
                 "module-a should have TEST_CHANGE reason (only test files changed)");
         assertTrue(
+                moduleHasSourceSet(json, "module-a", "test"),
+                "module-a should have sourceSet=test (only test files changed)");
+        assertTrue(
                 moduleHasReason(json, "module-b", "SOURCE_CHANGE"),
                 "module-b should have SOURCE_CHANGE reason (main source changed)");
+        assertTrue(
+                moduleHasSourceSet(json, "module-b", "main"),
+                "module-b should have sourceSet=main (main source changed)");
     }
 
     @Test
@@ -618,8 +624,17 @@ class ScalpelLifecycleParticipantTest {
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         assertTrue(moduleHasReason(json, "module-a", "SOURCE_CHANGE"), "module-a should have SOURCE_CHANGE");
         assertTrue(
+                moduleHasSourceSet(json, "module-a", "main"),
+                "module-a should have sourceSet=main (main source changed)");
+        assertTrue(
                 moduleHasReason(json, "module-b", "DOWNSTREAM_TEST"),
                 "module-b should have DOWNSTREAM_TEST (test-scoped downstream of module-a)");
+        assertFalse(
+                moduleHasSourceSet(json, "module-b", "main"),
+                "module-b should NOT have sourceSet (downstream, not direct source change)");
+        assertFalse(
+                moduleHasSourceSet(json, "module-b", "test"),
+                "module-b should NOT have sourceSet (downstream, not direct source change)");
     }
 
     @Test
@@ -895,6 +910,21 @@ class ScalpelLifecycleParticipantTest {
         }
         String block = json.substring(start, end + 1);
         return block.contains("\"" + reason + "\"");
+    }
+
+    private boolean moduleHasSourceSet(String json, String artifactId, String sourceSet) {
+        String marker = "\"artifactId\": \"" + artifactId + "\"";
+        int idx = json.indexOf(marker);
+        if (idx < 0) {
+            return false;
+        }
+        int start = json.lastIndexOf("{", idx);
+        int end = json.indexOf("}", idx);
+        if (start < 0 || end < 0) {
+            return false;
+        }
+        String block = json.substring(start, end + 1);
+        return block.contains("\"sourceSet\": \"" + sourceSet + "\"");
     }
 
     private Model parseModel(String xml) {

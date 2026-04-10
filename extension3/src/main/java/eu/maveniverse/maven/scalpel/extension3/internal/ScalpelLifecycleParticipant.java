@@ -564,11 +564,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         for (MavenProject project : directlyAffected) {
             String path = relativePath(reactorRoot, project);
             List<String> reasons = new ArrayList<>();
+            String sourceSet = null;
             if (affectedBySource.contains(project)) {
                 if (testOnlyBySource.contains(project)) {
                     reasons.add(ScalpelReport.REASON_TEST_CHANGE);
+                    sourceSet = "test";
                 } else {
                     reasons.add(ScalpelReport.REASON_SOURCE_CHANGE);
+                    sourceSet = "main";
                 }
             }
             if (affectedByPom.contains(project)) {
@@ -578,7 +581,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 reasons.add(ScalpelReport.REASON_FORCE_BUILD);
             }
             builder.addAffectedModule(new ScalpelReport.AffectedModule(
-                    project.getGroupId(), project.getArtifactId(), path, reasons, ScalpelReport.CATEGORY_DIRECT));
+                    project.getGroupId(),
+                    project.getArtifactId(),
+                    path,
+                    reasons,
+                    ScalpelReport.CATEGORY_DIRECT,
+                    sourceSet));
         }
 
         for (Map.Entry<MavenProject, List<String>> entry : transitivelyAffected.entrySet()) {

@@ -160,6 +160,65 @@ class ScalpelReportTest {
     }
 
     @Test
+    void toJson_sourceSetIncludedWhenPresent() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/test/java/FooTest.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-a",
+                        "module-a",
+                        Collections.singletonList(ScalpelReport.REASON_TEST_CHANGE),
+                        ScalpelReport.CATEGORY_DIRECT,
+                        "test"))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"sourceSet\": \"test\""));
+        assertTrue(json.contains("\"TEST_CHANGE\""));
+        assertTrue(json.contains("\"category\": \"DIRECT\""));
+    }
+
+    @Test
+    void toJson_sourceSetOmittedWhenNull() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/main/java/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-a",
+                        "module-a",
+                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        ScalpelReport.CATEGORY_DOWNSTREAM))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("\"sourceSet\""));
+    }
+
+    @Test
+    void toJson_sourceSetMainForMainChanges() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/main/java/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example",
+                        "module-a",
+                        "module-a",
+                        Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE),
+                        ScalpelReport.CATEGORY_DIRECT,
+                        "main"))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"sourceSet\": \"main\""));
+        assertTrue(json.contains("\"SOURCE_CHANGE\""));
+    }
+
+    @Test
     void toJson_escapesSpecialCharacters() {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
