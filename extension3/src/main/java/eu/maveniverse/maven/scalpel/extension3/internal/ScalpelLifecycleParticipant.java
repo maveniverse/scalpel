@@ -18,7 +18,9 @@ import eu.maveniverse.maven.scalpel.core.ScalpelException;
 import eu.maveniverse.maven.scalpel.core.ScalpelReport;
 import eu.maveniverse.maven.scalpel.core.Version;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystems;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
@@ -597,12 +599,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
         Path logPath = reactorRoot.resolve(impactedLog);
         try {
-            java.nio.file.Files.createDirectories(logPath.getParent());
+            Files.createDirectories(logPath.getParent());
             List<String> lines = new ArrayList<>();
             for (MavenProject project : affectedModules) {
                 lines.add(relativePath(reactorRoot, project));
             }
-            java.nio.file.Files.write(logPath, lines, java.nio.charset.StandardCharsets.UTF_8);
+            Files.write(logPath, lines, StandardCharsets.UTF_8);
             logger.info("Scalpel: Impacted modules written to {}", config.getImpactedLog());
         } catch (IOException e) {
             throw new MavenExecutionException("Scalpel: Failed to write impacted log", e);
