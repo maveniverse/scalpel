@@ -151,6 +151,8 @@ public class GitChangeDetector {
             uncommitted.addAll(status.getChanged());
             uncommitted.addAll(status.getAdded());
             uncommitted.addAll(status.getRemoved());
+            uncommitted.addAll(status.getMissing());
+            uncommitted.addAll(status.getConflicting());
             untracked.addAll(status.getUntracked());
         } catch (GitAPIException e) {
             throw new IOException("Failed to get git status", e);
