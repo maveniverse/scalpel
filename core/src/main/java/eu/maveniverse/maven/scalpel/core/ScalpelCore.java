@@ -70,19 +70,12 @@ public class ScalpelCore {
                 String currentBranch = gitChangeDetector.getCurrentBranch(repository);
                 if (currentBranch != null) {
                     for (String pattern : config.getDisableOnBranch()) {
-                        try {
-                            if (currentBranch.matches(pattern)) {
-                                logger.info(
-                                        "Scalpel: Disabled because current branch '{}' matches pattern '{}'",
-                                        currentBranch,
-                                        pattern);
-                                return null;
-                            }
-                        } catch (PatternSyntaxException e) {
-                            logger.warn(
-                                    "Scalpel: Invalid regex pattern '{}' in disableOnBranch: {}",
-                                    pattern,
-                                    e.getMessage());
+                        if (matchesSafely(currentBranch, pattern, "disableOnBranch")) {
+                            logger.info(
+                                    "Scalpel: Disabled because current branch '{}' matches pattern '{}'",
+                                    currentBranch,
+                                    pattern);
+                            return null;
                         }
                     }
                 }
@@ -98,19 +91,10 @@ public class ScalpelCore {
                     baseBranchName = baseBranchName.substring(slashIndex + 1);
                 }
                 for (String pattern : config.getDisableOnBaseBranch()) {
-                    try {
-                        if (baseBranchName.matches(pattern)) {
-                            logger.info(
-                                    "Scalpel: Disabled because base branch '{}' matches pattern '{}'",
-                                    baseBranch,
-                                    pattern);
-                            return null;
-                        }
-                    } catch (PatternSyntaxException e) {
-                        logger.warn(
-                                "Scalpel: Invalid regex pattern '{}' in disableOnBaseBranch: {}",
-                                pattern,
-                                e.getMessage());
+                    if (matchesSafely(baseBranchName, pattern, "disableOnBaseBranch")) {
+                        logger.info(
+                                "Scalpel: Disabled because base branch '{}' matches pattern '{}'", baseBranch, pattern);
+                        return null;
                     }
                 }
             }
@@ -192,6 +176,15 @@ public class ScalpelCore {
             return handleError(config, "Error during change detection", e);
         } finally {
             repository.close();
+        }
+    }
+
+    private boolean matchesSafely(String value, String pattern, String configKey) {
+        try {
+            return value.matches(pattern);
+        } catch (PatternSyntaxException e) {
+            logger.warn("Scalpel: Invalid regex pattern '{}' in {}: {}", pattern, configKey, e.getMessage());
+            return false;
         }
     }
 

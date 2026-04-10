@@ -1048,7 +1048,7 @@ class PomChangeAnalyzer {
         return false;
     }
 
-    private static final long MAX_RESOURCE_FILE_SIZE = 1024 * 1024; // 1 MB
+    private static final long MAX_RESOURCE_FILE_SIZE = 1024L * 1024; // 1 MB
 
     private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
         List<Path> stack = new ArrayList<>();
