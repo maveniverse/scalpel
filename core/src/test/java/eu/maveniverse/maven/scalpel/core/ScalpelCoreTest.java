@@ -15,7 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collections;
 import java.util.Properties;
 import java.util.Set;
 import org.eclipse.jgit.api.Git;
@@ -48,7 +47,7 @@ class ScalpelCoreTest {
             sys.setProperty("scalpel.baseBranch", "main");
             ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
 
-            ChangeDetectionResult result = core.detectChanges(tempDir, config, Collections.<String>emptySet());
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
 
             assertNotNull(result);
             assertTrue(result.getChangedFiles().contains("new-file.txt"));
@@ -72,7 +71,7 @@ class ScalpelCoreTest {
             sys.setProperty("scalpel.uncommitted", "true");
             ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
 
-            ChangeDetectionResult result = core.detectChanges(tempDir, config, Collections.<String>emptySet());
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
 
             assertNotNull(result);
             assertTrue(result.getChangedFiles().contains("file.txt"), "uncommitted change should be detected");
@@ -96,7 +95,7 @@ class ScalpelCoreTest {
             sys.setProperty("scalpel.untracked", "true");
             ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
 
-            ChangeDetectionResult result = core.detectChanges(tempDir, config, Collections.<String>emptySet());
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
 
             assertNotNull(result);
             assertTrue(result.getChangedFiles().contains("untracked.txt"), "untracked file should be detected");
@@ -123,7 +122,7 @@ class ScalpelCoreTest {
             ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
 
             // Should not throw, just log a warning and continue
-            ChangeDetectionResult result = core.detectChanges(tempDir, config, Collections.<String>emptySet());
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
 
             assertNotNull(result);
         }
@@ -145,7 +144,7 @@ class ScalpelCoreTest {
             sys.setProperty("scalpel.disableOnBranch", currentBranch);
             ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
 
-            ChangeDetectionResult result = core.detectChanges(tempDir, config, Collections.<String>emptySet());
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
 
             assertNull(result, "Should return null when current branch matches disableOnBranch");
         }
@@ -162,7 +161,7 @@ class ScalpelCoreTest {
         sys.setProperty("scalpel.baseBranch", "main");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
 
-        ChangeDetectionResult result = core.detectChanges(nonGitDir, config, Collections.<String>emptySet());
+        ChangeDetectionResult result = core.detectChanges(nonGitDir, config, Set.of());
 
         assertNull(result, "Should return null for non-git directory");
     }
@@ -188,7 +187,7 @@ class ScalpelCoreTest {
             sys.setProperty("scalpel.baseBranch", "main");
             ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
 
-            Set<String> pomPaths = Collections.singleton("pom.xml");
+            Set<String> pomPaths = Set.of("pom.xml");
             ChangeDetectionResult result = core.detectChanges(tempDir, config, pomPaths);
 
             assertNotNull(result);

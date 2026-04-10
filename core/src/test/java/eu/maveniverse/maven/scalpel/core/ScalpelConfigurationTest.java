@@ -13,8 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Properties;
 import org.junit.jupiter.api.Test;
@@ -173,7 +171,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableOnBranch", "main,release/.*");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList("main", "release/.*"), config.getDisableOnBranch());
+        assertEquals(List.of("main", "release/.*"), config.getDisableOnBranch());
     }
 
     @Test
@@ -181,7 +179,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableOnBranch", "main");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Collections.singletonList("main"), config.getDisableOnBranch());
+        assertEquals(List.of("main"), config.getDisableOnBranch());
     }
 
     @Test
@@ -189,7 +187,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableOnBaseBranch", "main,develop");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList("main", "develop"), config.getDisableOnBaseBranch());
+        assertEquals(List.of("main", "develop"), config.getDisableOnBaseBranch());
     }
 
     @Test
@@ -197,7 +195,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.excludePaths", "*.md,LICENSE,.editorconfig");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList("*.md", "LICENSE", ".editorconfig"), config.getExcludePaths());
+        assertEquals(List.of("*.md", "LICENSE", ".editorconfig"), config.getExcludePaths());
     }
 
     @Test
@@ -205,7 +203,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableTriggers", ".github/**,Jenkinsfile");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList(".github/**", "Jenkinsfile"), config.getDisableTriggers());
+        assertEquals(List.of(".github/**", "Jenkinsfile"), config.getDisableTriggers());
     }
 
     @Test
@@ -213,7 +211,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.upstreamArgs", "skipITs=true,someKey=val");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList("skipITs=true", "someKey=val"), config.getUpstreamArgs());
+        assertEquals(List.of("skipITs=true", "someKey=val"), config.getUpstreamArgs());
     }
 
     @Test
@@ -221,7 +219,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.downstreamArgs", "skipITs=true");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Collections.singletonList("skipITs=true"), config.getDownstreamArgs());
+        assertEquals(List.of("skipITs=true"), config.getDownstreamArgs());
     }
 
     @Test
@@ -229,7 +227,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.forceBuildModules", ".*-it,.*-tests");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList(".*-it", ".*-tests"), config.getForceBuildModules());
+        assertEquals(List.of(".*-it", ".*-tests"), config.getForceBuildModules());
     }
 
     @Test
@@ -249,7 +247,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList("module-b"), config.getSkipTestsForDownstreamModules());
+        assertEquals(List.of("module-b"), config.getSkipTestsForDownstreamModules());
     }
 
     @Test
@@ -257,7 +255,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.skipTestsForDownstreamModules", "module-b,module-c");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList("module-b", "module-c"), config.getSkipTestsForDownstreamModules());
+        assertEquals(List.of("module-b", "module-c"), config.getSkipTestsForDownstreamModules());
     }
 
     @Test
@@ -265,7 +263,7 @@ class ScalpelConfigurationTest {
         Properties sys = new Properties();
         sys.setProperty("scalpel.skipTestsForDownstreamModules", "com.example:module-b");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
-        assertEquals(Arrays.asList("com.example:module-b"), config.getSkipTestsForDownstreamModules());
+        assertEquals(List.of("com.example:module-b"), config.getSkipTestsForDownstreamModules());
     }
 
     @Test
@@ -274,7 +272,7 @@ class ScalpelConfigurationTest {
         Properties user = new Properties();
         user.setProperty("scalpel.skipTestsForDownstreamModules", "module-x");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, user);
-        assertEquals(Arrays.asList("module-x"), config.getSkipTestsForDownstreamModules());
+        assertEquals(List.of("module-x"), config.getSkipTestsForDownstreamModules());
     }
 
     @Test
@@ -308,7 +306,7 @@ class ScalpelConfigurationTest {
         Properties user = new Properties();
         user.setProperty("scalpel.disableOnBranch", "develop");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, user);
-        assertEquals(Collections.singletonList("main"), config.getDisableOnBranch());
+        assertEquals(List.of("main"), config.getDisableOnBranch());
     }
 
     @Test

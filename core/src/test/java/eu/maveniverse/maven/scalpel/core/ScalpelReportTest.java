@@ -16,8 +16,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Collections;
+import java.util.List;
+import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -31,12 +31,9 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .changedFiles(Set.of("module-a/src/Foo.java"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
-                        "com.example",
-                        "module-a",
-                        "module-a",
-                        Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE)))
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE)))
                 .build();
 
         String json = report.toJson();
@@ -50,18 +47,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("pom.xml"))
-                .changedManagedDependencies(Collections.singleton("org.apache.kafka:kafka-clients"))
+                .changedFiles(Set.of("pom.xml"))
+                .changedManagedDependencies(Set.of("org.apache.kafka:kafka-clients"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
-                        "com.example",
-                        "module-a",
-                        "module-a",
-                        Collections.singletonList(ScalpelReport.REASON_POM_CHANGE)))
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_POM_CHANGE)))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
-                        "com.example",
-                        "module-b",
-                        "module-b",
-                        Collections.singletonList(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY)))
+                        "com.example", "module-b", "module-b", List.of(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY)))
                 .build();
 
         String json = report.toJson();
@@ -77,13 +68,10 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("pom.xml"))
-                .changedManagedPlugins(Collections.singleton("org.apache.maven.plugins:maven-compiler-plugin"))
+                .changedFiles(Set.of("pom.xml"))
+                .changedManagedPlugins(Set.of("org.apache.maven.plugins:maven-compiler-plugin"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
-                        "com.example",
-                        "module-a",
-                        "module-a",
-                        Collections.singletonList(ScalpelReport.REASON_MANAGED_PLUGIN)))
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_MANAGED_PLUGIN)))
                 .build();
 
         String json = report.toJson();
@@ -96,12 +84,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("pom.xml"))
+                .changedFiles(Set.of("pom.xml"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
                         "com.example",
                         "module-a",
                         "module-a",
-                        Arrays.asList(ScalpelReport.REASON_MANAGED_PLUGIN, ScalpelReport.REASON_TRANSITIVE_DEPENDENCY)))
+                        List.of(ScalpelReport.REASON_MANAGED_PLUGIN, ScalpelReport.REASON_TRANSITIVE_DEPENDENCY)))
                 .build();
 
         String json = report.toJson();
@@ -115,7 +103,7 @@ class ScalpelReportTest {
                 .baseBranch("origin/main")
                 .fullBuildTriggered(true)
                 .triggerFile(".mvn/extensions.xml")
-                .changedFiles(Collections.singleton(".mvn/extensions.xml"))
+                .changedFiles(Set.of(".mvn/extensions.xml"))
                 .build();
 
         String json = report.toJson();
@@ -143,13 +131,10 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("pom.xml"))
-                .changedManagedDependencies(Collections.singleton("commons-lang:commons-lang"))
+                .changedFiles(Set.of("pom.xml"))
+                .changedManagedDependencies(Set.of("commons-lang:commons-lang"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
-                        "com.example",
-                        "module-b",
-                        "module-b",
-                        Collections.singletonList(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY)))
+                        "com.example", "module-b", "module-b", List.of(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY)))
                 .build();
 
         report.writeToFile(tempDir, "target/scalpel-report.json");
@@ -165,12 +150,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/test/java/FooTest.java"))
+                .changedFiles(Set.of("module-a/src/test/java/FooTest.java"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
                         "com.example",
                         "module-a",
                         "module-a",
-                        Collections.singletonList(ScalpelReport.REASON_TEST_CHANGE),
+                        List.of(ScalpelReport.REASON_TEST_CHANGE),
                         ScalpelReport.CATEGORY_DIRECT,
                         "test"))
                 .build();
@@ -186,12 +171,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/main/java/Foo.java"))
+                .changedFiles(Set.of("module-a/src/main/java/Foo.java"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
                         "com.example",
                         "module-a",
                         "module-a",
-                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
                         ScalpelReport.CATEGORY_DOWNSTREAM))
                 .build();
 
@@ -204,12 +189,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/main/java/Foo.java"))
+                .changedFiles(Set.of("module-a/src/main/java/Foo.java"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
                         "com.example",
                         "module-a",
                         "module-a",
-                        Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE),
+                        List.of(ScalpelReport.REASON_SOURCE_CHANGE),
                         ScalpelReport.CATEGORY_DIRECT,
                         "main"))
                 .build();
@@ -224,12 +209,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .changedFiles(Set.of("module-a/src/Foo.java"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
                         "com.example",
                         "module-b",
                         "module-b",
-                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
                         ScalpelReport.CATEGORY_DOWNSTREAM,
                         null,
                         ScalpelReport.REASON_EXCLUDED_DOWNSTREAM))
@@ -245,12 +230,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .changedFiles(Set.of("module-a/src/Foo.java"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
                         "com.example",
                         "module-b",
                         "module-b",
-                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
                         ScalpelReport.CATEGORY_DOWNSTREAM))
                 .build();
 
@@ -264,12 +249,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .changedFiles(Set.of("module-a/src/Foo.java"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
                         "com.example",
                         "module-b",
                         "module-b",
-                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
                         null,
                         null,
                         ScalpelReport.REASON_EXCLUDED_DOWNSTREAM))
@@ -286,7 +271,7 @@ class ScalpelReportTest {
                 "com.example",
                 "module-a",
                 "module-a",
-                Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
                 ScalpelReport.CATEGORY_DOWNSTREAM,
                 null,
                 ScalpelReport.REASON_EXCLUDED_DOWNSTREAM);
@@ -294,7 +279,7 @@ class ScalpelReportTest {
         assertEquals("com.example", module.getGroupId());
         assertEquals("module-a", module.getArtifactId());
         assertEquals("module-a", module.getPath());
-        assertEquals(Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT), module.getReasons());
+        assertEquals(List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT), module.getReasons());
         assertEquals(ScalpelReport.CATEGORY_DOWNSTREAM, module.getCategory());
         assertEquals(ScalpelReport.REASON_EXCLUDED_DOWNSTREAM, module.getTestsSkippedReason());
     }
@@ -304,12 +289,12 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .changedFiles(Set.of("module-a/src/Foo.java"))
                 .addAffectedModule(new ScalpelReport.AffectedModule(
                         "com.example",
                         "module-b",
                         "module-b",
-                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
+                        List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
                         ScalpelReport.CATEGORY_DOWNSTREAM,
                         "main",
                         ScalpelReport.REASON_EXCLUDED_DOWNSTREAM))
@@ -328,13 +313,13 @@ class ScalpelReportTest {
     @Test
     void moduleBuilder_minimalBuild() {
         ScalpelReport.AffectedModule module = ScalpelReport.AffectedModule.moduleBuilder(
-                        "com.example", "module-a", "module-a", Collections.singletonList("SOURCE_CHANGE"))
+                        "com.example", "module-a", "module-a", List.of("SOURCE_CHANGE"))
                 .build();
 
         assertEquals("com.example", module.getGroupId());
         assertEquals("module-a", module.getArtifactId());
         assertEquals("module-a", module.getPath());
-        assertEquals(Collections.singletonList("SOURCE_CHANGE"), module.getReasons());
+        assertEquals(List.of("SOURCE_CHANGE"), module.getReasons());
         assertNull(module.getCategory());
         assertNull(module.getSourceSet());
         assertNull(module.getTestsSkippedReason());
@@ -343,10 +328,7 @@ class ScalpelReportTest {
     @Test
     void moduleBuilder_allFieldsSet() {
         ScalpelReport.AffectedModule module = ScalpelReport.AffectedModule.moduleBuilder(
-                        "com.example",
-                        "module-b",
-                        "path/module-b",
-                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT))
+                        "com.example", "module-b", "path/module-b", List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT))
                 .category(ScalpelReport.CATEGORY_DOWNSTREAM)
                 .sourceSet("main")
                 .testsSkippedReason(ScalpelReport.REASON_EXCLUDED_DOWNSTREAM)
@@ -365,12 +347,9 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .changedFiles(Set.of("module-a/src/Foo.java"))
                 .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
-                                "com.example",
-                                "module-a",
-                                "module-a",
-                                Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE))
+                                "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE))
                         .category(ScalpelReport.CATEGORY_DIRECT)
                         .sourceSet("main")
                         .build())
@@ -385,10 +364,7 @@ class ScalpelReportTest {
     @Test
     void moduleBuilder_categoryOnly() {
         ScalpelReport.AffectedModule module = ScalpelReport.AffectedModule.moduleBuilder(
-                        "com.example",
-                        "module-a",
-                        "module-a",
-                        Collections.singletonList(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY))
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY))
                 .category(ScalpelReport.CATEGORY_UPSTREAM)
                 .build();
 
@@ -402,7 +378,7 @@ class ScalpelReportTest {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
-                .changedFiles(Collections.singleton("path/with\"quotes.java"))
+                .changedFiles(Set.of("path/with\"quotes.java"))
                 .build();
 
         String json = report.toJson();

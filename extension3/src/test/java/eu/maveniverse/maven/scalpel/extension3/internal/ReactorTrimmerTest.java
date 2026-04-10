@@ -13,8 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -44,18 +42,16 @@ class ReactorTrimmerTest {
         MavenProject projectB = createProject("com.example", "module-b");
         addDependency(projectB, "com.example", "module-a", "test");
 
-        List<MavenProject> sortedProjects = Arrays.asList(projectA, projectB);
+        List<MavenProject> sortedProjects = List.of(projectA, projectB);
         Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
-        downstreamMap.put(projectA, Collections.singletonList(projectB));
+        downstreamMap.put(projectA, List.of(projectB));
 
-        ProjectDependencyGraph graph = new TestDependencyGraph(
-                sortedProjects, downstreamMap, Collections.<MavenProject, List<MavenProject>>emptyMap());
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
 
-        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Collections.singleton(projectA));
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
         ScalpelConfiguration config = configWith(true, true);
 
-        TrimResult result =
-                trimmer.computeBuildSet(directlyAffected, Collections.<MavenProject>emptySet(), graph, config);
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, Set.of(), graph, config);
 
         assertTrue(result.getBuildSet().contains(projectA));
         assertTrue(result.getBuildSet().contains(projectB));
@@ -74,18 +70,16 @@ class ReactorTrimmerTest {
         MavenProject projectB = createProject("com.example", "module-b");
         addDependency(projectB, "com.example", "module-a", "compile");
 
-        List<MavenProject> sortedProjects = Arrays.asList(projectA, projectB);
+        List<MavenProject> sortedProjects = List.of(projectA, projectB);
         Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
-        downstreamMap.put(projectA, Collections.singletonList(projectB));
+        downstreamMap.put(projectA, List.of(projectB));
 
-        ProjectDependencyGraph graph = new TestDependencyGraph(
-                sortedProjects, downstreamMap, Collections.<MavenProject, List<MavenProject>>emptyMap());
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
 
-        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Collections.singleton(projectA));
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
         ScalpelConfiguration config = configWith(true, true);
 
-        TrimResult result =
-                trimmer.computeBuildSet(directlyAffected, Collections.<MavenProject>emptySet(), graph, config);
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, Set.of(), graph, config);
 
         assertTrue(
                 result.getDownstreamOnly().contains(projectB), "Compile-scoped downstream should be in downstreamOnly");
@@ -101,15 +95,14 @@ class ReactorTrimmerTest {
         addTestJarDependency(projectB, "com.example", "module-a");
         addDependency(projectC, "com.example", "module-a", "compile");
 
-        List<MavenProject> sortedProjects = Arrays.asList(projectA, projectB, projectC);
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectC);
         Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
-        downstreamMap.put(projectA, Arrays.asList(projectB, projectC));
+        downstreamMap.put(projectA, List.of(projectB, projectC));
 
-        ProjectDependencyGraph graph = new TestDependencyGraph(
-                sortedProjects, downstreamMap, Collections.<MavenProject, List<MavenProject>>emptyMap());
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
 
-        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Collections.singleton(projectA));
-        Set<MavenProject> testOnlyProjects = new LinkedHashSet<>(Collections.singleton(projectA));
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
+        Set<MavenProject> testOnlyProjects = new LinkedHashSet<>(Set.of(projectA));
         ScalpelConfiguration config = configWith(true, true);
 
         TrimResult result = trimmer.computeBuildSet(directlyAffected, testOnlyProjects, graph, config);
@@ -128,18 +121,16 @@ class ReactorTrimmerTest {
         MavenProject projectA = createProject("com.example", "module-a");
         MavenProject projectB = createProject("com.example", "module-b");
 
-        List<MavenProject> sortedProjects = Arrays.asList(projectB, projectA);
+        List<MavenProject> sortedProjects = List.of(projectB, projectA);
         Map<MavenProject, List<MavenProject>> upstreamMap = new HashMap<>();
-        upstreamMap.put(projectA, Collections.singletonList(projectB));
+        upstreamMap.put(projectA, List.of(projectB));
 
-        ProjectDependencyGraph graph = new TestDependencyGraph(
-                sortedProjects, Collections.<MavenProject, List<MavenProject>>emptyMap(), upstreamMap);
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, Map.of(), upstreamMap);
 
-        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Collections.singleton(projectA));
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
         ScalpelConfiguration config = configWith(true, false); // alsoMake=true, alsoMakeDependents=false
 
-        TrimResult result =
-                trimmer.computeBuildSet(directlyAffected, Collections.<MavenProject>emptySet(), graph, config);
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, Set.of(), graph, config);
 
         assertTrue(result.getBuildSet().contains(projectB));
         assertTrue(result.getUpstreamOnly().contains(projectB));
@@ -150,18 +141,16 @@ class ReactorTrimmerTest {
         MavenProject projectA = createProject("com.example", "module-a");
         MavenProject projectB = createProject("com.example", "module-b");
 
-        List<MavenProject> sortedProjects = Arrays.asList(projectA, projectB);
+        List<MavenProject> sortedProjects = List.of(projectA, projectB);
         Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
-        downstreamMap.put(projectA, Collections.singletonList(projectB));
+        downstreamMap.put(projectA, List.of(projectB));
 
-        ProjectDependencyGraph graph = new TestDependencyGraph(
-                sortedProjects, downstreamMap, Collections.<MavenProject, List<MavenProject>>emptyMap());
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
 
-        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Collections.singleton(projectA));
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
         ScalpelConfiguration config = configWith(false, false); // both disabled
 
-        TrimResult result =
-                trimmer.computeBuildSet(directlyAffected, Collections.<MavenProject>emptySet(), graph, config);
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, Set.of(), graph, config);
 
         assertEquals(1, result.getBuildSet().size());
         assertTrue(result.getBuildSet().contains(projectA));
@@ -171,14 +160,11 @@ class ReactorTrimmerTest {
     @Test
     void computeBuildSet_backwardCompatibleOverload() {
         MavenProject projectA = createProject("com.example", "module-a");
-        List<MavenProject> sortedProjects = Collections.singletonList(projectA);
+        List<MavenProject> sortedProjects = List.of(projectA);
 
-        ProjectDependencyGraph graph = new TestDependencyGraph(
-                sortedProjects,
-                Collections.<MavenProject, List<MavenProject>>emptyMap(),
-                Collections.<MavenProject, List<MavenProject>>emptyMap());
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, Map.of(), Map.of());
 
-        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Collections.singleton(projectA));
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
         ScalpelConfiguration config = configWith(true, true);
 
         // Use the 3-arg overload (no testOnlyProjects)
@@ -196,21 +182,19 @@ class ReactorTrimmerTest {
         addDependency(projectC, "com.example", "module-a", "compile");
 
         // Sorted order: A, B, C
-        List<MavenProject> sortedProjects = Arrays.asList(projectA, projectB, projectC);
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectC);
         Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
-        downstreamMap.put(projectA, Collections.singletonList(projectC));
+        downstreamMap.put(projectA, List.of(projectC));
 
-        ProjectDependencyGraph graph = new TestDependencyGraph(
-                sortedProjects, downstreamMap, Collections.<MavenProject, List<MavenProject>>emptyMap());
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
 
-        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Collections.singleton(projectA));
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
         ScalpelConfiguration config = configWith(true, true);
 
-        TrimResult result =
-                trimmer.computeBuildSet(directlyAffected, Collections.<MavenProject>emptySet(), graph, config);
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, Set.of(), graph, config);
 
         // B should not be in the build set, only A and C
-        assertEquals(Arrays.asList(projectA, projectC), result.getBuildSet());
+        assertEquals(List.of(projectA, projectC), result.getBuildSet());
     }
 
     // --- Helper methods ---
@@ -277,13 +261,13 @@ class ReactorTrimmerTest {
         @Override
         public List<MavenProject> getDownstreamProjects(MavenProject project, boolean transitive) {
             List<MavenProject> result = downstreamMap.get(project);
-            return result != null ? result : new ArrayList<MavenProject>();
+            return result != null ? result : new ArrayList<>();
         }
 
         @Override
         public List<MavenProject> getUpstreamProjects(MavenProject project, boolean transitive) {
             List<MavenProject> result = upstreamMap.get(project);
-            return result != null ? result : new ArrayList<MavenProject>();
+            return result != null ? result : new ArrayList<>();
         }
     }
 }
