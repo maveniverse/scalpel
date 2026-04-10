@@ -221,20 +221,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     if (directlyAffected.contains(project)) {
                         continue;
                     }
-                    for (String pattern : config.getForceBuildModules()) {
-                        try {
-                            if (project.getArtifactId().matches(pattern)) {
-                                directlyAffected.add(project);
-                                forceIncluded.add(project);
-                                logger.debug("Scalpel: Force-including module {} (matches {})", key(project), pattern);
-                                break;
-                            }
-                        } catch (PatternSyntaxException e) {
-                            logger.warn(
-                                    "Scalpel: Invalid regex pattern '{}' in forceBuildModules: {}",
-                                    pattern,
-                                    e.getMessage());
-                        }
+                    if (matchesForceBuild(project, config.getForceBuildModules())) {
+                        directlyAffected.add(project);
+                        forceIncluded.add(project);
                     }
                 }
             }
@@ -274,18 +263,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 writeReport(
                         config,
                         reactorRoot,
-                        new AnalysisContext(
-                                changedFiles,
-                                changedProperties,
-                                changedManagedDepGAs,
-                                changedManagedPluginGAs,
-                                directlyAffected,
-                                affectedBySource,
-                                sourceResult.getTestOnlyAffected(),
-                                affectedByPom,
-                                forceIncluded,
-                                transitivelyAffected,
-                                trimResult));
+                        AnalysisContext.builder(
+                                        changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
+                                .directlyAffected(directlyAffected)
+                                .affectedBySource(affectedBySource)
+                                .testOnlyBySource(sourceResult.getTestOnlyAffected())
+                                .affectedByPom(affectedByPom)
+                                .forceIncluded(forceIncluded)
+                                .transitivelyAffected(transitivelyAffected)
+                                .trimResult(trimResult)
+                                .build());
                 return;
             }
 
@@ -382,21 +369,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (directlyAffected.contains(project)) {
                 continue;
             }
-            List<String> reasons = new ArrayList<>();
-            if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
-                reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
-            }
-            if (!changedManagedDepGAs.isEmpty()) {
-                String depScope =
-                        getChangedTransitiveDependencyScope(project, session, changedManagedDepGAs, resolveCache);
-                if (depScope != null) {
-                    if ("test".equals(depScope)) {
-                        reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
-                    } else {
-                        reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
-                    }
-                }
-            }
+            List<String> reasons = computeTransitiveReasons(
+                    project, changedManagedDepGAs, changedManagedPluginGAs, session, resolveCache);
             if (!reasons.isEmpty()) {
                 transitivelyAffected.put(project, reasons);
             }
@@ -408,6 +382,29 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     keys(transitivelyAffected.keySet()));
         }
         return transitivelyAffected;
+    }
+
+    private List<String> computeTransitiveReasons(
+            MavenProject project,
+            Set<String> changedManagedDepGAs,
+            Set<String> changedManagedPluginGAs,
+            MavenSession session,
+            Map<MavenProject, DependencyResolutionResult> resolveCache) {
+        List<String> reasons = new ArrayList<>();
+        if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
+            reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
+        }
+        if (!changedManagedDepGAs.isEmpty()) {
+            String depScope = getChangedTransitiveDependencyScope(project, session, changedManagedDepGAs, resolveCache);
+            if (depScope != null) {
+                if ("test".equals(depScope)) {
+                    reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
+                } else {
+                    reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
+                }
+            }
+        }
+        return reasons;
     }
 
     private void applySkipTests(
@@ -787,6 +784,20 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 logger.warn("Scalpel: Malformed downstreamArgs entry '{}', expected key=value format", arg);
             }
         }
+    }
+
+    private boolean matchesForceBuild(MavenProject project, List<String> patterns) {
+        for (String pattern : patterns) {
+            try {
+                if (project.getArtifactId().matches(pattern)) {
+                    logger.debug("Scalpel: Force-including module {} (matches {})", key(project), pattern);
+                    return true;
+                }
+            } catch (PatternSyntaxException e) {
+                logger.warn("Scalpel: Invalid regex pattern '{}' in forceBuildModules: {}", pattern, e.getMessage());
+            }
+        }
+        return false;
     }
 
     private void skipTestsOnAll(List<MavenProject> projects) {

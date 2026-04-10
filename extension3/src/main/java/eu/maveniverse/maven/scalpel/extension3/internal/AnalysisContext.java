@@ -30,29 +30,31 @@ final class AnalysisContext {
     final Map<MavenProject, List<String>> transitivelyAffected;
     final TrimResult trimResult;
 
-    AnalysisContext(
+    private AnalysisContext(Builder builder) {
+        this.changedFiles = builder.changedFiles;
+        this.changedProperties = builder.changedProperties;
+        this.changedManagedDepGAs = builder.changedManagedDepGAs;
+        this.changedManagedPluginGAs = builder.changedManagedPluginGAs;
+        this.directlyAffected = builder.directlyAffected;
+        this.affectedBySource = builder.affectedBySource;
+        this.testOnlyBySource = builder.testOnlyBySource;
+        this.affectedByPom = builder.affectedByPom;
+        this.forceIncluded = builder.forceIncluded;
+        this.transitivelyAffected = builder.transitivelyAffected;
+        this.trimResult = builder.trimResult;
+    }
+
+    static Builder builder(
             Set<String> changedFiles,
             Set<String> changedProperties,
             Set<String> changedManagedDepGAs,
-            Set<String> changedManagedPluginGAs,
-            Set<MavenProject> directlyAffected,
-            Set<MavenProject> affectedBySource,
-            Set<MavenProject> testOnlyBySource,
-            Set<MavenProject> affectedByPom,
-            Set<MavenProject> forceIncluded,
-            Map<MavenProject, List<String>> transitivelyAffected,
-            TrimResult trimResult) {
-        this.changedFiles = changedFiles;
-        this.changedProperties = changedProperties;
-        this.changedManagedDepGAs = changedManagedDepGAs;
-        this.changedManagedPluginGAs = changedManagedPluginGAs;
-        this.directlyAffected = directlyAffected;
-        this.affectedBySource = affectedBySource;
-        this.testOnlyBySource = testOnlyBySource;
-        this.affectedByPom = affectedByPom;
-        this.forceIncluded = forceIncluded;
-        this.transitivelyAffected = transitivelyAffected;
-        this.trimResult = trimResult;
+            Set<String> changedManagedPluginGAs) {
+        Builder b = new Builder();
+        b.changedFiles = changedFiles;
+        b.changedProperties = changedProperties;
+        b.changedManagedDepGAs = changedManagedDepGAs;
+        b.changedManagedPluginGAs = changedManagedPluginGAs;
+        return b;
     }
 
     static AnalysisContext empty(
@@ -60,17 +62,63 @@ final class AnalysisContext {
             Set<String> changedProperties,
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs) {
-        return new AnalysisContext(
-                changedFiles,
-                changedProperties,
-                changedManagedDepGAs,
-                changedManagedPluginGAs,
-                Collections.<MavenProject>emptySet(),
-                Collections.<MavenProject>emptySet(),
-                Collections.<MavenProject>emptySet(),
-                Collections.<MavenProject>emptySet(),
-                Collections.<MavenProject>emptySet(),
-                Collections.<MavenProject, List<String>>emptyMap(),
-                null);
+        return builder(changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
+                .build();
+    }
+
+    static final class Builder {
+        private Set<String> changedFiles;
+        private Set<String> changedProperties;
+        private Set<String> changedManagedDepGAs;
+        private Set<String> changedManagedPluginGAs;
+        private Set<MavenProject> directlyAffected = Collections.<MavenProject>emptySet();
+        private Set<MavenProject> affectedBySource = Collections.<MavenProject>emptySet();
+        private Set<MavenProject> testOnlyBySource = Collections.<MavenProject>emptySet();
+        private Set<MavenProject> affectedByPom = Collections.<MavenProject>emptySet();
+        private Set<MavenProject> forceIncluded = Collections.<MavenProject>emptySet();
+        private Map<MavenProject, List<String>> transitivelyAffected =
+                Collections.<MavenProject, List<String>>emptyMap();
+        private TrimResult trimResult;
+
+        private Builder() {}
+
+        Builder directlyAffected(Set<MavenProject> directlyAffected) {
+            this.directlyAffected = directlyAffected;
+            return this;
+        }
+
+        Builder affectedBySource(Set<MavenProject> affectedBySource) {
+            this.affectedBySource = affectedBySource;
+            return this;
+        }
+
+        Builder testOnlyBySource(Set<MavenProject> testOnlyBySource) {
+            this.testOnlyBySource = testOnlyBySource;
+            return this;
+        }
+
+        Builder affectedByPom(Set<MavenProject> affectedByPom) {
+            this.affectedByPom = affectedByPom;
+            return this;
+        }
+
+        Builder forceIncluded(Set<MavenProject> forceIncluded) {
+            this.forceIncluded = forceIncluded;
+            return this;
+        }
+
+        Builder transitivelyAffected(Map<MavenProject, List<String>> transitivelyAffected) {
+            this.transitivelyAffected = transitivelyAffected;
+            return this;
+        }
+
+        Builder trimResult(TrimResult trimResult) {
+            this.trimResult = trimResult;
+            return this;
+        }
+
+        AnalysisContext build() {
+            return new AnalysisContext(this);
+        }
     }
 }

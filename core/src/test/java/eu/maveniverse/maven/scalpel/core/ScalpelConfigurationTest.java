@@ -387,7 +387,8 @@ class ScalpelConfigurationTest {
     void invalidMode_throwsException() {
         Properties sys = new Properties();
         sys.setProperty("scalpel.mode", "invalid");
-        assertThrows(IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, new Properties()));
+        Properties user = new Properties();
+        assertThrows(IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, user));
     }
 
     @Test

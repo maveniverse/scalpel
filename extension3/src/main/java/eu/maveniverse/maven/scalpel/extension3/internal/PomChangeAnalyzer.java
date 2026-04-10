@@ -1065,7 +1065,8 @@ class PomChangeAnalyzer {
                         try {
                             long size = Files.size(entry);
                             if (size > MAX_RESOURCE_FILE_SIZE) {
-                                continue; // Skip large files (likely binaries)
+                                // Conservative: treat oversized files as potentially affected
+                                return true;
                             }
                             String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
                             for (String ref : refs) {
