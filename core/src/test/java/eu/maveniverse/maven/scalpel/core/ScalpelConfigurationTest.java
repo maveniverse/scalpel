@@ -10,6 +10,7 @@ package eu.maveniverse.maven.scalpel.core;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
@@ -378,16 +379,41 @@ class ScalpelConfigurationTest {
         assertFalse(config.isFailSafe());
     }
 
+    // ---------------------------------------------------------------
+    // Mode validation
+    // ---------------------------------------------------------------
+
     @Test
-    void listField_preservesWhitespaceInValues() {
+    void invalidMode_throwsException() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.mode", "invalid");
+        Properties user = new Properties();
+        assertThrows(IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, user));
+    }
+
+    @Test
+    void validModes_accepted() {
+        for (String mode : new String[] {"trim", "skip-tests", "report"}) {
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.mode", mode);
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+            assertEquals(mode, config.getMode());
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Whitespace trimming
+    // ---------------------------------------------------------------
+
+    @Test
+    void listField_trimsWhitespaceInValues() {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableOnBranch", "main, release/.*,hotfix");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
         List<String> list = config.getDisableOnBranch();
         assertEquals(3, list.size());
         assertEquals("main", list.get(0));
-        // note: trimming happens in ScalpelLifecycleParticipant, not configuration
-        assertEquals(" release/.*", list.get(1));
+        assertEquals("release/.*", list.get(1));
         assertEquals("hotfix", list.get(2));
     }
 }

@@ -9,6 +9,7 @@ package eu.maveniverse.maven.scalpel.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -318,6 +319,82 @@ class ScalpelReportTest {
         assertTrue(json.contains("\"sourceSet\": \"main\""));
         assertTrue(json.contains("\"testsSkippedReason\": \"EXCLUDED_DOWNSTREAM\""));
         assertTrue(json.contains("\"category\": \"DOWNSTREAM\""));
+    }
+
+    // ---------------------------------------------------------------
+    // ModuleBuilder tests
+    // ---------------------------------------------------------------
+
+    @Test
+    void moduleBuilder_minimalBuild() {
+        ScalpelReport.AffectedModule module = ScalpelReport.AffectedModule.moduleBuilder(
+                        "com.example", "module-a", "module-a", Collections.singletonList("SOURCE_CHANGE"))
+                .build();
+
+        assertEquals("com.example", module.getGroupId());
+        assertEquals("module-a", module.getArtifactId());
+        assertEquals("module-a", module.getPath());
+        assertEquals(Collections.singletonList("SOURCE_CHANGE"), module.getReasons());
+        assertNull(module.getCategory());
+        assertNull(module.getSourceSet());
+        assertNull(module.getTestsSkippedReason());
+    }
+
+    @Test
+    void moduleBuilder_allFieldsSet() {
+        ScalpelReport.AffectedModule module = ScalpelReport.AffectedModule.moduleBuilder(
+                        "com.example",
+                        "module-b",
+                        "path/module-b",
+                        Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT))
+                .category(ScalpelReport.CATEGORY_DOWNSTREAM)
+                .sourceSet("main")
+                .testsSkippedReason(ScalpelReport.REASON_EXCLUDED_DOWNSTREAM)
+                .build();
+
+        assertEquals("com.example", module.getGroupId());
+        assertEquals("module-b", module.getArtifactId());
+        assertEquals("path/module-b", module.getPath());
+        assertEquals(ScalpelReport.CATEGORY_DOWNSTREAM, module.getCategory());
+        assertEquals("main", module.getSourceSet());
+        assertEquals(ScalpelReport.REASON_EXCLUDED_DOWNSTREAM, module.getTestsSkippedReason());
+    }
+
+    @Test
+    void moduleBuilder_producesCorrectJson() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Collections.singleton("module-a/src/Foo.java"))
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example",
+                                "module-a",
+                                "module-a",
+                                Collections.singletonList(ScalpelReport.REASON_SOURCE_CHANGE))
+                        .category(ScalpelReport.CATEGORY_DIRECT)
+                        .sourceSet("main")
+                        .build())
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"SOURCE_CHANGE\""));
+        assertTrue(json.contains("\"category\": \"DIRECT\""));
+        assertTrue(json.contains("\"sourceSet\": \"main\""));
+    }
+
+    @Test
+    void moduleBuilder_categoryOnly() {
+        ScalpelReport.AffectedModule module = ScalpelReport.AffectedModule.moduleBuilder(
+                        "com.example",
+                        "module-a",
+                        "module-a",
+                        Collections.singletonList(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY))
+                .category(ScalpelReport.CATEGORY_UPSTREAM)
+                .build();
+
+        assertEquals(ScalpelReport.CATEGORY_UPSTREAM, module.getCategory());
+        assertNull(module.getSourceSet());
+        assertNull(module.getTestsSkippedReason());
     }
 
     @Test

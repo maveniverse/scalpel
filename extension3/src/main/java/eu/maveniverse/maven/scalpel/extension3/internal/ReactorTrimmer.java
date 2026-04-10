@@ -7,6 +7,9 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
+import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
+import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.keys;
+
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -131,17 +134,5 @@ class ReactorTrimmer {
             }
         }
         return null; // transitive dependency
-    }
-
-    private static String key(MavenProject project) {
-        return project.getGroupId() + ":" + project.getArtifactId();
-    }
-
-    private static List<String> keys(List<MavenProject> projects) {
-        List<String> keys = new ArrayList<>();
-        for (MavenProject project : projects) {
-            keys.add(key(project));
-        }
-        return keys;
     }
 }

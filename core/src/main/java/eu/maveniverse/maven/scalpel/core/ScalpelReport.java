@@ -135,6 +135,47 @@ public final class ScalpelReport {
         public String getTestsSkippedReason() {
             return testsSkippedReason;
         }
+
+        public static ModuleBuilder moduleBuilder(
+                String groupId, String artifactId, String path, List<String> reasons) {
+            return new ModuleBuilder(groupId, artifactId, path, reasons);
+        }
+
+        public static class ModuleBuilder {
+            private final String groupId;
+            private final String artifactId;
+            private final String path;
+            private final List<String> reasons;
+            private String category;
+            private String sourceSet;
+            private String testsSkippedReason;
+
+            ModuleBuilder(String groupId, String artifactId, String path, List<String> reasons) {
+                this.groupId = groupId;
+                this.artifactId = artifactId;
+                this.path = path;
+                this.reasons = reasons;
+            }
+
+            public ModuleBuilder category(String category) {
+                this.category = category;
+                return this;
+            }
+
+            public ModuleBuilder sourceSet(String sourceSet) {
+                this.sourceSet = sourceSet;
+                return this;
+            }
+
+            public ModuleBuilder testsSkippedReason(String testsSkippedReason) {
+                this.testsSkippedReason = testsSkippedReason;
+                return this;
+            }
+
+            public AffectedModule build() {
+                return new AffectedModule(groupId, artifactId, path, reasons, category, sourceSet, testsSkippedReason);
+            }
+        }
     }
 
     public String toJson() {
