@@ -10,6 +10,7 @@ package eu.maveniverse.maven.scalpel.core;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Arrays;
@@ -377,6 +378,31 @@ class ScalpelConfigurationTest {
         assertEquals("skip-tests", config.getMode());
         assertFalse(config.isFailSafe());
     }
+
+    // ---------------------------------------------------------------
+    // Mode validation
+    // ---------------------------------------------------------------
+
+    @Test
+    void invalidMode_throwsException() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.mode", "invalid");
+        assertThrows(IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, new Properties()));
+    }
+
+    @Test
+    void validModes_accepted() {
+        for (String mode : new String[] {"trim", "skip-tests", "report"}) {
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.mode", mode);
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+            assertEquals(mode, config.getMode());
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Whitespace trimming
+    // ---------------------------------------------------------------
 
     @Test
     void listField_trimsWhitespaceInValues() {

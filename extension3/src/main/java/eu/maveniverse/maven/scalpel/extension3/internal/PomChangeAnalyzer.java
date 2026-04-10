@@ -512,7 +512,9 @@ class PomChangeAnalyzer {
         for (Map.Entry<String, Dependency> e : oldMap.entrySet()) {
             Dependency newDep = newMap.get(e.getKey());
             if (newDep == null || !equalDependency(e.getValue(), newDep)) {
-                // Report the GA (not the full key) for downstream matching
+                // Report at GA level: downstream module matching resolves dependencies by GA,
+                // so any change to a managed GA (regardless of classifier/type variant) should
+                // flag all modules depending on that GA.
                 changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
             }
         }

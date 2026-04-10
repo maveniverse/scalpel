@@ -29,6 +29,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.PatternSyntaxException;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -219,11 +220,18 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         continue;
                     }
                     for (String pattern : config.getForceBuildModules()) {
-                        if (project.getArtifactId().matches(pattern)) {
-                            directlyAffected.add(project);
-                            forceIncluded.add(project);
-                            logger.debug("Scalpel: Force-including module {} (matches {})", key(project), pattern);
-                            break;
+                        try {
+                            if (project.getArtifactId().matches(pattern)) {
+                                directlyAffected.add(project);
+                                forceIncluded.add(project);
+                                logger.debug("Scalpel: Force-including module {} (matches {})", key(project), pattern);
+                                break;
+                            }
+                        } catch (PatternSyntaxException e) {
+                            logger.warn(
+                                    "Scalpel: Invalid regex pattern '{}' in forceBuildModules: {}",
+                                    pattern,
+                                    e.getMessage());
                         }
                     }
                 }

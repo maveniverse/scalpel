@@ -9,6 +9,7 @@ package eu.maveniverse.maven.scalpel.core;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -126,11 +127,11 @@ public class GitChangeDetector {
         }
 
         public Set<String> getUncommitted() {
-            return uncommitted;
+            return Collections.unmodifiableSet(uncommitted);
         }
 
         public Set<String> getUntracked() {
-            return untracked;
+            return Collections.unmodifiableSet(untracked);
         }
     }
 
