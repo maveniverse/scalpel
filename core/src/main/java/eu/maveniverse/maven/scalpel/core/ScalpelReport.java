@@ -66,17 +66,32 @@ public final class ScalpelReport {
         private final String path;
         private final List<String> reasons;
         private final String category;
+        private final String sourceSet;
 
         public AffectedModule(String groupId, String artifactId, String path, List<String> reasons) {
-            this(groupId, artifactId, path, reasons, null);
+            this(groupId, artifactId, path, reasons, null, null);
         }
 
         public AffectedModule(String groupId, String artifactId, String path, List<String> reasons, String category) {
+            this(groupId, artifactId, path, reasons, category, null);
+        }
+
+        public AffectedModule(
+                String groupId,
+                String artifactId,
+                String path,
+                List<String> reasons,
+                String category,
+                String sourceSet) {
+            if (sourceSet != null && !"main".equals(sourceSet) && !"test".equals(sourceSet)) {
+                throw new IllegalArgumentException("sourceSet must be 'main', 'test', or null");
+            }
             this.groupId = groupId;
             this.artifactId = artifactId;
             this.path = path;
             this.reasons = reasons;
             this.category = category;
+            this.sourceSet = sourceSet;
         }
 
         public String getGroupId() {
@@ -97,6 +112,10 @@ public final class ScalpelReport {
 
         public String getCategory() {
             return category;
+        }
+
+        public String getSourceSet() {
+            return sourceSet;
         }
     }
 
@@ -136,12 +155,13 @@ public final class ScalpelReport {
                 sb.append("      \"reasons\": ").append(jsonStringArray(m.reasons));
                 if (m.category != null) {
                     sb.append(",\n");
-                    sb.append("      \"category\": ")
-                            .append(jsonString(m.category))
-                            .append("\n");
-                } else {
-                    sb.append("\n");
+                    sb.append("      \"category\": ").append(jsonString(m.category));
                 }
+                if (m.sourceSet != null) {
+                    sb.append(",\n");
+                    sb.append("      \"sourceSet\": ").append(jsonString(m.sourceSet));
+                }
+                sb.append("\n");
                 sb.append("    }");
                 if (i < affectedModules.size() - 1) {
                     sb.append(",");
