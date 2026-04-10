@@ -630,10 +630,7 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasReason(json, "module-b", "DOWNSTREAM_TEST"),
                 "module-b should have DOWNSTREAM_TEST (test-scoped downstream of module-a)");
         assertFalse(
-                moduleHasSourceSet(json, "module-b", "main"),
-                "module-b should NOT have sourceSet (downstream, not direct source change)");
-        assertFalse(
-                moduleHasSourceSet(json, "module-b", "test"),
+                moduleHasAnySourceSet(json, "module-b"),
                 "module-b should NOT have sourceSet (downstream, not direct source change)");
     }
 
@@ -910,6 +907,21 @@ class ScalpelLifecycleParticipantTest {
         }
         String block = json.substring(start, end + 1);
         return block.contains("\"" + reason + "\"");
+    }
+
+    private boolean moduleHasAnySourceSet(String json, String artifactId) {
+        String marker = "\"artifactId\": \"" + artifactId + "\"";
+        int idx = json.indexOf(marker);
+        if (idx < 0) {
+            return false;
+        }
+        int start = json.lastIndexOf("{", idx);
+        int end = json.indexOf("}", idx);
+        if (start < 0 || end < 0) {
+            return false;
+        }
+        String block = json.substring(start, end + 1);
+        return block.contains("\"sourceSet\":");
     }
 
     private boolean moduleHasSourceSet(String json, String artifactId, String sourceSet) {

@@ -83,6 +83,9 @@ public final class ScalpelReport {
                 List<String> reasons,
                 String category,
                 String sourceSet) {
+            if (sourceSet != null && !"main".equals(sourceSet) && !"test".equals(sourceSet)) {
+                throw new IllegalArgumentException("sourceSet must be 'main', 'test', or null");
+            }
             this.groupId = groupId;
             this.artifactId = artifactId;
             this.path = path;
