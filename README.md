@@ -356,6 +356,9 @@ aspects are compared:
 * Dependencies and dependency management
 * Properties
 * Build configuration (plugins, plugin management, plugin executions)
+* Source directories (`sourceDirectory`, `testSourceDirectory`, `scriptSourceDirectory`)
+* Resource and test resource configuration (directory, targetPath, includes, excludes, filtering)
+* Repositories and plugin repositories (id, url, layout, snapshot/release policies)
 * Active profile sections (properties, dependencies, plugins within active profiles)
 
 This means cosmetic POM changes (reformatting, reordering, adding comments) won't trigger unnecessary

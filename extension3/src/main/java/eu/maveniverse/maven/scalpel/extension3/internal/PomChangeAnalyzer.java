@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -30,6 +31,8 @@ import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.model.PluginExecution;
 import org.apache.maven.model.Profile;
+import org.apache.maven.model.Repository;
+import org.apache.maven.model.RepositoryPolicy;
 import org.apache.maven.model.Resource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
 import org.apache.maven.project.MavenProject;
@@ -193,6 +196,30 @@ class PomChangeAnalyzer {
         // Check direct plugins (not managed)
         if (!equalPluginLists(getPlugins(oldModel), getPlugins(newModel))) {
             logger.debug("Direct plugins changed in {}", key(parentProject));
+            parentSelfAffected = true;
+        }
+
+        // Check source directories
+        if (!equalSourceDirectories(oldModel, newModel)) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Source directories changed in {}", key(parentProject));
+            }
+            parentSelfAffected = true;
+        }
+
+        // Check repositories
+        if (!equalRepositoryLists(safeRepositories(oldModel), safeRepositories(newModel))) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Repositories changed in {}", key(parentProject));
+            }
+            parentSelfAffected = true;
+        }
+
+        // Check plugin repositories
+        if (!equalRepositoryLists(safePluginRepositories(oldModel), safePluginRepositories(newModel))) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Plugin repositories changed in {}", key(parentProject));
+            }
             parentSelfAffected = true;
         }
 
@@ -640,6 +667,120 @@ class PomChangeAnalyzer {
             }
         }
         return mapA.isEmpty();
+    }
+
+    private boolean equalSourceDirectories(Model oldModel, Model newModel) {
+        return Objects.equals(getSourceDirectory(oldModel), getSourceDirectory(newModel))
+                && Objects.equals(getTestSourceDirectory(oldModel), getTestSourceDirectory(newModel))
+                && Objects.equals(getScriptSourceDirectory(oldModel), getScriptSourceDirectory(newModel))
+                && equalResourceLists(getResourcesList(oldModel), getResourcesList(newModel))
+                && equalResourceLists(getTestResourcesList(oldModel), getTestResourcesList(newModel));
+    }
+
+    private String getSourceDirectory(Model model) {
+        return model.getBuild() != null ? model.getBuild().getSourceDirectory() : null;
+    }
+
+    private String getTestSourceDirectory(Model model) {
+        return model.getBuild() != null ? model.getBuild().getTestSourceDirectory() : null;
+    }
+
+    private String getScriptSourceDirectory(Model model) {
+        return model.getBuild() != null ? model.getBuild().getScriptSourceDirectory() : null;
+    }
+
+    private List<Resource> getResourcesList(Model model) {
+        if (model.getBuild() != null && model.getBuild().getResources() != null) {
+            return model.getBuild().getResources();
+        }
+        return Collections.<Resource>emptyList();
+    }
+
+    private List<Resource> getTestResourcesList(Model model) {
+        if (model.getBuild() != null && model.getBuild().getTestResources() != null) {
+            return model.getBuild().getTestResources();
+        }
+        return Collections.<Resource>emptyList();
+    }
+
+    private boolean equalResourceLists(List<Resource> a, List<Resource> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int i = 0; i < a.size(); i++) {
+            if (!equalResource(a.get(i), b.get(i))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private boolean equalResource(Resource a, Resource b) {
+        return Objects.equals(a.getDirectory(), b.getDirectory())
+                && Objects.equals(a.getTargetPath(), b.getTargetPath())
+                && equalStringListsUnordered(a.getIncludes(), b.getIncludes())
+                && equalStringListsUnordered(a.getExcludes(), b.getExcludes())
+                && a.isFiltering() == b.isFiltering();
+    }
+
+    private boolean equalStringListsUnordered(List<String> a, List<String> b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        if (a.size() != b.size()) {
+            return false;
+        }
+        return new HashSet<>(a).equals(new HashSet<>(b));
+    }
+
+    private boolean equalRepositoryLists(List<Repository> a, List<Repository> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        Map<String, Repository> mapA = new LinkedHashMap<>();
+        for (Repository repo : a) {
+            mapA.put(repo.getId(), repo);
+        }
+        for (Repository repo : b) {
+            Repository other = mapA.remove(repo.getId());
+            if (other == null || !equalRepository(other, repo)) {
+                return false;
+            }
+        }
+        return mapA.isEmpty();
+    }
+
+    private boolean equalRepository(Repository a, Repository b) {
+        return Objects.equals(a.getId(), b.getId())
+                && Objects.equals(a.getUrl(), b.getUrl())
+                && Objects.equals(a.getLayout(), b.getLayout())
+                && equalRepositoryPolicy(a.getReleases(), b.getReleases())
+                && equalRepositoryPolicy(a.getSnapshots(), b.getSnapshots());
+    }
+
+    private boolean equalRepositoryPolicy(RepositoryPolicy a, RepositoryPolicy b) {
+        if (a == b) {
+            return true;
+        }
+        if (a == null || b == null) {
+            return false;
+        }
+        return Objects.equals(a.isEnabled(), b.isEnabled())
+                && Objects.equals(a.getUpdatePolicy(), b.getUpdatePolicy())
+                && Objects.equals(a.getChecksumPolicy(), b.getChecksumPolicy());
+    }
+
+    private List<Repository> safeRepositories(Model model) {
+        List<Repository> repos = model.getRepositories();
+        return repos != null ? repos : Collections.<Repository>emptyList();
+    }
+
+    private List<Repository> safePluginRepositories(Model model) {
+        List<Repository> repos = model.getPluginRepositories();
+        return repos != null ? repos : Collections.<Repository>emptyList();
     }
 
     private List<Plugin> getPlugins(Model model) {
