@@ -33,6 +33,7 @@ public final class ScalpelConfiguration {
     public static final String DISABLE_ON_SELECTED_PROJECTS = PREFIX + "disableOnSelectedProjects";
 
     public static final String SKIP_TESTS_FOR_UPSTREAM = PREFIX + "skipTestsForUpstream";
+    public static final String SKIP_TESTS_FOR_DOWNSTREAM_MODULES = PREFIX + "skipTestsForDownstreamModules";
     public static final String UPSTREAM_ARGS = PREFIX + "upstreamArgs";
     public static final String DOWNSTREAM_ARGS = PREFIX + "downstreamArgs";
 
@@ -66,6 +67,7 @@ public final class ScalpelConfiguration {
     private final boolean disableOnSelectedProjects;
     private final boolean fetchBaseBranch;
     private final boolean skipTestsForUpstream;
+    private final List<String> skipTestsForDownstreamModules;
     private final List<String> upstreamArgs;
     private final List<String> downstreamArgs;
     private final boolean uncommitted;
@@ -91,6 +93,7 @@ public final class ScalpelConfiguration {
             boolean disableOnSelectedProjects,
             boolean fetchBaseBranch,
             boolean skipTestsForUpstream,
+            List<String> skipTestsForDownstreamModules,
             List<String> upstreamArgs,
             List<String> downstreamArgs,
             boolean uncommitted,
@@ -114,6 +117,7 @@ public final class ScalpelConfiguration {
         this.disableOnSelectedProjects = disableOnSelectedProjects;
         this.fetchBaseBranch = fetchBaseBranch;
         this.skipTestsForUpstream = skipTestsForUpstream;
+        this.skipTestsForDownstreamModules = skipTestsForDownstreamModules;
         this.upstreamArgs = upstreamArgs;
         this.downstreamArgs = downstreamArgs;
         this.uncommitted = uncommitted;
@@ -145,6 +149,8 @@ public final class ScalpelConfiguration {
                 Boolean.parseBoolean(resolve(system, user, DISABLE_ON_SELECTED_PROJECTS, "false"));
         boolean fetchBaseBranch = Boolean.parseBoolean(resolve(system, user, FETCH_BASE_BRANCH, "false"));
         boolean skipTestsForUpstream = Boolean.parseBoolean(resolve(system, user, SKIP_TESTS_FOR_UPSTREAM, "false"));
+        List<String> skipTestsForDownstreamModules =
+                parseList(resolve(system, user, SKIP_TESTS_FOR_DOWNSTREAM_MODULES, null));
         List<String> upstreamArgs = parseList(resolve(system, user, UPSTREAM_ARGS, null));
         List<String> downstreamArgs = parseList(resolve(system, user, DOWNSTREAM_ARGS, null));
         boolean uncommitted = Boolean.parseBoolean(resolve(system, user, UNCOMMITTED, "false"));
@@ -170,6 +176,7 @@ public final class ScalpelConfiguration {
                 disableOnSelectedProjects,
                 fetchBaseBranch,
                 skipTestsForUpstream,
+                skipTestsForDownstreamModules,
                 upstreamArgs,
                 downstreamArgs,
                 uncommitted,
@@ -272,6 +279,10 @@ public final class ScalpelConfiguration {
         return skipTestsForUpstream;
     }
 
+    public List<String> getSkipTestsForDownstreamModules() {
+        return skipTestsForDownstreamModules;
+    }
+
     public List<String> getUpstreamArgs() {
         return upstreamArgs;
     }
@@ -341,6 +352,7 @@ public final class ScalpelConfiguration {
                 + ", disableOnSelectedProjects=" + disableOnSelectedProjects
                 + ", fetchBaseBranch=" + fetchBaseBranch
                 + ", skipTestsForUpstream=" + skipTestsForUpstream
+                + ", skipTestsForDownstreamModules=" + skipTestsForDownstreamModules
                 + ", upstreamArgs=" + upstreamArgs
                 + ", downstreamArgs=" + downstreamArgs
                 + ", uncommitted=" + uncommitted

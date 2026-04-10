@@ -408,6 +408,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 // Skip tests on upstream-only modules if configured
                 project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
                 skippedProjects.add(project);
+            } else if (!config.getSkipTestsForDownstreamModules().isEmpty()
+                    && (trimResult.getDownstreamOnly().contains(project)
+                            || trimResult.getDownstreamTestOnly().contains(project))
+                    && matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
+                // Skip tests on excluded downstream modules
+                project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
+                skippedProjects.add(project);
+                logger.debug("Scalpel: Skipping tests on excluded downstream module {}", key(project));
             } else {
                 // Downstream modules run tests by default
                 testProjects.add(project);
@@ -454,6 +462,22 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (changedPluginGAs.contains(ga)) {
                 logger.debug("Module {} uses changed managed plugin {}", key(project), ga);
                 return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean matchesDownstreamExclusion(MavenProject project, List<String> patterns) {
+        for (String pattern : patterns) {
+            String trimmed = pattern.trim();
+            if (trimmed.contains(":")) {
+                if (key(project).equals(trimmed)) {
+                    return true;
+                }
+            } else {
+                if (project.getArtifactId().equals(trimmed)) {
+                    return true;
+                }
             }
         }
         return false;
@@ -593,15 +617,25 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenProject project = entry.getKey();
             String path = relativePath(reactorRoot, project);
             String category = null;
+            String testsSkippedReason = null;
             if (trimResult != null) {
                 if (trimResult.getUpstreamOnly().contains(project)) {
                     category = ScalpelReport.CATEGORY_UPSTREAM;
                 } else if (trimResult.getDownstreamOnly().contains(project)) {
                     category = ScalpelReport.CATEGORY_DOWNSTREAM;
+                    if (matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
+                        testsSkippedReason = ScalpelReport.REASON_EXCLUDED_DOWNSTREAM;
+                    }
                 }
             }
             builder.addAffectedModule(new ScalpelReport.AffectedModule(
-                    project.getGroupId(), project.getArtifactId(), path, entry.getValue(), category));
+                    project.getGroupId(),
+                    project.getArtifactId(),
+                    path,
+                    entry.getValue(),
+                    category,
+                    null,
+                    testsSkippedReason));
         }
 
         // Add upstream/downstream modules from trimResult that aren't already covered
@@ -620,23 +654,35 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             for (MavenProject project : trimResult.getDownstreamOnly()) {
                 if (!directlyAffected.contains(project) && !transitivelyAffected.containsKey(project)) {
                     String path = relativePath(reactorRoot, project);
+                    String testsSkippedReason =
+                            matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())
+                                    ? ScalpelReport.REASON_EXCLUDED_DOWNSTREAM
+                                    : null;
                     builder.addAffectedModule(new ScalpelReport.AffectedModule(
                             project.getGroupId(),
                             project.getArtifactId(),
                             path,
                             Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT),
-                            ScalpelReport.CATEGORY_DOWNSTREAM));
+                            ScalpelReport.CATEGORY_DOWNSTREAM,
+                            null,
+                            testsSkippedReason));
                 }
             }
             for (MavenProject project : trimResult.getDownstreamTestOnly()) {
                 if (!directlyAffected.contains(project) && !transitivelyAffected.containsKey(project)) {
                     String path = relativePath(reactorRoot, project);
+                    String testsSkippedReason =
+                            matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())
+                                    ? ScalpelReport.REASON_EXCLUDED_DOWNSTREAM
+                                    : null;
                     builder.addAffectedModule(new ScalpelReport.AffectedModule(
                             project.getGroupId(),
                             project.getArtifactId(),
                             path,
                             Collections.singletonList(ScalpelReport.REASON_DOWNSTREAM_TEST),
-                            ScalpelReport.CATEGORY_DOWNSTREAM));
+                            ScalpelReport.CATEGORY_DOWNSTREAM,
+                            null,
+                            testsSkippedReason));
                 }
             }
         }
