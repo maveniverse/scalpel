@@ -27,6 +27,7 @@ public final class ScalpelReport {
     public static final String REASON_TEST_CHANGE = "TEST_CHANGE";
     public static final String REASON_DOWNSTREAM_TEST = "DOWNSTREAM_TEST";
     public static final String REASON_TRANSITIVE_DEPENDENCY_TEST = "TRANSITIVE_DEPENDENCY_TEST";
+    public static final String REASON_EXCLUDED_DOWNSTREAM = "EXCLUDED_DOWNSTREAM";
 
     public static final String CATEGORY_DIRECT = "DIRECT";
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";
@@ -67,13 +68,14 @@ public final class ScalpelReport {
         private final List<String> reasons;
         private final String category;
         private final String sourceSet;
+        private final String testsSkippedReason;
 
         public AffectedModule(String groupId, String artifactId, String path, List<String> reasons) {
-            this(groupId, artifactId, path, reasons, null, null);
+            this(groupId, artifactId, path, reasons, null, null, null);
         }
 
         public AffectedModule(String groupId, String artifactId, String path, List<String> reasons, String category) {
-            this(groupId, artifactId, path, reasons, category, null);
+            this(groupId, artifactId, path, reasons, category, null, null);
         }
 
         public AffectedModule(
@@ -83,6 +85,17 @@ public final class ScalpelReport {
                 List<String> reasons,
                 String category,
                 String sourceSet) {
+            this(groupId, artifactId, path, reasons, category, sourceSet, null);
+        }
+
+        public AffectedModule(
+                String groupId,
+                String artifactId,
+                String path,
+                List<String> reasons,
+                String category,
+                String sourceSet,
+                String testsSkippedReason) {
             if (sourceSet != null && !"main".equals(sourceSet) && !"test".equals(sourceSet)) {
                 throw new IllegalArgumentException("sourceSet must be 'main', 'test', or null");
             }
@@ -92,6 +105,7 @@ public final class ScalpelReport {
             this.reasons = reasons;
             this.category = category;
             this.sourceSet = sourceSet;
+            this.testsSkippedReason = testsSkippedReason;
         }
 
         public String getGroupId() {
@@ -116,6 +130,10 @@ public final class ScalpelReport {
 
         public String getSourceSet() {
             return sourceSet;
+        }
+
+        public String getTestsSkippedReason() {
+            return testsSkippedReason;
         }
     }
 
@@ -145,24 +163,7 @@ public final class ScalpelReport {
         } else {
             sb.append("[\n");
             for (int i = 0; i < affectedModules.size(); i++) {
-                AffectedModule m = affectedModules.get(i);
-                sb.append("    {\n");
-                sb.append("      \"groupId\": ").append(jsonString(m.groupId)).append(",\n");
-                sb.append("      \"artifactId\": ")
-                        .append(jsonString(m.artifactId))
-                        .append(",\n");
-                sb.append("      \"path\": ").append(jsonString(m.path)).append(",\n");
-                sb.append("      \"reasons\": ").append(jsonStringArray(m.reasons));
-                if (m.category != null) {
-                    sb.append(",\n");
-                    sb.append("      \"category\": ").append(jsonString(m.category));
-                }
-                if (m.sourceSet != null) {
-                    sb.append(",\n");
-                    sb.append("      \"sourceSet\": ").append(jsonString(m.sourceSet));
-                }
-                sb.append("\n");
-                sb.append("    }");
+                appendModuleJson(sb, affectedModules.get(i));
                 if (i < affectedModules.size() - 1) {
                     sb.append(",");
                 }
@@ -172,6 +173,26 @@ public final class ScalpelReport {
         }
         sb.append("\n}\n");
         return sb.toString();
+    }
+
+    private static void appendModuleJson(StringBuilder sb, AffectedModule m) {
+        sb.append("    {\n");
+        sb.append("      \"groupId\": ").append(jsonString(m.groupId)).append(",\n");
+        sb.append("      \"artifactId\": ").append(jsonString(m.artifactId)).append(",\n");
+        sb.append("      \"path\": ").append(jsonString(m.path)).append(",\n");
+        sb.append("      \"reasons\": ").append(jsonStringArray(m.reasons));
+        appendOptionalField(sb, "category", m.category);
+        appendOptionalField(sb, "sourceSet", m.sourceSet);
+        appendOptionalField(sb, "testsSkippedReason", m.testsSkippedReason);
+        sb.append("\n");
+        sb.append("    }");
+    }
+
+    private static void appendOptionalField(StringBuilder sb, String name, String value) {
+        if (value != null) {
+            sb.append(",\n");
+            sb.append("      \"").append(name).append("\": ").append(jsonString(value));
+        }
     }
 
     public void writeToFile(Path reactorRoot, String reportFile) throws IOException {
