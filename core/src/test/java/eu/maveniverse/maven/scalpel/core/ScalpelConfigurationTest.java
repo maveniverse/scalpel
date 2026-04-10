@@ -379,15 +379,14 @@ class ScalpelConfigurationTest {
     }
 
     @Test
-    void listField_preservesWhitespaceInValues() {
+    void listField_trimsWhitespaceInValues() {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableOnBranch", "main, release/.*,hotfix");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
         List<String> list = config.getDisableOnBranch();
         assertEquals(3, list.size());
         assertEquals("main", list.get(0));
-        // note: trimming happens in ScalpelLifecycleParticipant, not configuration
-        assertEquals(" release/.*", list.get(1));
+        assertEquals("release/.*", list.get(1));
         assertEquals("hotfix", list.get(2));
     }
 }
