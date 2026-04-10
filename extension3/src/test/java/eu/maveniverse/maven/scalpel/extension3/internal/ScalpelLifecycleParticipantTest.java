@@ -19,6 +19,7 @@ import static org.mockito.Mockito.when;
 
 import eu.maveniverse.maven.scalpel.core.ChangeDetectionResult;
 import eu.maveniverse.maven.scalpel.core.ScalpelCore;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -38,6 +39,7 @@ import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
+import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
 import org.apache.maven.project.DependencyResolutionResult;
 import org.apache.maven.project.MavenProject;
@@ -47,6 +49,7 @@ import org.eclipse.aether.artifact.DefaultArtifact;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 
 class ScalpelLifecycleParticipantTest {
 
@@ -668,7 +671,7 @@ class ScalpelLifecycleParticipantTest {
         participant.afterProjectsRead(session);
 
         @SuppressWarnings("unchecked")
-        org.mockito.ArgumentCaptor<List<MavenProject>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List<MavenProject>> captor = ArgumentCaptor.forClass(List.class);
         verify(session).setProjects(captor.capture());
         List<MavenProject> trimmed = captor.getValue();
         assertTrue(trimmed.contains(moduleA), "module-a should be in trimmed reactor");
@@ -1598,8 +1601,7 @@ class ScalpelLifecycleParticipantTest {
 
     private Model parseModel(String xml) {
         try {
-            return new org.apache.maven.model.io.xpp3.MavenXpp3Reader()
-                    .read(new java.io.ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
+            return new MavenXpp3Reader().read(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)));
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse POM XML: " + xml.substring(0, Math.min(xml.length(), 100)), e);
         }

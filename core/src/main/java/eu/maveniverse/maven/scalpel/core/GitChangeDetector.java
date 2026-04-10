@@ -16,6 +16,9 @@ import java.util.Map;
 import java.util.Set;
 import javax.inject.Named;
 import javax.inject.Singleton;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.Status;
+import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.diff.DiffEntry;
 import org.eclipse.jgit.diff.DiffFormatter;
 import org.eclipse.jgit.lib.ObjectId;
@@ -24,6 +27,7 @@ import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.revwalk.filter.RevFilter;
+import org.eclipse.jgit.transport.RefSpec;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.util.io.NullOutputStream;
 import org.slf4j.Logger;
@@ -122,16 +126,16 @@ public class GitChangeDetector {
         private final Set<String> untracked;
 
         StatusResult(Set<String> uncommitted, Set<String> untracked) {
-            this.uncommitted = uncommitted;
-            this.untracked = untracked;
+            this.uncommitted = Collections.unmodifiableSet(new LinkedHashSet<>(uncommitted));
+            this.untracked = Collections.unmodifiableSet(new LinkedHashSet<>(untracked));
         }
 
         public Set<String> getUncommitted() {
-            return Collections.unmodifiableSet(uncommitted);
+            return uncommitted;
         }
 
         public Set<String> getUntracked() {
-            return Collections.unmodifiableSet(untracked);
+            return untracked;
         }
     }
 
@@ -141,14 +145,14 @@ public class GitChangeDetector {
     public StatusResult getStatusFiles(Repository repository) throws IOException {
         Set<String> uncommitted = new LinkedHashSet<>();
         Set<String> untracked = new LinkedHashSet<>();
-        try (org.eclipse.jgit.api.Git git = new org.eclipse.jgit.api.Git(repository)) {
-            org.eclipse.jgit.api.Status status = git.status().call();
+        try (Git git = new Git(repository)) {
+            Status status = git.status().call();
             uncommitted.addAll(status.getModified());
             uncommitted.addAll(status.getChanged());
             uncommitted.addAll(status.getAdded());
             uncommitted.addAll(status.getRemoved());
             untracked.addAll(status.getUntracked());
-        } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+        } catch (GitAPIException e) {
             throw new IOException("Failed to get git status", e);
         }
         logger.debug("Uncommitted files: {}", uncommitted);
@@ -168,12 +172,9 @@ public class GitChangeDetector {
         String refspec = "+refs/heads/" + branch + ":refs/remotes/" + remote + "/" + branch;
 
         logger.info("Scalpel: Fetching {} from {}", branch, remote);
-        try (org.eclipse.jgit.api.Git git = new org.eclipse.jgit.api.Git(repository)) {
-            git.fetch()
-                    .setRemote(remote)
-                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec(refspec))
-                    .call();
-        } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
+        try (Git git = new Git(repository)) {
+            git.fetch().setRemote(remote).setRefSpecs(new RefSpec(refspec)).call();
+        } catch (GitAPIException e) {
             throw new IOException("Failed to fetch " + baseBranch, e);
         }
     }
