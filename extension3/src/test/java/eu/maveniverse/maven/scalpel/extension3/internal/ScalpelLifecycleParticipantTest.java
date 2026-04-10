@@ -24,8 +24,6 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -78,61 +76,69 @@ class ScalpelLifecycleParticipantTest {
         Files.createDirectories(root);
 
         // Old parent POM (before property change)
-        String oldParentPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <groupId>com.example</groupId>\n"
-                + "  <artifactId>parent</artifactId>\n"
-                + "  <version>1.0</version>\n"
-                + "  <packaging>pom</packaging>\n"
-                + "  <modules><module>module-a</module><module>module-b</module><module>module-c</module></modules>\n"
-                + "  <properties>\n"
-                + "    <lib.version>1.0</lib.version>\n"
-                + "  </properties>\n"
-                + "  <dependencyManagement><dependencies>\n"
-                + "    <dependency>\n"
-                + "      <groupId>commons-lang</groupId>\n"
-                + "      <artifactId>commons-lang</artifactId>\n"
-                + "      <version>${lib.version}</version>\n"
-                + "    </dependency>\n"
-                + "  </dependencies></dependencyManagement>\n"
-                + "</project>\n";
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module><module>module-c</module></modules>
+                  <properties>
+                    <lib.version>1.0</lib.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>commons-lang</groupId>
+                      <artifactId>commons-lang</artifactId>
+                      <version>${lib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
 
         // New parent POM (after property change)
         String newParentPom = oldParentPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
         writePom(root, "pom.xml", newParentPom);
 
         // module-a: directly uses managed dep commons-lang
-        String moduleAPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-a</artifactId>\n"
-                + "  <dependencies>\n"
-                + "    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>\n"
-                + "  </dependencies>\n"
-                + "</project>\n";
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
         writePom(root, "module-a/pom.xml", moduleAPom);
 
         // module-b: depends on module-a (gets commons-lang transitively)
-        String moduleBPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-b</artifactId>\n"
-                + "  <dependencies>\n"
-                + "    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version></dependency>\n"
-                + "  </dependencies>\n"
-                + "</project>\n";
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version></dependency>
+                  </dependencies>
+                </project>
+                """;
         writePom(root, "module-b/pom.xml", moduleBPom);
 
         // module-c: no dependencies
-        String moduleCPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-c</artifactId>\n"
-                + "</project>\n";
+        String moduleCPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-c</artifactId>
+                </project>
+                """;
         writePom(root, "module-c/pom.xml", moduleCPom);
 
         // Build MavenProject objects
@@ -145,7 +151,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
         moduleC.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB, moduleC);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleC);
 
         // Mock ScalpelCore to return changed files
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -159,12 +165,11 @@ class ScalpelLifecycleParticipantTest {
         DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
         org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
-        when(moduleBResolution.getResolvedDependencies()).thenReturn(Collections.singletonList(commonsLangDep));
+        when(moduleBResolution.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
 
         // Mock dependency resolution: module-c has no matching deps
         DependencyResolutionResult moduleCResolution = mock(DependencyResolutionResult.class);
-        when(moduleCResolution.getResolvedDependencies())
-                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(moduleCResolution.getResolvedDependencies()).thenReturn(List.of());
 
         // Route resolution calls based on project
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
@@ -187,8 +192,8 @@ class ScalpelLifecycleParticipantTest {
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -222,52 +227,58 @@ class ScalpelLifecycleParticipantTest {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
-        String oldParentPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <groupId>com.example</groupId>\n"
-                + "  <artifactId>parent</artifactId>\n"
-                + "  <version>1.0</version>\n"
-                + "  <packaging>pom</packaging>\n"
-                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
-                + "  <properties>\n"
-                + "    <compiler.version>3.11.0</compiler.version>\n"
-                + "  </properties>\n"
-                + "  <build><pluginManagement><plugins>\n"
-                + "    <plugin>\n"
-                + "      <groupId>org.apache.maven.plugins</groupId>\n"
-                + "      <artifactId>maven-compiler-plugin</artifactId>\n"
-                + "      <version>${compiler.version}</version>\n"
-                + "    </plugin>\n"
-                + "  </plugins></pluginManagement></build>\n"
-                + "</project>\n";
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <compiler.version>3.11.0</compiler.version>
+                  </properties>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-compiler-plugin</artifactId>
+                      <version>${compiler.version}</version>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
 
         String newParentPom = oldParentPom.replace(
                 "<compiler.version>3.11.0</compiler.version>", "<compiler.version>3.12.0</compiler.version>");
         writePom(root, "pom.xml", newParentPom);
 
         // module-a: no plugins
-        String moduleAPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-a</artifactId>\n"
-                + "</project>\n";
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
         writePom(root, "module-a/pom.xml", moduleAPom);
 
         // module-b: uses maven-compiler-plugin
-        String moduleBPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-b</artifactId>\n"
-                + "  <build><plugins>\n"
-                + "    <plugin>\n"
-                + "      <groupId>org.apache.maven.plugins</groupId>\n"
-                + "      <artifactId>maven-compiler-plugin</artifactId>\n"
-                + "    </plugin>\n"
-                + "  </plugins></build>\n"
-                + "</project>\n";
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <build><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-compiler-plugin</artifactId>
+                    </plugin>
+                  </plugins></build>
+                </project>
+                """;
         writePom(root, "module-b/pom.xml", moduleBPom);
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
@@ -289,7 +300,7 @@ class ScalpelLifecycleParticipantTest {
         build.addPlugin(compilerPlugin);
         moduleB.getModel().setBuild(build);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("pom.xml");
@@ -300,8 +311,7 @@ class ScalpelLifecycleParticipantTest {
 
         // No transitive deps to resolve
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies())
-                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
 
@@ -317,8 +327,8 @@ class ScalpelLifecycleParticipantTest {
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
         ProjectDependencyGraph graph2 = mock(ProjectDependencyGraph.class);
-        when(graph2.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
-        when(graph2.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph2.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph2.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph2.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph2);
 
@@ -339,31 +349,37 @@ class ScalpelLifecycleParticipantTest {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
-        String parentPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <groupId>com.example</groupId>\n"
-                + "  <artifactId>parent</artifactId>\n"
-                + "  <version>1.0</version>\n"
-                + "  <packaging>pom</packaging>\n"
-                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
-                + "</project>\n";
+        String parentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
         writePom(root, "pom.xml", parentPom);
 
-        String moduleAPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-a</artifactId>\n"
-                + "</project>\n";
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
         writePom(root, "module-a/pom.xml", moduleAPom);
 
-        String moduleBPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-b</artifactId>\n"
-                + "</project>\n";
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
         writePom(root, "module-b/pom.xml", moduleBPom);
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
@@ -373,18 +389,17 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // module-a: test-only change (src/test/), module-b: main source change
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/test/java/com/example/MyTest.java");
         changedFiles.add("module-b/src/main/java/com/example/Service.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
 
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies())
-                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
 
@@ -400,8 +415,8 @@ class ScalpelLifecycleParticipantTest {
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -430,48 +445,54 @@ class ScalpelLifecycleParticipantTest {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
-        String oldParentPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <groupId>com.example</groupId>\n"
-                + "  <artifactId>parent</artifactId>\n"
-                + "  <version>1.0</version>\n"
-                + "  <packaging>pom</packaging>\n"
-                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
-                + "  <properties>\n"
-                + "    <lib.version>1.0</lib.version>\n"
-                + "  </properties>\n"
-                + "  <dependencyManagement><dependencies>\n"
-                + "    <dependency>\n"
-                + "      <groupId>commons-lang</groupId>\n"
-                + "      <artifactId>commons-lang</artifactId>\n"
-                + "      <version>${lib.version}</version>\n"
-                + "    </dependency>\n"
-                + "  </dependencies></dependencyManagement>\n"
-                + "</project>\n";
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <lib.version>1.0</lib.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>commons-lang</groupId>
+                      <artifactId>commons-lang</artifactId>
+                      <version>${lib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
 
         String newParentPom = oldParentPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
         writePom(root, "pom.xml", newParentPom);
 
         // module-a: uses managed dep directly
-        String moduleAPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-a</artifactId>\n"
-                + "  <dependencies>\n"
-                + "    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>\n"
-                + "  </dependencies>\n"
-                + "</project>\n";
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
         writePom(root, "module-a/pom.xml", moduleAPom);
 
         // module-b: gets commons-lang only via test scope transitively
-        String moduleBPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-b</artifactId>\n"
-                + "</project>\n";
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
         writePom(root, "module-b/pom.xml", moduleBPom);
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
@@ -481,7 +502,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("pom.xml");
@@ -494,7 +515,7 @@ class ScalpelLifecycleParticipantTest {
         DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
         org.eclipse.aether.graph.Dependency testDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "test");
-        when(moduleBResolution.getResolvedDependencies()).thenReturn(Collections.singletonList(testDep));
+        when(moduleBResolution.getResolvedDependencies()).thenReturn(List.of(testDep));
 
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
@@ -503,8 +524,7 @@ class ScalpelLifecycleParticipantTest {
                         return moduleBResolution;
                     }
                     DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getResolvedDependencies())
-                            .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+                    when(empty.getResolvedDependencies()).thenReturn(List.of());
                     return empty;
                 });
 
@@ -520,8 +540,8 @@ class ScalpelLifecycleParticipantTest {
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -542,35 +562,41 @@ class ScalpelLifecycleParticipantTest {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
-        String parentPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <groupId>com.example</groupId>\n"
-                + "  <artifactId>parent</artifactId>\n"
-                + "  <version>1.0</version>\n"
-                + "  <packaging>pom</packaging>\n"
-                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
-                + "</project>\n";
+        String parentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
         writePom(root, "pom.xml", parentPom);
 
-        String moduleAPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-a</artifactId>\n"
-                + "</project>\n";
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
         writePom(root, "module-a/pom.xml", moduleAPom);
 
         // module-b depends on module-a via test scope
-        String moduleBPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-b</artifactId>\n"
-                + "  <dependencies>\n"
-                + "    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version><scope>test</scope></dependency>\n"
-                + "  </dependencies>\n"
-                + "</project>\n";
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version><scope>test</scope></dependency>
+                  </dependencies>
+                </project>
+                """;
         writePom(root, "module-b/pom.xml", moduleBPom);
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
@@ -587,17 +613,16 @@ class ScalpelLifecycleParticipantTest {
         dep.setScope("test");
         moduleB.getDependencies().add(dep);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // module-a has a source change
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/com/example/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
 
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies())
-                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
 
@@ -615,9 +640,9 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-b is downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.singletonList(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -658,12 +683,12 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "trim");
@@ -697,12 +722,12 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
@@ -733,12 +758,12 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
@@ -767,13 +792,13 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add(".github/workflows/ci.yml");
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
@@ -806,13 +831,13 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/README.md");
         changedFiles.add("module-b/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
@@ -838,69 +863,78 @@ class ScalpelLifecycleParticipantTest {
         Files.createDirectories(root);
 
         // Parent POM (no managed deps — those are in the BOM)
-        String parentPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <groupId>com.example</groupId>\n"
-                + "  <artifactId>parent</artifactId>\n"
-                + "  <version>1.0</version>\n"
-                + "  <packaging>pom</packaging>\n"
-                + "  <modules><module>bom</module><module>module-a</module><module>module-b</module><module>module-c</module></modules>\n"
-                + "</project>\n";
+        String parentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>bom</module><module>module-a</module><module>module-b</module><module>module-c</module></modules>
+                </project>
+                """;
         writePom(root, "pom.xml", parentPom);
 
         // Old BOM POM (before version change)
-        String oldBomPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>bom</artifactId>\n"
-                + "  <packaging>pom</packaging>\n"
-                + "  <properties><lib.version>1.0</lib.version></properties>\n"
-                + "  <dependencyManagement><dependencies>\n"
-                + "    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId><version>${lib.version}</version></dependency>\n"
-                + "  </dependencies></dependencyManagement>\n"
-                + "</project>\n";
+        String oldBomPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>bom</artifactId>
+                  <packaging>pom</packaging>
+                  <properties><lib.version>1.0</lib.version></properties>
+                  <dependencyManagement><dependencies>
+                    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId><version>${lib.version}</version></dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
 
         // New BOM POM (after version bump)
         String newBomPom = oldBomPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
         writePom(root, "bom/pom.xml", newBomPom);
 
         // module-a: imports BOM, uses commons-lang
-        String moduleAPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-a</artifactId>\n"
-                + "  <dependencyManagement><dependencies>\n"
-                + "    <dependency><groupId>com.example</groupId><artifactId>bom</artifactId>"
-                + "<version>${project.version}</version><type>pom</type><scope>import</scope></dependency>\n"
-                + "  </dependencies></dependencyManagement>\n"
-                + "  <dependencies>\n"
-                + "    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>\n"
-                + "  </dependencies>\n"
-                + "</project>\n";
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencyManagement><dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>bom</artifactId><version>${project.version}</version><type>pom</type><scope>import</scope></dependency>
+                  </dependencies></dependencyManagement>
+                  <dependencies>
+                    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
         writePom(root, "module-a/pom.xml", moduleAPom);
 
         // module-b: depends on module-a (gets commons-lang transitively)
-        String moduleBPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-b</artifactId>\n"
-                + "  <dependencies>\n"
-                + "    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version></dependency>\n"
-                + "  </dependencies>\n"
-                + "</project>\n";
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version></dependency>
+                  </dependencies>
+                </project>
+                """;
         writePom(root, "module-b/pom.xml", moduleBPom);
 
         // module-c: no dependencies
-        String moduleCPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-c</artifactId>\n"
-                + "</project>\n";
+        String moduleCPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-c</artifactId>
+                </project>
+                """;
         writePom(root, "module-c/pom.xml", moduleCPom);
 
         // Build MavenProject objects
@@ -916,7 +950,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
         moduleC.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, bomProject, moduleA, moduleB, moduleC);
+        List<MavenProject> allProjects = List.of(parentProject, bomProject, moduleA, moduleB, moduleC);
 
         // Mock ScalpelCore to return changed BOM POM
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -930,12 +964,11 @@ class ScalpelLifecycleParticipantTest {
         DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
         org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
-        when(moduleBResolution.getResolvedDependencies()).thenReturn(Collections.singletonList(commonsLangDep));
+        when(moduleBResolution.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
 
         // Other modules: no matching deps
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies())
-                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
 
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
@@ -958,8 +991,8 @@ class ScalpelLifecycleParticipantTest {
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1012,12 +1045,12 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
         moduleC.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB, moduleC);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleC);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
@@ -1025,11 +1058,11 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-b and module-c are downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Arrays.asList(moduleB, moduleC));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(moduleC, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB, moduleC));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(moduleC, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1068,12 +1101,12 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
@@ -1081,8 +1114,8 @@ class ScalpelLifecycleParticipantTest {
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-a");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1115,22 +1148,22 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "com.example:module-b");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.singletonList(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1161,22 +1194,22 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.singletonList(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1202,11 +1235,15 @@ class ScalpelLifecycleParticipantTest {
         writePom(root, "pom.xml", parentPom);
         String moduleAPom = simpleChildPom("module-a");
         writePom(root, "module-a/pom.xml", moduleAPom);
-        String moduleBPom = "<?xml version=\"1.0\"?>\n<project>\n  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>module-b</artifactId>\n"
-                + "  <dependencies><dependency><groupId>com.example</groupId><artifactId>module-a</artifactId>"
-                + "<version>1.0</version><scope>test</scope></dependency></dependencies>\n</project>\n";
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies><dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version><scope>test</scope></dependency></dependencies>
+                </project>
+                """;
         writePom(root, "module-b/pom.xml", moduleBPom);
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
@@ -1222,22 +1259,22 @@ class ScalpelLifecycleParticipantTest {
         dep.setScope("test");
         moduleB.getDependencies().add(dep);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.singletonList(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1261,21 +1298,21 @@ class ScalpelLifecycleParticipantTest {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
-        String oldParentPom = "<?xml version=\"1.0\"?>\n"
-                + "<project>\n"
-                + "  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <groupId>com.example</groupId>\n"
-                + "  <artifactId>parent</artifactId>\n"
-                + "  <version>1.0</version>\n"
-                + "  <packaging>pom</packaging>\n"
-                + "  <modules><module>module-a</module><module>module-b</module></modules>\n"
-                + "  <properties><compiler.version>3.11.0</compiler.version></properties>\n"
-                + "  <build><pluginManagement><plugins>\n"
-                + "    <plugin><groupId>org.apache.maven.plugins</groupId>"
-                + "<artifactId>maven-compiler-plugin</artifactId>"
-                + "<version>${compiler.version}</version></plugin>\n"
-                + "  </plugins></pluginManagement></build>\n"
-                + "</project>\n";
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><compiler.version>3.11.0</compiler.version></properties>
+                  <build><pluginManagement><plugins>
+                    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId><version>${compiler.version}</version></plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
 
         String newParentPom = oldParentPom.replace(
                 "<compiler.version>3.11.0</compiler.version>", "<compiler.version>3.12.0</compiler.version>");
@@ -1301,7 +1338,7 @@ class ScalpelLifecycleParticipantTest {
         build.addPlugin(compilerPlugin);
         moduleB.getModel().setBuild(build);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // Changed files: parent POM (property change) + module-a source
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1318,10 +1355,10 @@ class ScalpelLifecycleParticipantTest {
 
         // module-b is downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.singletonList(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1354,7 +1391,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // Only module-a has a source change
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1392,7 +1429,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         // Changes include an excluded path and a module source
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1435,7 +1472,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // A CI config file changed, matching the disable trigger
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1470,7 +1507,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         // Null detection result (e.g., no git repo or no base branch)
         when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
@@ -1500,7 +1537,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         MavenSession session = createSimpleSession(root, allProjects, "trim");
         session.getSystemProperties().setProperty("scalpel.enabled", "false");
@@ -1527,13 +1564,13 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         MavenSession session = createSimpleSession(root, allProjects, "trim");
         session.getSystemProperties().setProperty("scalpel.disableOnSelectedProjects", "true");
 
         // Simulate -pl by setting selected projects
-        when(session.getRequest().getSelectedProjects()).thenReturn(Collections.singletonList("module-a"));
+        when(session.getRequest().getSelectedProjects()).thenReturn(List.of("module-a"));
 
         participant.afterProjectsRead(session);
 
@@ -1557,7 +1594,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         // No changed files
         when(scalpelCore.detectChanges(any(), any(), any()))
@@ -1589,7 +1626,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         // Only .md files changed
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1628,7 +1665,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add(".github/workflows/ci.yml");
@@ -1663,7 +1700,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         // Provide invalid old POM content to trigger a parse error
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1703,7 +1740,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // Change a file that doesn't map to any module (e.g. root-level non-pom file)
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1746,7 +1783,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
@@ -1784,7 +1821,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // module-b has source changes, module-a is upstream
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1799,10 +1836,10 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-a is upstream of module-b
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
-        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(Collections.singletonList(moduleA));
-        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(List.of(moduleA));
+        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1843,7 +1880,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
         moduleC.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB, moduleC);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleC);
 
         // module-b has source changes
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1860,14 +1897,14 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-a is upstream of module-b, module-c is downstream of module-b
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(Collections.singletonList(moduleA));
-        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(moduleC, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(Collections.singletonList(moduleC));
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(moduleC, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
+        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(List.of(moduleA));
+        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(moduleC, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of(moduleC));
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(moduleC, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -1935,7 +1972,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // Only parent POM changed
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -1975,7 +2012,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("Jenkinsfile");
@@ -2013,7 +2050,7 @@ class ScalpelLifecycleParticipantTest {
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = Arrays.asList(parentProject, moduleA, moduleB);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
         // module-b has source changes, module-a is upstream
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -2027,10 +2064,10 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-a is upstream of module-b
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(Collections.singletonList(moduleA));
-        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(Collections.<MavenProject>emptyList());
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(List.of(moduleA));
+        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -2050,8 +2087,7 @@ class ScalpelLifecycleParticipantTest {
 
     private void setupEmptyDependencyResolution() throws Exception {
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies())
-                .thenReturn(Collections.<org.eclipse.aether.graph.Dependency>emptyList());
+        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
     }
@@ -2069,8 +2105,8 @@ class ScalpelLifecycleParticipantTest {
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(Collections.emptyList());
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
         return session;
@@ -2089,17 +2125,32 @@ class ScalpelLifecycleParticipantTest {
     }
 
     private String simpleChildPom(String artifactId) {
-        return "<?xml version=\"1.0\"?>\n<project>\n  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>" + artifactId + "</artifactId>\n</project>\n";
+        return """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>""" + artifactId + """
+                </artifactId>
+                </project>
+                """;
     }
 
     private String simpleChildPomWithDep(String artifactId, String depArtifactId) {
-        return "<?xml version=\"1.0\"?>\n<project>\n  <modelVersion>4.0.0</modelVersion>\n"
-                + "  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>\n"
-                + "  <artifactId>" + artifactId + "</artifactId>\n"
-                + "  <dependencies><dependency><groupId>com.example</groupId><artifactId>" + depArtifactId
-                + "</artifactId><version>1.0</version></dependency></dependencies>\n</project>\n";
+        return """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>"""
+                + artifactId
+                + "</artifactId>\n"
+                + "  <dependencies><dependency><groupId>com.example</groupId><artifactId>"
+                + depArtifactId
+                + """
+                </artifactId><version>1.0</version></dependency></dependencies>
+                </project>
+                """;
     }
 
     private void writePom(Path root, String relativePath, String content) throws Exception {

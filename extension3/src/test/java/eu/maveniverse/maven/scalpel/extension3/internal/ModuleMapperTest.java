@@ -13,7 +13,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.nio.file.Path;
-import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -63,7 +62,7 @@ class ModuleMapperTest {
         List<MavenProject> projects = createProjects(root);
 
         Set<String> changedFiles = new LinkedHashSet<>(
-                Arrays.asList("module-a/src/test/java/FooTest.java", "module-a/src/test/resources/test-data.xml"));
+                List.of("module-a/src/test/java/FooTest.java", "module-a/src/test/resources/test-data.xml"));
 
         ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
 
@@ -79,7 +78,7 @@ class ModuleMapperTest {
         List<MavenProject> projects = createProjects(root);
 
         Set<String> changedFiles = new LinkedHashSet<>(
-                Arrays.asList("module-a/src/main/java/Foo.java", "module-a/src/main/resources/config.xml"));
+                List.of("module-a/src/main/java/Foo.java", "module-a/src/main/resources/config.xml"));
 
         ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
 
@@ -93,8 +92,8 @@ class ModuleMapperTest {
         Path root = tempDir;
         List<MavenProject> projects = createProjects(root);
 
-        Set<String> changedFiles = new LinkedHashSet<>(
-                Arrays.asList("module-a/src/main/java/Foo.java", "module-a/src/test/java/FooTest.java"));
+        Set<String> changedFiles =
+                new LinkedHashSet<>(List.of("module-a/src/main/java/Foo.java", "module-a/src/test/java/FooTest.java"));
 
         ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
 
@@ -108,7 +107,7 @@ class ModuleMapperTest {
         Path root = tempDir;
         List<MavenProject> projects = createProjects(root);
 
-        Set<String> changedFiles = new LinkedHashSet<>(Arrays.asList(
+        Set<String> changedFiles = new LinkedHashSet<>(List.of(
                 "module-a/src/test/java/FooTest.java", // test-only for module-a
                 "module-b/src/main/java/Bar.java" // main for module-b
                 ));
@@ -127,7 +126,7 @@ class ModuleMapperTest {
         Path root = tempDir;
         List<MavenProject> projects = createProjects(root);
 
-        Set<String> changedFiles = new LinkedHashSet<>(Arrays.asList("module-a/README.md"));
+        Set<String> changedFiles = new LinkedHashSet<>(List.of("module-a/README.md"));
 
         ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
 
@@ -143,7 +142,7 @@ class ModuleMapperTest {
                 "com.example", "module-a", root.resolve("module-a/pom.xml").toFile());
         MavenProject moduleB = createProject(
                 "com.example", "module-b", root.resolve("module-b/pom.xml").toFile());
-        return Arrays.asList(parent, moduleA, moduleB);
+        return List.of(parent, moduleA, moduleB);
     }
 
     private MavenProject createProject(String groupId, String artifactId, File pomFile) {
