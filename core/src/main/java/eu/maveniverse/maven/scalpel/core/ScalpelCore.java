@@ -57,7 +57,7 @@ public class ScalpelCore {
         Repository repository;
         try {
             repository = openRepository(reactorRoot);
-        } catch (RepositoryNotFoundException e) {
+        } catch (RepositoryNotFoundException | IllegalArgumentException e) {
             logger.info("Scalpel: Not a git repository, building all modules");
             return null;
         } catch (IOException e) {
