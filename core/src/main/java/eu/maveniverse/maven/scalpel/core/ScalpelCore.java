@@ -9,7 +9,6 @@ package eu.maveniverse.maven.scalpel.core;
 
 import static java.util.Objects.requireNonNull;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -54,9 +53,9 @@ public class ScalpelCore {
      */
     public ChangeDetectionResult detectChanges(Path reactorRoot, ScalpelConfiguration config, Set<String> allPomPaths)
             throws ScalpelException {
-        Repository repository;
+        RepositoryInfo repoInfo;
         try {
-            repository = openRepository(reactorRoot);
+            repoInfo = openRepository(reactorRoot);
         } catch (RepositoryNotFoundException | IllegalArgumentException e) {
             logger.info("Scalpel: Not a git repository, building all modules");
             return null;
@@ -64,10 +63,12 @@ public class ScalpelCore {
             return handleError(config, "Error opening git repository", e);
         }
 
+        Repository repository = repoInfo.repository;
         try {
             // Check branch-based disable conditions
             if (!config.getDisableOnBranch().isEmpty()) {
-                String currentBranch = gitChangeDetector.getCurrentBranch(repository);
+                String currentBranch =
+                        repoInfo.worktree ? repoInfo.currentBranch : gitChangeDetector.getCurrentBranch(repository);
                 if (currentBranch != null) {
                     for (String pattern : config.getDisableOnBranch()) {
                         if (matchesSafely(currentBranch, pattern, "disableOnBranch")) {
@@ -124,7 +125,13 @@ public class ScalpelCore {
                 }
             }
 
+            // For worktrees, replace HEAD in revspecs with the worktree's head ref
+            // (e.g., "HEAD" -> "refs/heads/feature", "HEAD~1" -> "refs/heads/feature~1")
             String head = config.getHead();
+            if (repoInfo.headRef != null && head.startsWith("HEAD")) {
+                head = repoInfo.headRef + head.substring("HEAD".length());
+            }
+
             ObjectId mergeBase = gitChangeDetector.findMergeBase(repository, baseBranch, head);
             if (mergeBase == null) {
                 if (config.isFailSafe()) {
@@ -188,53 +195,86 @@ public class ScalpelCore {
         }
     }
 
-    private Repository openRepository(Path reactorRoot) throws IOException {
+    private static class RepositoryInfo {
+        final Repository repository;
+        final boolean worktree;
+        final String currentBranch;
+        final String headRef;
+
+        RepositoryInfo(Repository repository, boolean worktree, String currentBranch, String headRef) {
+            this.repository = repository;
+            this.worktree = worktree;
+            this.currentBranch = currentBranch;
+            this.headRef = headRef;
+        }
+    }
+
+    private RepositoryInfo openRepository(Path reactorRoot) throws IOException {
         FileRepositoryBuilder builder =
                 new FileRepositoryBuilder().readEnvironment().findGitDir(reactorRoot.toFile());
 
         File gitDir = builder.getGitDir();
-
-        // Handle git worktrees: .git may be a file containing "gitdir: <path>"
-        // JGit 5.x does not support worktrees natively, so we handle it manually
         if (gitDir == null) {
-            File dotGit = findDotGit(reactorRoot.toFile());
-            if (dotGit != null && dotGit.isFile()) {
-                String gitDirPath = readGitDirFromFile(dotGit);
-                if (gitDirPath != null) {
-                    Path resolvedPath = Paths.get(gitDirPath);
-                    if (!resolvedPath.isAbsolute()) {
-                        resolvedPath = dotGit.getParentFile().toPath().resolve(gitDirPath);
-                    }
-                    File resolved = resolvedPath.toFile();
-                    logger.debug("Detected git worktree, gitdir={}", resolved);
-                    builder.setGitDir(resolved);
+            throw new RepositoryNotFoundException(reactorRoot.toFile());
+        }
+
+        // JGit 5.x findGitDir() correctly follows .git files (worktree pointers)
+        // to .git/worktrees/<name>/, but JGit 5.x lacks commondir support, so
+        // refs and objects from the common directory are invisible. To work around
+        // this, we open the repository from the common directory (the main .git/)
+        // and separately read the worktree's HEAD for branch/head resolution.
+        Path gitDirPath = gitDir.toPath();
+        Path commondirFile = gitDirPath.resolve("commondir");
+        if (Files.isRegularFile(commondirFile)) {
+            return openWorktreeRepository(gitDirPath, commondirFile);
+        }
+
+        return new RepositoryInfo(builder.setMustExist(true).build(), false, null, null);
+    }
+
+    private RepositoryInfo openWorktreeRepository(Path gitDirPath, Path commondirFile) throws IOException {
+        logger.debug("Detected git worktree, gitdir={}", gitDirPath);
+
+        String currentBranch = null;
+        String headRef = null;
+        Path worktreeHead = gitDirPath.resolve("HEAD");
+        if (Files.isRegularFile(worktreeHead)) {
+            String headContent = new String(Files.readAllBytes(worktreeHead), StandardCharsets.UTF_8).trim();
+            if (headContent.startsWith("ref: ")) {
+                headRef = headContent.substring(5);
+                if (headRef.startsWith("refs/heads/")) {
+                    currentBranch = headRef.substring("refs/heads/".length());
                 }
+            } else {
+                headRef = headContent;
             }
         }
 
-        return builder.setMustExist(true).build();
+        File commonDirFile = resolvePathFromFile(commondirFile, gitDirPath).toFile();
+
+        Path gitdirPointer = gitDirPath.resolve("gitdir");
+        File workTree = null;
+        if (Files.isRegularFile(gitdirPointer)) {
+            workTree =
+                    resolvePathFromFile(gitdirPointer, gitDirPath).getParent().toFile();
+        }
+
+        FileRepositoryBuilder worktreeBuilder =
+                new FileRepositoryBuilder().readEnvironment().setGitDir(commonDirFile);
+        if (workTree != null) {
+            worktreeBuilder.setWorkTree(workTree);
+        }
+        Repository repository = worktreeBuilder.setMustExist(true).build();
+        return new RepositoryInfo(repository, true, currentBranch, headRef);
     }
 
-    private static File findDotGit(File dir) {
-        Path current = dir.toPath();
-        while (current != null) {
-            Path dotGit = current.resolve(".git");
-            if (Files.exists(dotGit)) {
-                return dotGit.toFile();
-            }
-            current = current.getParent();
+    private static Path resolvePathFromFile(Path file, Path baseDir) throws IOException {
+        String value = new String(Files.readAllBytes(file), StandardCharsets.UTF_8).trim();
+        Path path = Paths.get(value);
+        if (!path.isAbsolute()) {
+            path = baseDir.resolve(value);
         }
-        return null;
-    }
-
-    private static String readGitDirFromFile(File dotGitFile) throws IOException {
-        try (BufferedReader reader = Files.newBufferedReader(dotGitFile.toPath(), StandardCharsets.UTF_8)) {
-            String line = reader.readLine();
-            if (line != null && line.startsWith("gitdir:")) {
-                return line.substring("gitdir:".length()).trim();
-            }
-        }
-        return null;
+        return path.toRealPath();
     }
 
     private ChangeDetectionResult handleError(ScalpelConfiguration config, String message, Exception e)
