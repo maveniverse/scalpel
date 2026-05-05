@@ -67,9 +67,8 @@ public class ScalpelCore {
         try {
             // Check branch-based disable conditions
             if (!config.getDisableOnBranch().isEmpty()) {
-                String currentBranch = repoInfo.currentBranch != null
-                        ? repoInfo.currentBranch
-                        : gitChangeDetector.getCurrentBranch(repository);
+                String currentBranch =
+                        repoInfo.worktree ? repoInfo.currentBranch : gitChangeDetector.getCurrentBranch(repository);
                 if (currentBranch != null) {
                     for (String pattern : config.getDisableOnBranch()) {
                         if (matchesSafely(currentBranch, pattern, "disableOnBranch")) {
@@ -126,10 +125,11 @@ public class ScalpelCore {
                 }
             }
 
-            // For worktrees, use the worktree's head ref instead of HEAD
+            // For worktrees, replace HEAD in revspecs with the worktree's head ref
+            // (e.g., "HEAD" -> "refs/heads/feature", "HEAD~1" -> "refs/heads/feature~1")
             String head = config.getHead();
-            if (repoInfo.headRef != null && "HEAD".equals(head)) {
-                head = repoInfo.headRef;
+            if (repoInfo.headRef != null && head.startsWith("HEAD")) {
+                head = repoInfo.headRef + head.substring("HEAD".length());
             }
 
             ObjectId mergeBase = gitChangeDetector.findMergeBase(repository, baseBranch, head);
@@ -197,11 +197,13 @@ public class ScalpelCore {
 
     private static class RepositoryInfo {
         final Repository repository;
+        final boolean worktree;
         final String currentBranch;
         final String headRef;
 
-        RepositoryInfo(Repository repository, String currentBranch, String headRef) {
+        RepositoryInfo(Repository repository, boolean worktree, String currentBranch, String headRef) {
             this.repository = repository;
+            this.worktree = worktree;
             this.currentBranch = currentBranch;
             this.headRef = headRef;
         }
@@ -234,8 +236,9 @@ public class ScalpelCore {
                 String headContent = new String(Files.readAllBytes(worktreeHead), StandardCharsets.UTF_8).trim();
                 if (headContent.startsWith("ref: ")) {
                     headRef = headContent.substring(5);
-                    int lastSlash = headRef.lastIndexOf('/');
-                    currentBranch = lastSlash >= 0 ? headRef.substring(lastSlash + 1) : headRef;
+                    if (headRef.startsWith("refs/heads/")) {
+                        currentBranch = headRef.substring("refs/heads/".length());
+                    }
                 } else {
                     headRef = headContent;
                 }
@@ -267,10 +270,10 @@ public class ScalpelCore {
                 worktreeBuilder.setWorkTree(workTree);
             }
             Repository repository = worktreeBuilder.setMustExist(true).build();
-            return new RepositoryInfo(repository, currentBranch, headRef);
+            return new RepositoryInfo(repository, true, currentBranch, headRef);
         }
 
-        return new RepositoryInfo(builder.setMustExist(true).build(), null, null);
+        return new RepositoryInfo(builder.setMustExist(true).build(), false, null, null);
     }
 
     private ChangeDetectionResult handleError(ScalpelConfiguration config, String message, Exception e)

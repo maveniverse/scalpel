@@ -189,6 +189,10 @@ class ScalpelCoreTest {
         Files.createDirectories(mainRepo);
 
         try (Git git = Git.init().setDirectory(mainRepo.toFile()).call()) {
+            git.getRepository().getConfig().setString("user", null, "name", "Scalpel Test");
+            git.getRepository().getConfig().setString("user", null, "email", "scalpel@test.invalid");
+            git.getRepository().getConfig().save();
+
             Files.write(mainRepo.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("initial").call();
@@ -206,14 +210,19 @@ class ScalpelCoreTest {
 
         // Make a change in the worktree using git commands
         Files.write(worktreeDir.resolve("new-file.txt"), "world".getBytes(StandardCharsets.UTF_8));
-        new ProcessBuilder("git", "add", "new-file.txt")
+        Process add = new ProcessBuilder("git", "add", "new-file.txt")
                 .directory(worktreeDir.toFile())
-                .start()
-                .waitFor();
-        new ProcessBuilder("git", "commit", "-m", "add new file")
+                .redirectErrorStream(true)
+                .start();
+        byte[] addOutput = add.getInputStream().readAllBytes();
+        assertTrue(add.waitFor() == 0, "git add failed: " + new String(addOutput, StandardCharsets.UTF_8));
+
+        Process commit = new ProcessBuilder("git", "commit", "-m", "add new file")
                 .directory(worktreeDir.toFile())
-                .start()
-                .waitFor();
+                .redirectErrorStream(true)
+                .start();
+        byte[] commitOutput = commit.getInputStream().readAllBytes();
+        assertTrue(commit.waitFor() == 0, "git commit failed: " + new String(commitOutput, StandardCharsets.UTF_8));
 
         ScalpelCore core = new ScalpelCore(new GitChangeDetector());
         Properties sys = new Properties();
