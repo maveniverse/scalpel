@@ -226,54 +226,55 @@ public class ScalpelCore {
         Path gitDirPath = gitDir.toPath();
         Path commondirFile = gitDirPath.resolve("commondir");
         if (Files.isRegularFile(commondirFile)) {
-            logger.debug("Detected git worktree, gitdir={}", gitDir);
-
-            // Read worktree HEAD (e.g., "ref: refs/heads/feature")
-            String currentBranch = null;
-            String headRef = null;
-            Path worktreeHead = gitDirPath.resolve("HEAD");
-            if (Files.isRegularFile(worktreeHead)) {
-                String headContent = new String(Files.readAllBytes(worktreeHead), StandardCharsets.UTF_8).trim();
-                if (headContent.startsWith("ref: ")) {
-                    headRef = headContent.substring(5);
-                    if (headRef.startsWith("refs/heads/")) {
-                        currentBranch = headRef.substring("refs/heads/".length());
-                    }
-                } else {
-                    headRef = headContent;
-                }
-            }
-
-            // Resolve common directory (the main .git/)
-            String commondirValue = new String(Files.readAllBytes(commondirFile), StandardCharsets.UTF_8).trim();
-            Path commonDir = Paths.get(commondirValue);
-            if (!commonDir.isAbsolute()) {
-                commonDir = gitDirPath.resolve(commondirValue);
-            }
-            File commonDirFile = commonDir.toRealPath().toFile();
-
-            // Resolve worktree root from gitdir pointer
-            Path gitdirPointer = gitDirPath.resolve("gitdir");
-            File workTree = null;
-            if (Files.isRegularFile(gitdirPointer)) {
-                String dotGitPath = new String(Files.readAllBytes(gitdirPointer), StandardCharsets.UTF_8).trim();
-                Path dotGitFile = Paths.get(dotGitPath);
-                if (!dotGitFile.isAbsolute()) {
-                    dotGitFile = gitDirPath.resolve(dotGitPath);
-                }
-                workTree = dotGitFile.toRealPath().getParent().toFile();
-            }
-
-            FileRepositoryBuilder worktreeBuilder =
-                    new FileRepositoryBuilder().readEnvironment().setGitDir(commonDirFile);
-            if (workTree != null) {
-                worktreeBuilder.setWorkTree(workTree);
-            }
-            Repository repository = worktreeBuilder.setMustExist(true).build();
-            return new RepositoryInfo(repository, true, currentBranch, headRef);
+            return openWorktreeRepository(gitDirPath, commondirFile);
         }
 
         return new RepositoryInfo(builder.setMustExist(true).build(), false, null, null);
+    }
+
+    private RepositoryInfo openWorktreeRepository(Path gitDirPath, Path commondirFile) throws IOException {
+        logger.debug("Detected git worktree, gitdir={}", gitDirPath);
+
+        String currentBranch = null;
+        String headRef = null;
+        Path worktreeHead = gitDirPath.resolve("HEAD");
+        if (Files.isRegularFile(worktreeHead)) {
+            String headContent = new String(Files.readAllBytes(worktreeHead), StandardCharsets.UTF_8).trim();
+            if (headContent.startsWith("ref: ")) {
+                headRef = headContent.substring(5);
+                if (headRef.startsWith("refs/heads/")) {
+                    currentBranch = headRef.substring("refs/heads/".length());
+                }
+            } else {
+                headRef = headContent;
+            }
+        }
+
+        File commonDirFile = resolvePathFromFile(commondirFile, gitDirPath).toFile();
+
+        Path gitdirPointer = gitDirPath.resolve("gitdir");
+        File workTree = null;
+        if (Files.isRegularFile(gitdirPointer)) {
+            workTree =
+                    resolvePathFromFile(gitdirPointer, gitDirPath).getParent().toFile();
+        }
+
+        FileRepositoryBuilder worktreeBuilder =
+                new FileRepositoryBuilder().readEnvironment().setGitDir(commonDirFile);
+        if (workTree != null) {
+            worktreeBuilder.setWorkTree(workTree);
+        }
+        Repository repository = worktreeBuilder.setMustExist(true).build();
+        return new RepositoryInfo(repository, true, currentBranch, headRef);
+    }
+
+    private static Path resolvePathFromFile(Path file, Path baseDir) throws IOException {
+        String value = new String(Files.readAllBytes(file), StandardCharsets.UTF_8).trim();
+        Path path = Paths.get(value);
+        if (!path.isAbsolute()) {
+            path = baseDir.resolve(value);
+        }
+        return path.toRealPath();
     }
 
     private ChangeDetectionResult handleError(ScalpelConfiguration config, String message, Exception e)

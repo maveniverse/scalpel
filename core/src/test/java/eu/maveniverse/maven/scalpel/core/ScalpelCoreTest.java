@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -206,7 +207,7 @@ class ScalpelCoreTest {
                 .start();
         process.getInputStream().readAllBytes();
         int exitCode = process.waitFor();
-        assertTrue(exitCode == 0, "git worktree add should succeed, exit code: " + exitCode);
+        assertEquals(0, exitCode, "git worktree add should succeed");
 
         // Make a change in the worktree using git commands
         Files.write(worktreeDir.resolve("new-file.txt"), "world".getBytes(StandardCharsets.UTF_8));
@@ -215,14 +216,14 @@ class ScalpelCoreTest {
                 .redirectErrorStream(true)
                 .start();
         byte[] addOutput = add.getInputStream().readAllBytes();
-        assertTrue(add.waitFor() == 0, "git add failed: " + new String(addOutput, StandardCharsets.UTF_8));
+        assertEquals(0, add.waitFor(), "git add failed: " + new String(addOutput, StandardCharsets.UTF_8));
 
         Process commit = new ProcessBuilder("git", "commit", "-m", "add new file")
                 .directory(worktreeDir.toFile())
                 .redirectErrorStream(true)
                 .start();
         byte[] commitOutput = commit.getInputStream().readAllBytes();
-        assertTrue(commit.waitFor() == 0, "git commit failed: " + new String(commitOutput, StandardCharsets.UTF_8));
+        assertEquals(0, commit.waitFor(), "git commit failed: " + new String(commitOutput, StandardCharsets.UTF_8));
 
         ScalpelCore core = new ScalpelCore(new GitChangeDetector());
         Properties sys = new Properties();
