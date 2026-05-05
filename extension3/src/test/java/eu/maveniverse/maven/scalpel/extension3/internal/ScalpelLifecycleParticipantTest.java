@@ -1292,6 +1292,94 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void reportMode_transitivelyAffectedDownstreamExcludedHasTestsSkippedReason() throws Exception {
+        // module-b is downstream of module-a AND transitively affected by a changed managed dependency.
+        // module-b is in the exclusion list — should get testsSkippedReason even though it's handled
+        // by addTransitivelyAffectedModules rather than addDownstreamModules.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><lib.version>1.0</lib.version></properties>
+                  <dependencyManagement><dependencies>
+                    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId><version>${lib.version}</version></dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+
+        String newParentPom = oldParentPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
+        writePom(root, "pom.xml", newParentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // module-b has commons-lang transitively (makes it transitively affected)
+        DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
+        org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
+        when(moduleBResolution.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
+        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
+        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-b".equals(req.getMavenProject().getArtifactId())) {
+                        return moduleBResolution;
+                    }
+                    return emptyResolution;
+                });
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
+
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(
+                moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
+                "module-b should have TRANSITIVE_DEPENDENCY reason");
+        assertTrue(
+                moduleHasField(json, "module-b", "testsSkippedReason", "EXCLUDED_DOWNSTREAM"),
+                "module-b should have testsSkippedReason=EXCLUDED_DOWNSTREAM even when transitively affected");
+    }
+
+    @Test
     void skipTestsMode_excludedDownstreamWithChangedPluginStillRunsTests() throws Exception {
         // module-b is downstream and in the exclusion list, but also uses a changed managed plugin.
         // The safety guard should prevent test skipping.

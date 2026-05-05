@@ -636,7 +636,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 .changedManagedPlugins(ctx.changedManagedPluginGAs);
 
         addDirectlyAffectedModules(builder, ctx, reactorRoot);
-        addTransitivelyAffectedModules(builder, ctx, reactorRoot);
+        addTransitivelyAffectedModules(builder, ctx, config, reactorRoot);
         addTrimResultModules(builder, ctx, config, reactorRoot);
 
         try {
@@ -676,22 +676,28 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
     }
 
-    private void addTransitivelyAffectedModules(ScalpelReport.Builder builder, AnalysisContext ctx, Path reactorRoot) {
+    private void addTransitivelyAffectedModules(
+            ScalpelReport.Builder builder, AnalysisContext ctx, ScalpelConfiguration config, Path reactorRoot) {
         for (Map.Entry<MavenProject, List<String>> entry : ctx.transitivelyAffected.entrySet()) {
             MavenProject project = entry.getKey();
             String path = relativePath(reactorRoot, project);
             String category = null;
+            String testsSkippedReason = null;
             if (ctx.trimResult != null) {
                 if (ctx.trimResult.getUpstreamOnly().contains(project)) {
                     category = ScalpelReport.CATEGORY_UPSTREAM;
                 } else if (ctx.trimResult.getDownstreamOnly().contains(project)
                         || ctx.trimResult.getDownstreamTestOnly().contains(project)) {
                     category = ScalpelReport.CATEGORY_DOWNSTREAM;
+                    if (matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
+                        testsSkippedReason = ScalpelReport.REASON_EXCLUDED_DOWNSTREAM;
+                    }
                 }
             }
             builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                             project.getGroupId(), project.getArtifactId(), path, entry.getValue())
                     .category(category)
+                    .testsSkippedReason(testsSkippedReason)
                     .build());
         }
     }
