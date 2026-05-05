@@ -20,6 +20,7 @@ import java.util.Properties;
 import java.util.Set;
 import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.io.TempDir;
 
 class ScalpelCoreTest {
@@ -168,6 +169,61 @@ class ScalpelCoreTest {
         } finally {
             Files.deleteIfExists(nonGitDir);
         }
+    }
+
+    static boolean isGitWorktreeSupported() {
+        try {
+            Process p = new ProcessBuilder("git", "worktree", "list")
+                    .redirectErrorStream(true)
+                    .start();
+            return p.waitFor() == 0 || p.waitFor() == 128;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    @Test
+    @EnabledIf("isGitWorktreeSupported")
+    void detectChanges_worksInGitWorktree() throws Exception {
+        Path mainRepo = tempDir.resolve("main-repo");
+        Files.createDirectories(mainRepo);
+
+        try (Git git = Git.init().setDirectory(mainRepo.toFile()).call()) {
+            Files.write(mainRepo.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+        }
+
+        Path worktreeDir = tempDir.resolve("worktree");
+        Process process = new ProcessBuilder("git", "worktree", "add", worktreeDir.toString(), "-b", "feature")
+                .directory(mainRepo.toFile())
+                .redirectErrorStream(true)
+                .start();
+        process.getInputStream().readAllBytes();
+        int exitCode = process.waitFor();
+        assertTrue(exitCode == 0, "git worktree add should succeed, exit code: " + exitCode);
+
+        // Make a change in the worktree using git commands
+        Files.write(worktreeDir.resolve("new-file.txt"), "world".getBytes(StandardCharsets.UTF_8));
+        new ProcessBuilder("git", "add", "new-file.txt")
+                .directory(worktreeDir.toFile())
+                .start()
+                .waitFor();
+        new ProcessBuilder("git", "commit", "-m", "add new file")
+                .directory(worktreeDir.toFile())
+                .start()
+                .waitFor();
+
+        ScalpelCore core = new ScalpelCore(new GitChangeDetector());
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.baseBranch", "main");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+        ChangeDetectionResult result = core.detectChanges(worktreeDir, config, Set.of());
+
+        assertNotNull(result, "Should detect git repository in worktree");
+        assertTrue(result.getChangedFiles().contains("new-file.txt"));
     }
 
     @Test
