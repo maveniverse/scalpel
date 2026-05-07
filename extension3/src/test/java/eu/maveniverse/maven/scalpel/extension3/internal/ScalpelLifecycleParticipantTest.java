@@ -220,6 +220,11 @@ class ScalpelLifecycleParticipantTest {
 
         // module-c should NOT be in the report
         assertFalse(modulePresent(json, "module-c"), "module-c should NOT be in report");
+
+        // changedManagedDependencies should list the GA whose version changed via property
+        assertTrue(
+                json.contains("\"commons-lang:commons-lang\""),
+                "changedManagedDependencies should contain commons-lang:commons-lang");
     }
 
     @Test
@@ -342,6 +347,152 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasReason(json, "module-b", "POM_CHANGE"),
                 "module-b should have POM_CHANGE reason (PomChangeAnalyzer detects managed plugin use)");
         assertFalse(modulePresent(json, "module-a"), "module-a should NOT be in report (no plugin, no dep change)");
+
+        // changedManagedPlugins should list the GA whose version changed via property
+        assertTrue(
+                json.contains("\"org.apache.maven.plugins:maven-compiler-plugin\""),
+                "changedManagedPlugins should contain maven-compiler-plugin");
+    }
+
+    @Test
+    void reportMode_parentPomInSubdirectory_changedManagedDependenciesPopulated() throws Exception {
+        // Camel-like structure: root aggregator at pom.xml, parent POM at parent/pom.xml
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // Root aggregator
+        String rootPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>root</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>parent</module><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+        writePom(root, "pom.xml", rootPom);
+
+        // Old parent POM (before property change)
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <properties>
+                    <lib.version>1.0</lib.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>org.example</groupId>
+                      <artifactId>managed-lib</artifactId>
+                      <version>${lib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+
+        // New parent POM (after property change)
+        String newParentPom = oldParentPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
+        writePom(root, "parent/pom.xml", newParentPom);
+
+        // module-a: uses managed dep
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency><groupId>org.example</groupId><artifactId>managed-lib</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        // module-b: no deps
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        // Build MavenProject objects
+        MavenProject rootProject = createProject("com.example", "root", "1.0", root, "pom.xml", rootPom);
+        rootProject.getModel().setPackaging("pom");
+
+        MavenProject parentProject =
+                createProject("com.example", "parent", "1.0", root, "parent/pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        parentProject.setParent(rootProject);
+
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(rootProject, parentProject, moduleA, moduleB);
+
+        // Mock ScalpelCore: only parent/pom.xml changed
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("parent/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("parent/pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // No transitive deps to resolve for this test
+        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
+        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenReturn(emptyResolution);
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-a should be directly affected (POM_CHANGE via managed dep)
+        assertTrue(moduleHasReason(json, "module-a", "POM_CHANGE"), "module-a should have POM_CHANGE reason");
+
+        // module-b should NOT be affected
+        assertFalse(modulePresent(json, "module-b"), "module-b should NOT be in report");
+
+        // changedManagedDependencies should list the GA whose version changed via property
+        assertTrue(
+                json.contains("\"org.example:managed-lib\""),
+                "changedManagedDependencies should contain org.example:managed-lib");
+
+        // changedProperties should include the property
+        assertTrue(json.contains("\"lib.version\""), "changedProperties should contain lib.version");
     }
 
     @Test
