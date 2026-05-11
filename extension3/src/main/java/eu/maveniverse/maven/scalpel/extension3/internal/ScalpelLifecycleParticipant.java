@@ -582,9 +582,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
             return narrowestScope;
         } catch (DependencyResolutionException e) {
-            // Conservative: if we can't resolve, don't skip tests
-            logger.debug("Cannot resolve dependencies for {}, not skipping tests: {}", key(project), e.getMessage());
-            return "compile";
+            logger.warn(
+                    "Cannot resolve dependencies for {}, skipping transitive check: {}", key(project), e.getMessage());
+            return null;
         }
     }
 

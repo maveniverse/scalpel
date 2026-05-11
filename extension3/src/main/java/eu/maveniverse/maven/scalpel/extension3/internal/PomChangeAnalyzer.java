@@ -917,12 +917,18 @@ class PomChangeAnalyzer {
     }
 
     private Set<MavenProject> findParentProjects(List<MavenProject> allProjects) {
-        Set<MavenProject> allProjectsSet = new HashSet<>(allProjects);
+        Map<String, MavenProject> projectByGA = new LinkedHashMap<>();
+        for (MavenProject project : allProjects) {
+            projectByGA.put(key(project), project);
+        }
         Set<MavenProject> parents = new LinkedHashSet<>();
         for (MavenProject project : allProjects) {
             MavenProject parent = project.getParent();
-            if (parent != null && allProjectsSet.contains(parent)) {
-                parents.add(parent);
+            if (parent != null) {
+                MavenProject reactorParent = projectByGA.get(key(parent));
+                if (reactorParent != null) {
+                    parents.add(reactorParent);
+                }
             }
         }
         return parents;
@@ -1004,9 +1010,10 @@ class PomChangeAnalyzer {
     }
 
     private boolean isDescendantOf(MavenProject project, MavenProject ancestor) {
+        String ancestorKey = key(ancestor);
         MavenProject current = project.getParent();
         while (current != null) {
-            if (current.equals(ancestor)) {
+            if (key(current).equals(ancestorKey)) {
                 return true;
             }
             current = current.getParent();
