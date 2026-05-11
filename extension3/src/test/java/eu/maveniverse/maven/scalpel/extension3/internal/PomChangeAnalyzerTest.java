@@ -1723,6 +1723,120 @@ class PomChangeAnalyzerTest {
         assertFalse(result.containsKey(parent), "parent should not be detected as a BOM");
     }
 
+    // --- Parent identity mismatch tests (issue #28) ---
+
+    @Test
+    void analyzeChanges_parentPropertyChangeWithDifferentParentObjects() throws Exception {
+        // Simulates the case where project.getParent() returns a DIFFERENT MavenProject
+        // instance than the one in allProjects (same GA, different object).
+        // This happens in some Maven configurations and caused all children to be
+        // flagged as affected because the parent was treated as a leaf module.
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>2.0</dep.version>
+                  </properties>
+                </project>
+                """;
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId><version>${dep.version}</version></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        // Create the reactor parent instance
+        MavenProject parent = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+        parent.setOriginalModel(parseModel(parentPomXml));
+        parent.getModel().setPackaging("pom");
+
+        // Create DIFFERENT parent objects for children (same GA, different instances)
+        MavenProject parentRefA = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+        MavenProject parentRefB = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+
+        MavenProject moduleA = createProject(
+                "com.example",
+                "module-a",
+                "1.0",
+                root.resolve("module-a/pom.xml").toFile());
+        moduleA.setOriginalModel(parseModel(moduleAPomXml));
+        moduleA.setParent(parentRefA);
+
+        MavenProject moduleB = createProject(
+                "com.example",
+                "module-b",
+                "1.0",
+                root.resolve("module-b/pom.xml").toFile());
+        moduleB.setOriginalModel(parseModel(moduleBPomXml));
+        moduleB.setParent(parentRefB);
+
+        List<MavenProject> projects = new ArrayList<>();
+        projects.add(parent);
+        projects.add(moduleA);
+        projects.add(moduleB);
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>1.0</dep.version>
+                  </properties>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleB),
+                "module-b references ${dep.version} and should be affected");
+        assertFalse(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a does NOT reference ${dep.version} and should NOT be affected");
+        assertFalse(
+                result.getAffectedProjects().contains(parent),
+                "parent should NOT be self-affected for a property-only change");
+    }
+
     // --- Helper methods ---
 
     private Path setupReactorRootWithBom() throws IOException {
