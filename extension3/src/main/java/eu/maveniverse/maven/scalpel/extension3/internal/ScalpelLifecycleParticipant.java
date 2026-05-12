@@ -553,44 +553,46 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenSession session,
             Set<String> changedGAs,
             Map<MavenProject, DependencyResolutionResult> resolveCache) {
-        try {
-            DependencyResolutionResult result = resolveCache.get(project);
-            if (result == null) {
+        DependencyResolutionResult result = resolveCache.get(project);
+        if (result == null) {
+            try {
                 DefaultDependencyResolutionRequest request =
                         new DefaultDependencyResolutionRequest(project, session.getRepositorySession());
                 result = dependenciesResolver.resolve(request);
-                resolveCache.put(project, result);
-            }
-
-            String narrowestScope = null;
-            for (Dependency dep : result.getResolvedDependencies()) {
-                String ga =
-                        dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
-                if (changedGAs.contains(ga)) {
-                    String scope = dep.getScope();
+            } catch (DependencyResolutionException e) {
+                result = e.getResult();
+                if (result == null) {
                     logger.debug(
-                            "Module {} has transitive dependency on changed managed dep {} (scope={})",
+                            "Cannot resolve dependencies for {}, no partial results available: {}",
                             key(project),
-                            ga,
-                            scope);
-                    // Non-test scope means production code is affected
-                    if (scope == null || !"test".equals(scope)) {
-                        return scope != null ? scope : "compile";
-                    }
-                    narrowestScope = "test";
+                            e.getMessage());
+                    return null;
                 }
+                logger.debug(
+                        "Partial dependency resolution for {}, checking available results: {}",
+                        key(project),
+                        e.getMessage());
             }
-            return narrowestScope;
-        } catch (DependencyResolutionException e) {
-            // Conservative: if we can't resolve, assume affected.
-            // This commonly happens in afterProjectsRead when reactor siblings
-            // haven't been built yet, so treating as affected is the safe default.
-            logger.debug(
-                    "Cannot resolve dependencies for {}, conservatively treating as affected: {}",
-                    key(project),
-                    e.getMessage());
-            return "compile";
+            resolveCache.put(project, result);
         }
+
+        String narrowestScope = null;
+        for (Dependency dep : result.getResolvedDependencies()) {
+            String ga = dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
+            if (changedGAs.contains(ga)) {
+                String scope = dep.getScope();
+                logger.debug(
+                        "Module {} has transitive dependency on changed managed dep {} (scope={})",
+                        key(project),
+                        ga,
+                        scope);
+                if (scope == null || !"test".equals(scope)) {
+                    return scope != null ? scope : "compile";
+                }
+                narrowestScope = "test";
+            }
+        }
+        return narrowestScope;
     }
 
     private void writeImpactedLog(ScalpelConfiguration config, Path reactorRoot, Set<MavenProject> affectedModules)
@@ -700,7 +702,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 }
             }
             if (category == null) {
-                continue;
+                category = ScalpelReport.CATEGORY_TRANSITIVE;
             }
             builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                             project.getGroupId(), project.getArtifactId(), path, entry.getValue())

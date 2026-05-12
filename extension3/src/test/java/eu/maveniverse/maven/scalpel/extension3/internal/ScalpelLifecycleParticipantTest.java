@@ -39,6 +39,7 @@ import org.apache.maven.model.Model;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
+import org.apache.maven.project.DependencyResolutionException;
 import org.apache.maven.project.DependencyResolutionResult;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
@@ -141,7 +142,7 @@ class ScalpelLifecycleParticipantTest {
                 """;
         writePom(root, "module-c/pom.xml", moduleCPom);
 
-        // module-d: no reactor dependency on module-a, but has commons-lang transitively
+        // module-d: no reactor dependency on module-a, but has commons-lang transitively (genuine)
         String moduleDPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -151,6 +152,17 @@ class ScalpelLifecycleParticipantTest {
                 </project>
                 """;
         writePom(root, "module-d/pom.xml", moduleDPom);
+
+        // module-e: dependency resolution fails, should NOT appear in report
+        String moduleEPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-e</artifactId>
+                </project>
+                """;
+        writePom(root, "module-e/pom.xml", moduleEPom);
 
         // Build MavenProject objects
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
@@ -169,8 +181,10 @@ class ScalpelLifecycleParticipantTest {
         moduleC.setParent(parentProject);
         MavenProject moduleD = createProject("com.example", "module-d", "1.0", root, "module-d/pom.xml", moduleDPom);
         moduleD.setParent(parentProject);
+        MavenProject moduleE = createProject("com.example", "module-e", "1.0", root, "module-e/pom.xml", moduleEPom);
+        moduleE.setParent(parentProject);
 
-        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleC, moduleD);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleC, moduleD, moduleE);
 
         // Mock ScalpelCore to return changed files
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -184,7 +198,10 @@ class ScalpelLifecycleParticipantTest {
         org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
 
-        // Route resolution calls: module-b and module-d have commons-lang, others don't
+        // Route resolution calls:
+        // module-b and module-d: resolution succeeds, has commons-lang
+        // module-e: resolution fails with empty partial results (simulates unresolvable deps)
+        // others: resolution succeeds, no matching deps
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
@@ -193,6 +210,11 @@ class ScalpelLifecycleParticipantTest {
                         DependencyResolutionResult res = mock(DependencyResolutionResult.class);
                         when(res.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
                         return res;
+                    }
+                    if ("module-e".equals(aid)) {
+                        DependencyResolutionResult partial = mock(DependencyResolutionResult.class);
+                        when(partial.getResolvedDependencies()).thenReturn(List.of());
+                        throw new DependencyResolutionException(partial, "Cannot resolve", new Exception());
                     }
                     DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
                     when(empty.getResolvedDependencies()).thenReturn(List.of());
@@ -210,7 +232,7 @@ class ScalpelLifecycleParticipantTest {
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
 
-        // Graph: module-b is downstream of module-a; module-d is NOT downstream
+        // Graph: module-b is downstream of module-a; module-d and module-e are NOT downstream
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
@@ -246,10 +268,18 @@ class ScalpelLifecycleParticipantTest {
         // module-c should NOT be in the report (no deps at all)
         assertFalse(modulePresent(json, "module-c"), "module-c should NOT be in report");
 
-        // module-d should NOT be in the report (has commons-lang transitively but is NOT downstream)
+        // module-d should be in the report with TRANSITIVE category (genuine transitive dep, not downstream)
+        assertTrue(
+                moduleHasReason(json, "module-d", "TRANSITIVE_DEPENDENCY"),
+                "module-d should have TRANSITIVE_DEPENDENCY reason");
+        assertTrue(
+                moduleHasField(json, "module-d", "category", "TRANSITIVE"),
+                "module-d should have TRANSITIVE category (not downstream, but genuinely uses changed dep)");
+
+        // module-e should NOT be in the report (resolution failed, dep not found in partial results)
         assertFalse(
-                modulePresent(json, "module-d"),
-                "module-d should NOT be in report (transitively affected but not downstream — issue #30)");
+                modulePresent(json, "module-e"),
+                "module-e should NOT be in report (resolution failed, no matching dep in partial results)");
 
         // changedManagedDependencies should list the GA whose version changed via property
         assertTrue(
