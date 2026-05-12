@@ -141,6 +141,17 @@ class ScalpelLifecycleParticipantTest {
                 """;
         writePom(root, "module-c/pom.xml", moduleCPom);
 
+        // module-d: no reactor dependency on module-a, but has commons-lang transitively
+        String moduleDPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-d</artifactId>
+                </project>
+                """;
+        writePom(root, "module-d/pom.xml", moduleDPom);
+
         // Build MavenProject objects
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
         parentProject.getModel().setPackaging("pom");
@@ -148,10 +159,18 @@ class ScalpelLifecycleParticipantTest {
         moduleA.setParent(parentProject);
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
+        // Add dependency on module-a to module-b's effective model
+        Dependency moduleBDep = new Dependency();
+        moduleBDep.setGroupId("com.example");
+        moduleBDep.setArtifactId("module-a");
+        moduleBDep.setVersion("1.0");
+        moduleB.getDependencies().add(moduleBDep);
         MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
         moduleC.setParent(parentProject);
+        MavenProject moduleD = createProject("com.example", "module-d", "1.0", root, "module-d/pom.xml", moduleDPom);
+        moduleD.setParent(parentProject);
 
-        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleC);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleC, moduleD);
 
         // Mock ScalpelCore to return changed files
         Set<String> changedFiles = new LinkedHashSet<>();
@@ -161,24 +180,23 @@ class ScalpelLifecycleParticipantTest {
         ChangeDetectionResult detectionResult = new ChangeDetectionResult(changedFiles, oldPoms);
         when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(detectionResult);
 
-        // Mock dependency resolution: module-b has commons-lang transitively
-        DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
+        // commons-lang dependency used for transitive resolution
         org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
-        when(moduleBResolution.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
 
-        // Mock dependency resolution: module-c has no matching deps
-        DependencyResolutionResult moduleCResolution = mock(DependencyResolutionResult.class);
-        when(moduleCResolution.getResolvedDependencies()).thenReturn(List.of());
-
-        // Route resolution calls based on project
+        // Route resolution calls: module-b and module-d have commons-lang, others don't
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-b".equals(req.getMavenProject().getArtifactId())) {
-                        return moduleBResolution;
+                    String aid = req.getMavenProject().getArtifactId();
+                    if ("module-b".equals(aid) || "module-d".equals(aid)) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
+                        return res;
                     }
-                    return moduleCResolution;
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getResolvedDependencies()).thenReturn(List.of());
+                    return empty;
                 });
 
         // Mock MavenSession
@@ -191,8 +209,11 @@ class ScalpelLifecycleParticipantTest {
         when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+
+        // Graph: module-b is downstream of module-a; module-d is NOT downstream
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -210,16 +231,25 @@ class ScalpelLifecycleParticipantTest {
 
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
 
-        // module-a should be directly affected (POM_CHANGE)
+        // module-a should be directly affected (POM_CHANGE) with DIRECT category
         assertTrue(moduleHasReason(json, "module-a", "POM_CHANGE"), "module-a should have POM_CHANGE reason");
+        assertTrue(moduleHasField(json, "module-a", "category", "DIRECT"), "module-a should have DIRECT category");
 
-        // module-b should be transitively affected
+        // module-b should be transitively affected with DOWNSTREAM category
         assertTrue(
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
                 "module-b should have TRANSITIVE_DEPENDENCY reason");
+        assertTrue(
+                moduleHasField(json, "module-b", "category", "DOWNSTREAM"),
+                "module-b should have DOWNSTREAM category (downstream of module-a)");
 
-        // module-c should NOT be in the report
+        // module-c should NOT be in the report (no deps at all)
         assertFalse(modulePresent(json, "module-c"), "module-c should NOT be in report");
+
+        // module-d should NOT be in the report (has commons-lang transitively but is NOT downstream)
+        assertFalse(
+                modulePresent(json, "module-d"),
+                "module-d should NOT be in report (transitively affected but not downstream — issue #30)");
 
         // changedManagedDependencies should list the GA whose version changed via property
         assertTrue(
@@ -635,13 +665,16 @@ class ScalpelLifecycleParticipantTest {
                 """;
         writePom(root, "module-a/pom.xml", moduleAPom);
 
-        // module-b: gets commons-lang only via test scope transitively
+        // module-b: depends on module-a via test scope, gets commons-lang only via test scope transitively
         String moduleBPom = """
                 <?xml version="1.0"?>
                 <project>
                   <modelVersion>4.0.0</modelVersion>
                   <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
                   <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version><scope>test</scope></dependency>
+                  </dependencies>
                 </project>
                 """;
         writePom(root, "module-b/pom.xml", moduleBPom);
@@ -652,6 +685,13 @@ class ScalpelLifecycleParticipantTest {
         moduleA.setParent(parentProject);
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
+        // Add test-scoped dependency on module-a to module-b's effective model
+        Dependency dep = new Dependency();
+        dep.setGroupId("com.example");
+        dep.setArtifactId("module-a");
+        dep.setVersion("1.0");
+        dep.setScope("test");
+        moduleB.getDependencies().add(dep);
 
         List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
@@ -690,8 +730,11 @@ class ScalpelLifecycleParticipantTest {
         when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+
+        // Graph: module-b is downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -706,6 +749,8 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY_TEST"),
                 "module-b should have TRANSITIVE_DEPENDENCY_TEST (test-scoped transitive dep)");
+        assertTrue(
+                moduleHasField(json, "module-b", "category", "DOWNSTREAM"), "module-b should have DOWNSTREAM category");
     }
 
     @Test
@@ -1098,6 +1143,12 @@ class ScalpelLifecycleParticipantTest {
         moduleA.setParent(parentProject);
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
+        // Add dependency on module-a to module-b's effective model
+        Dependency moduleBDep = new Dependency();
+        moduleBDep.setGroupId("com.example");
+        moduleBDep.setArtifactId("module-a");
+        moduleBDep.setVersion("1.0");
+        moduleB.getDependencies().add(moduleBDep);
         MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
         moduleC.setParent(parentProject);
 
@@ -1141,8 +1192,11 @@ class ScalpelLifecycleParticipantTest {
         when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
         when(session.getRequest()).thenReturn(execRequest);
         when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+
+        // Graph: module-b is downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -1159,10 +1213,12 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasReason(json, "module-a", "POM_CHANGE"),
                 "module-a should have POM_CHANGE reason (imports BOM with changed managed dep)");
 
-        // module-b should be transitively affected (gets commons-lang through module-a)
+        // module-b should be transitively affected with DOWNSTREAM category
         assertTrue(
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
                 "module-b should have TRANSITIVE_DEPENDENCY reason");
+        assertTrue(
+                moduleHasField(json, "module-b", "category", "DOWNSTREAM"), "module-b should have DOWNSTREAM category");
 
         // module-c should NOT be in the report
         assertFalse(modulePresent(json, "module-c"), "module-c should NOT be in report");

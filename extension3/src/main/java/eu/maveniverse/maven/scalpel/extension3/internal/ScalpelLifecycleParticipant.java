@@ -699,6 +699,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                 }
             }
+            if (category == null) {
+                continue;
+            }
             builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                             project.getGroupId(), project.getArtifactId(), path, entry.getValue())
                     .category(category)
