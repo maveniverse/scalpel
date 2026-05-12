@@ -32,6 +32,7 @@ public final class ScalpelReport {
     public static final String CATEGORY_DIRECT = "DIRECT";
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";
     public static final String CATEGORY_DOWNSTREAM = "DOWNSTREAM";
+    public static final String CATEGORY_TRANSITIVE = "TRANSITIVE";
 
     private final String baseBranch;
     private final boolean fullBuildTriggered;
