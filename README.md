@@ -171,6 +171,7 @@ not as a replacement. It contains only directly affected modules (not upstream/d
 | Category | Description |
 |----------|-------------|
 | `DIRECT` | Directly affected by a change |
+| `TRANSITIVE` | Affected by a changed managed dependency or plugin (not directly changed) |
 | `UPSTREAM` | Included as an upstream dependency (via `alsoMake`) |
 | `DOWNSTREAM` | Included as a downstream dependent (via `alsoMakeDependents`) |
 
