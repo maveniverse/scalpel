@@ -14,7 +14,7 @@
   <parent>
     <groupId>eu.maveniverse.maven.parent</groupId>
     <artifactId>parent</artifactId>
-    <version>52</version>
+    <version>55</version>
   </parent>
 
   <groupId>eu.maveniverse.maven.scalpel</groupId>
@@ -66,7 +66,7 @@
     <requireRuntimeMavenVersion.range>[3.9,)</requireRuntimeMavenVersion.range>
 
     <!-- Maven 3 versions -->
-    <maven3Version>3.9.14</maven3Version>
+    <maven3Version>3.9.16</maven3Version>
     <maven3ResolverVersion>1.9.27</maven3ResolverVersion>
 
     <version.slf4j>1.7.36</version.slf4j>
@@ -94,7 +94,7 @@
       <dependency>
         <groupId>eu.maveniverse.maven.shared</groupId>
         <artifactId>extension</artifactId>
-        <version>0.1.11</version>
+        <version>0.2.5</version>
       </dependency>
 
       <!-- Logging -->
@@ -139,12 +139,12 @@
       <dependency>
         <groupId>org.junit.jupiter</groupId>
         <artifactId>junit-jupiter-api</artifactId>
-        <version>6.0.3</version>
+        <version>6.1.0</version>
       </dependency>
       <dependency>
         <groupId>org.junit.jupiter</groupId>
         <artifactId>junit-jupiter-params</artifactId>
-        <version>6.0.3</version>
+        <version>6.1.0</version>
       </dependency>
     </dependencies>
   </dependencyManagement>
