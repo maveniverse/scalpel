@@ -231,7 +231,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // Force-included modules are not test-only
             testOnlyModules.removeAll(forceIncluded);
 
-            if (directlyAffected.isEmpty()) {
+            if (directlyAffected.isEmpty() && changedManagedDepGAs.isEmpty() && changedManagedPluginGAs.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
                 if (config.isModeReport()) {
                     writeReport(
@@ -245,20 +245,46 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 return;
             }
 
-            logger.info("Scalpel: {} modules directly affected: {}", directlyAffected.size(), keys(directlyAffected));
+            if (!directlyAffected.isEmpty()) {
+                logger.info(
+                        "Scalpel: {} modules directly affected: {}", directlyAffected.size(), keys(directlyAffected));
+            }
+
+            // Compute transitively affected modules (via changed managed deps/plugins)
+            Map<MavenProject, List<String>> transitivelyAffected = computeTransitivelyAffected(
+                    allProjects, directlyAffected, changedManagedDepGAs, changedManagedPluginGAs, session);
+
+            if (directlyAffected.isEmpty() && transitivelyAffected.isEmpty()) {
+                logger.info("Scalpel: No modules affected by changes");
+                if (config.isModeReport()) {
+                    writeReport(
+                            config,
+                            reactorRoot,
+                            AnalysisContext.empty(
+                                    changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs));
+                } else if (config.isModeSkipTests()) {
+                    skipTestsOnAll(allProjects);
+                }
+                return;
+            }
+
+            // Include transitively affected modules (from managed dep/plugin changes) in the affected set
+            Set<MavenProject> allAffected = new LinkedHashSet<>(directlyAffected);
+            allAffected.addAll(transitivelyAffected.keySet());
 
             // Write impacted module log if configured
             if (config.getImpactedLog() != null) {
-                writeImpactedLog(config, reactorRoot, directlyAffected);
+                writeImpactedLog(config, reactorRoot, allAffected);
             }
 
             if (config.isModeReport()) {
                 // Compute upstream/downstream categorization for report enrichment
-                TrimResult trimResult = reactorTrimmer.computeBuildSet(
-                        directlyAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
-
-                Map<MavenProject, List<String>> transitivelyAffected = computeTransitivelyAffected(
-                        allProjects, directlyAffected, changedManagedDepGAs, changedManagedPluginGAs, session);
+                // Use directlyAffected here (not allAffected) to preserve correct DOWNSTREAM categorization;
+                // transitively affected modules are added to the report separately via addTransitivelyAffectedModules
+                TrimResult trimResult = directlyAffected.isEmpty()
+                        ? null
+                        : reactorTrimmer.computeBuildSet(
+                                directlyAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
 
                 writeReport(
                         config,
@@ -278,7 +304,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Compute full build set with upstream/downstream
             TrimResult trimResult = reactorTrimmer.computeBuildSet(
-                    directlyAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+                    allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
 
             if (config.isModeSkipTests()) {
                 applySkipTests(session, allProjects, trimResult, config, changedManagedDepGAs, changedManagedPluginGAs);

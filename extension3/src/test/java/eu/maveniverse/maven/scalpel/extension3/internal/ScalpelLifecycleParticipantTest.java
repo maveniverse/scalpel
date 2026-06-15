@@ -2128,6 +2128,158 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void impactedLog_includesTransitivelyAffectedModules() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String rootPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>root</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules>
+                    <module>bom</module>
+                    <module>module-a</module>
+                    <module>module-b</module>
+                  </modules>
+                </project>
+                """;
+        writePom(root, "pom.xml", rootPom);
+
+        String oldBomPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>bom</artifactId>
+                  <packaging>pom</packaging>
+                  <properties>
+                    <graphql.version>2.18.1</graphql.version>
+                  </properties>
+                  <dependencyManagement>
+                    <dependencies>
+                      <dependency>
+                        <groupId>io.smallrye</groupId>
+                        <artifactId>smallrye-graphql</artifactId>
+                        <version>${graphql.version}</version>
+                      </dependency>
+                    </dependencies>
+                  </dependencyManagement>
+                </project>
+                """;
+
+        String newBomPom = oldBomPom.replace(
+                "<graphql.version>2.18.1</graphql.version>", "<graphql.version>2.18.2</graphql.version>");
+        writePom(root, "bom/pom.xml", newBomPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencyManagement>
+                    <dependencies>
+                      <dependency>
+                        <groupId>com.example</groupId>
+                        <artifactId>bom</artifactId>
+                        <version>${project.version}</version>
+                        <type>pom</type>
+                        <scope>import</scope>
+                      </dependency>
+                    </dependencies>
+                  </dependencyManagement>
+                </project>
+                """;
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject rootProject = createProject("com.example", "root", "1.0", root, "pom.xml", rootPom);
+        rootProject.getModel().setPackaging("pom");
+        MavenProject bomProject = createProject("com.example", "bom", "1.0", root, "bom/pom.xml", newBomPom);
+        bomProject.getModel().setPackaging("pom");
+        bomProject.setParent(rootProject);
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(rootProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(rootProject);
+
+        List<MavenProject> allProjects = List.of(rootProject, bomProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("bom/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        org.eclipse.aether.graph.Dependency graphqlDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("io.smallrye", "smallrye-graphql", "jar", "2.18.2"), "compile");
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getResolvedDependencies()).thenReturn(List.of(graphqlDep));
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getResolvedDependencies()).thenReturn(List.of());
+                    return empty;
+                });
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        sysProps.setProperty("scalpel.impactedLog", "target/scalpel-impacted.log");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path logFile = root.resolve("target/scalpel-impacted.log");
+        assertTrue(Files.exists(logFile), "Impacted log file should be created");
+        String content = new String(Files.readAllBytes(logFile), StandardCharsets.UTF_8);
+        assertTrue(content.contains("module-a"), "Impacted log should contain transitively affected module-a");
+        assertFalse(content.contains("module-b"), "Impacted log should NOT contain unaffected module-b");
+    }
+
+    @Test
     void skipTestsMode_skipTestsForUpstream_skipsUpstreamTests() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
@@ -2406,6 +2558,190 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasReason(json, "module-a", "UPSTREAM_DEPENDENCY"),
                 "module-a should have UPSTREAM_DEPENDENCY reason in report");
         assertTrue(moduleHasField(json, "module-a", "category", "UPSTREAM"), "module-a should have UPSTREAM category");
+    }
+
+    @Test
+    void reportMode_bomPropertyChangeWithNoDirectlyAffectedModules() throws Exception {
+        // Simulates a BOM-only property change (e.g. bumping a version property in bom/application/pom.xml)
+        // where no module directly references the changed property in its own POM text,
+        // but modules transitively depend on the changed managed dependencies.
+        // Before the fix, this produced an empty report (no affected modules).
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // Root aggregator
+        String rootPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>root</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules>
+                    <module>bom</module>
+                    <module>module-a</module>
+                    <module>module-b</module>
+                  </modules>
+                </project>
+                """;
+        writePom(root, "pom.xml", rootPom);
+
+        // BOM with a property-based version (old)
+        String oldBomPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>bom</artifactId>
+                  <packaging>pom</packaging>
+                  <properties>
+                    <graphql.version>2.18.1</graphql.version>
+                  </properties>
+                  <dependencyManagement>
+                    <dependencies>
+                      <dependency>
+                        <groupId>io.smallrye</groupId>
+                        <artifactId>smallrye-graphql</artifactId>
+                        <version>${graphql.version}</version>
+                      </dependency>
+                      <dependency>
+                        <groupId>io.smallrye</groupId>
+                        <artifactId>smallrye-graphql-api</artifactId>
+                        <version>${graphql.version}</version>
+                      </dependency>
+                    </dependencies>
+                  </dependencyManagement>
+                </project>
+                """;
+
+        // BOM (new — version bumped)
+        String newBomPom = oldBomPom.replace(
+                "<graphql.version>2.18.1</graphql.version>", "<graphql.version>2.18.2</graphql.version>");
+        writePom(root, "bom/pom.xml", newBomPom);
+
+        // module-a: imports the BOM but does NOT directly declare any graphql dependency.
+        // It gets smallrye-graphql transitively via dependency resolution.
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencyManagement>
+                    <dependencies>
+                      <dependency>
+                        <groupId>com.example</groupId>
+                        <artifactId>bom</artifactId>
+                        <version>${project.version}</version>
+                        <type>pom</type>
+                        <scope>import</scope>
+                      </dependency>
+                    </dependencies>
+                  </dependencyManagement>
+                </project>
+                """;
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        // module-b: does NOT import the BOM or use graphql
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        // Build projects
+        MavenProject rootProject = createProject("com.example", "root", "1.0", root, "pom.xml", rootPom);
+        rootProject.getModel().setPackaging("pom");
+        MavenProject bomProject = createProject("com.example", "bom", "1.0", root, "bom/pom.xml", newBomPom);
+        bomProject.getModel().setPackaging("pom");
+        bomProject.setParent(rootProject);
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(rootProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(rootProject);
+
+        List<MavenProject> allProjects = List.of(rootProject, bomProject, moduleA, moduleB);
+
+        // Only BOM POM changed
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("bom/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // module-a has smallrye-graphql as a transitive dependency
+        org.eclipse.aether.graph.Dependency graphqlDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("io.smallrye", "smallrye-graphql", "jar", "2.18.2"), "compile");
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getResolvedDependencies()).thenReturn(List.of(graphqlDep));
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getResolvedDependencies()).thenReturn(List.of());
+                    return empty;
+                });
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-a should be transitively affected (has the changed dep in its resolved deps)
+        assertTrue(
+                moduleHasReason(json, "module-a", "TRANSITIVE_DEPENDENCY"),
+                "module-a should have TRANSITIVE_DEPENDENCY reason (transitive dep on changed managed GA)");
+        assertTrue(
+                moduleHasField(json, "module-a", "category", "TRANSITIVE"), "module-a should have TRANSITIVE category");
+
+        // module-b should NOT be affected (no dependency on changed GAs)
+        assertFalse(modulePresent(json, "module-b"), "module-b should NOT be in report");
+
+        // changedManagedDependencies should include the GAs
+        assertTrue(json.contains("\"io.smallrye:smallrye-graphql\""), "Report should include changed managed dep GA");
+        assertTrue(
+                json.contains("\"io.smallrye:smallrye-graphql-api\""),
+                "Report should include changed managed dep GA for api");
     }
 
     // --- Helper methods ---
