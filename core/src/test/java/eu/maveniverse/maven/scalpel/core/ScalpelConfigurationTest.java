@@ -404,6 +404,45 @@ class ScalpelConfigurationTest {
     // ---------------------------------------------------------------
 
     @Test
+    void maxResourceFileSize_defaultValue() {
+        assertEquals(10L * 1024 * 1024, defaultConfig().getMaxResourceFileSize());
+    }
+
+    @Test
+    void maxResourceFileSize_customValue() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.maxResourceFileSize", "5242880");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertEquals(5242880L, config.getMaxResourceFileSize());
+    }
+
+    @Test
+    void maxResourceFileSize_invalidFormat_throwsException() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.maxResourceFileSize", "not-a-number");
+        Properties user = new Properties();
+        assertThrows(IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, user));
+    }
+
+    @Test
+    void maxResourceFileSize_negativeValue_throwsException() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.maxResourceFileSize", "-1");
+        Properties user = new Properties();
+        assertThrows(IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, user));
+    }
+
+    @Test
+    void maxResourceFileSize_zero_throwsException() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.maxResourceFileSize", "0");
+        Properties user = new Properties();
+        assertThrows(IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, user));
+    }
+
+    // ---------------------------------------------------------------
+
+    @Test
     void listField_trimsWhitespaceInValues() {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableOnBranch", "main, release/.*,hotfix");

@@ -173,7 +173,16 @@ public final class ScalpelConfiguration {
         String maxResourceFileSizeStr = resolve(system, user, MAX_RESOURCE_FILE_SIZE, null);
         long maxResourceFileSize = DEFAULT_MAX_RESOURCE_FILE_SIZE;
         if (maxResourceFileSizeStr != null) {
-            maxResourceFileSize = Long.parseLong(maxResourceFileSizeStr);
+            try {
+                maxResourceFileSize = Long.parseLong(maxResourceFileSizeStr);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid " + MAX_RESOURCE_FILE_SIZE + " '" + maxResourceFileSizeStr
+                        + "', expected a positive integer (bytes)");
+            }
+            if (maxResourceFileSize <= 0) {
+                throw new IllegalArgumentException("Invalid " + MAX_RESOURCE_FILE_SIZE + " '" + maxResourceFileSizeStr
+                        + "', must be a positive integer (bytes)");
+            }
         }
 
         return new ScalpelConfiguration(
