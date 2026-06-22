@@ -179,7 +179,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 logger.debug("POM changes detected: {}", pomChanges);
                 try {
                     PomChangeAnalyzer.Result pomResult = pomChangeAnalyzer.analyzeChanges(
-                            pomChanges, result.getOldPomContents(), allProjects, reactorRoot);
+                            pomChanges,
+                            result.getOldPomContents(),
+                            allProjects,
+                            reactorRoot,
+                            config.getMaxResourceFileSize());
                     affectedByPom = pomResult.getAffectedProjects();
                     changedManagedDepGAs = pomResult.getChangedManagedDependencyGAs();
                     changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
