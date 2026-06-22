@@ -370,11 +370,11 @@ class PomChangeAnalyzer {
             }
 
             // Check if child has filtered resources referencing changed properties
-            if (!childAffected && !changedProperties.isEmpty()) {
-                if (hasFilteredResourcesWithChangedProperty(child, changedProperties, maxResourceFileSize)) {
-                    logger.debug("Child {} has filtered resources referencing changed properties", key(child));
-                    childAffected = true;
-                }
+            if (!childAffected
+                    && !changedProperties.isEmpty()
+                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, maxResourceFileSize)) {
+                logger.debug("Child {} has filtered resources referencing changed properties", key(child));
+                childAffected = true;
             }
 
             if (childAffected) {
@@ -1085,41 +1085,47 @@ class PomChangeAnalyzer {
                 for (Path entry : stream) {
                     if (Files.isDirectory(entry)) {
                         stack.add(entry);
-                    } else if (Files.isRegularFile(entry)) {
-                        try {
-                            long size = Files.size(entry);
-                            // Read the first 8000 bytes to detect binary files (same heuristic as git)
-                            if (isBinaryFile(entry, size)) {
-                                logger.debug("Skipping binary file: {}", entry);
-                                continue;
-                            }
-                            if (size > maxResourceFileSize) {
-                                // Conservative: treat oversized text files as potentially affected
-                                logger.warn(
-                                        "Filtered resource {} ({} bytes) exceeds size limit ({} bytes)."
-                                                + " Module will be conservatively marked as affected."
-                                                + " Increase the limit with -D{}=<bytes> or disable filtering"
-                                                + " for this resource.",
-                                        entry,
-                                        size,
-                                        maxResourceFileSize,
-                                        ScalpelConfiguration.MAX_RESOURCE_FILE_SIZE);
-                                return true;
-                            }
-                            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
-                            for (String ref : refs) {
-                                if (content.contains(ref)) {
-                                    return true;
-                                }
-                            }
-                        } catch (IOException e) {
-                            // Skip unreadable files
-                        }
+                    } else if (Files.isRegularFile(entry)
+                            && checkFileForPropertyRefs(entry, refs, maxResourceFileSize)) {
+                        return true;
                     }
                 }
             } catch (IOException e) {
                 // Skip unreadable directories
             }
+        }
+        return false;
+    }
+
+    private boolean checkFileForPropertyRefs(Path entry, List<String> refs, long maxResourceFileSize) {
+        try {
+            long size = Files.size(entry);
+            // Read the first 8000 bytes to detect binary files (same heuristic as git)
+            if (isBinaryFile(entry, size)) {
+                logger.debug("Skipping binary file: {}", entry);
+                return false;
+            }
+            if (size > maxResourceFileSize) {
+                // Conservative: treat oversized text files as potentially affected
+                logger.warn(
+                        "Filtered resource {} ({} bytes) exceeds size limit ({} bytes)."
+                                + " Module will be conservatively marked as affected."
+                                + " Increase the limit with -D{}=<bytes> or disable filtering"
+                                + " for this resource.",
+                        entry,
+                        size,
+                        maxResourceFileSize,
+                        ScalpelConfiguration.MAX_RESOURCE_FILE_SIZE);
+                return true;
+            }
+            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
+            for (String ref : refs) {
+                if (content.contains(ref)) {
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            // Skip unreadable files
         }
         return false;
     }
