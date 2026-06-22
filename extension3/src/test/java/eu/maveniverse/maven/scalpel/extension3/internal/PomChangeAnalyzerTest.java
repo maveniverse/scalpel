@@ -1160,6 +1160,227 @@ class PomChangeAnalyzerTest {
                 "module-b's filtered resources don't reference ${app.version} - should NOT be affected");
     }
 
+    @Test
+    void analyzeChanges_filteredResourceBinaryFileSkipped() throws Exception {
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module></modules>
+                  <properties>
+                    <app.version>2.0</app.version>
+                  </properties>
+                </project>
+                """;
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // Create a binary file (contains NUL bytes) in filtered resources
+        Path resourceDir = root.resolve("module-a/src/main/resources");
+        Files.createDirectories(resourceDir);
+        byte[] binaryContent = new byte[100];
+        binaryContent[50] = 0; // NUL byte makes it binary
+        Files.write(resourceDir.resolve("image.png"), binaryContent);
+
+        MavenProject parent = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+        parent.setOriginalModel(parseModel(parentPomXml));
+        parent.getModel().setPackaging("pom");
+
+        MavenProject moduleA = createProject(
+                "com.example",
+                "module-a",
+                "1.0",
+                root.resolve("module-a/pom.xml").toFile());
+        moduleA.setOriginalModel(parseModel(moduleAPomXml));
+        moduleA.setParent(parent);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleA.getModel().setBuild(build);
+
+        List<MavenProject> projects = List.of(parent, moduleA);
+
+        String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.contains(moduleA),
+                "module-a has only binary files in filtered resources and should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_filteredResourceOversizedTextFileMarkedAsAffected() throws Exception {
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module></modules>
+                  <properties>
+                    <app.version>2.0</app.version>
+                  </properties>
+                </project>
+                """;
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // Create a large text file (no NUL bytes) exceeding a small custom limit
+        Path resourceDir = root.resolve("module-a/src/main/resources");
+        Files.createDirectories(resourceDir);
+        byte[] largeText = new byte[2000];
+        java.util.Arrays.fill(largeText, (byte) 'x');
+        Files.write(resourceDir.resolve("large.txt"), largeText);
+
+        MavenProject parent = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+        parent.setOriginalModel(parseModel(parentPomXml));
+        parent.getModel().setPackaging("pom");
+
+        MavenProject moduleA = createProject(
+                "com.example",
+                "module-a",
+                "1.0",
+                root.resolve("module-a/pom.xml").toFile());
+        moduleA.setOriginalModel(parseModel(moduleAPomXml));
+        moduleA.setParent(parent);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleA.getModel().setBuild(build);
+
+        List<MavenProject> projects = List.of(parent, moduleA);
+
+        String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
+
+        // Use a custom small limit (1000 bytes) so the 2000-byte file exceeds it
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        1000L)
+                .getAffectedProjects();
+
+        assertTrue(
+                affected.contains(moduleA),
+                "module-a has oversized text file in filtered resources and should be conservatively affected");
+    }
+
+    @Test
+    void analyzeChanges_filteredResourceOversizedBinaryFileSkipped() throws Exception {
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module></modules>
+                  <properties>
+                    <app.version>2.0</app.version>
+                  </properties>
+                </project>
+                """;
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // Create a large binary file (contains NUL bytes AND exceeds the size limit)
+        // Binary detection should run BEFORE size check, so it should be skipped
+        Path resourceDir = root.resolve("module-a/src/main/resources");
+        Files.createDirectories(resourceDir);
+        byte[] largeBinary = new byte[2000];
+        largeBinary[10] = 0; // NUL byte makes it binary
+        Files.write(resourceDir.resolve("font.woff2"), largeBinary);
+
+        MavenProject parent = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+        parent.setOriginalModel(parseModel(parentPomXml));
+        parent.getModel().setPackaging("pom");
+
+        MavenProject moduleA = createProject(
+                "com.example",
+                "module-a",
+                "1.0",
+                root.resolve("module-a/pom.xml").toFile());
+        moduleA.setOriginalModel(parseModel(moduleAPomXml));
+        moduleA.setParent(parent);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleA.getModel().setBuild(build);
+
+        List<MavenProject> projects = List.of(parent, moduleA);
+
+        String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
+
+        // Use a small limit so the file would exceed it IF it weren't binary
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        1000L)
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.contains(moduleA),
+                "module-a has only a large binary file - binary check should bail before size limit kicks in");
+    }
+
     // --- New POM and edge case tests ---
 
     @Test

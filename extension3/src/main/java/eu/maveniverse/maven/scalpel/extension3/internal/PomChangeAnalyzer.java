@@ -9,8 +9,10 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
 
+import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -101,6 +103,20 @@ class PomChangeAnalyzer {
             Map<String, byte[]> oldPomContents,
             List<MavenProject> allProjects,
             Path reactorRoot) {
+        return analyzeChanges(
+                changedPomPaths,
+                oldPomContents,
+                allProjects,
+                reactorRoot,
+                ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE);
+    }
+
+    public Result analyzeChanges(
+            Set<String> changedPomPaths,
+            Map<String, byte[]> oldPomContents,
+            List<MavenProject> allProjects,
+            Path reactorRoot,
+            long maxResourceFileSize) {
 
         Set<MavenProject> affected = new LinkedHashSet<>();
         Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
@@ -159,7 +175,8 @@ class PomChangeAnalyzer {
                         affected,
                         allChangedManagedDepGAs,
                         allChangedManagedPluginGAs,
-                        allChangedProperties);
+                        allChangedProperties,
+                        maxResourceFileSize);
             } catch (Exception e) {
                 // If we can't parse the old POM, be conservative and mark all dependents
                 logger.warn(
@@ -182,7 +199,8 @@ class PomChangeAnalyzer {
             Set<MavenProject> affected,
             Set<String> allChangedManagedDepGAs,
             Set<String> allChangedManagedPluginGAs,
-            Set<String> allChangedProperties)
+            Set<String> allChangedProperties,
+            long maxResourceFileSize)
             throws IOException, XmlPullParserException {
 
         MavenXpp3Reader reader = new MavenXpp3Reader();
@@ -352,11 +370,11 @@ class PomChangeAnalyzer {
             }
 
             // Check if child has filtered resources referencing changed properties
-            if (!childAffected && !changedProperties.isEmpty()) {
-                if (hasFilteredResourcesWithChangedProperty(child, changedProperties)) {
-                    logger.debug("Child {} has filtered resources referencing changed properties", key(child));
-                    childAffected = true;
-                }
+            if (!childAffected
+                    && !changedProperties.isEmpty()
+                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, maxResourceFileSize)) {
+                logger.debug("Child {} has filtered resources referencing changed properties", key(child));
+                childAffected = true;
             }
 
             if (childAffected) {
@@ -1032,7 +1050,8 @@ class PomChangeAnalyzer {
         return false;
     }
 
-    private boolean hasFilteredResourcesWithChangedProperty(MavenProject project, Set<String> changedProperties) {
+    private boolean hasFilteredResourcesWithChangedProperty(
+            MavenProject project, Set<String> changedProperties, long maxResourceFileSize) {
         List<String> refs = new ArrayList<>();
         for (String prop : changedProperties) {
             refs.add("${" + prop + "}");
@@ -1061,16 +1080,14 @@ class PomChangeAnalyzer {
             if (!Files.isDirectory(resourceDir)) {
                 continue;
             }
-            if (scanDirectoryForPropertyRefs(resourceDir, refs)) {
+            if (scanDirectoryForPropertyRefs(resourceDir, refs, maxResourceFileSize)) {
                 return true;
             }
         }
         return false;
     }
 
-    private static final long MAX_RESOURCE_FILE_SIZE = 1024L * 1024; // 1 MB
-
-    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
+    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs, long maxResourceFileSize) {
         List<Path> stack = new ArrayList<>();
         stack.add(dir);
         while (!stack.isEmpty()) {
@@ -1079,27 +1096,70 @@ class PomChangeAnalyzer {
                 for (Path entry : stream) {
                     if (Files.isDirectory(entry)) {
                         stack.add(entry);
-                    } else if (Files.isRegularFile(entry)) {
-                        try {
-                            long size = Files.size(entry);
-                            if (size > MAX_RESOURCE_FILE_SIZE) {
-                                // Conservative: treat oversized files as potentially affected
-                                return true;
-                            }
-                            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
-                            for (String ref : refs) {
-                                if (content.contains(ref)) {
-                                    return true;
-                                }
-                            }
-                        } catch (IOException e) {
-                            // Skip binary or unreadable files
-                        }
+                    } else if (Files.isRegularFile(entry)
+                            && checkFileForPropertyRefs(entry, refs, maxResourceFileSize)) {
+                        return true;
                     }
                 }
             } catch (IOException e) {
                 // Skip unreadable directories
             }
+        }
+        return false;
+    }
+
+    private boolean checkFileForPropertyRefs(Path entry, List<String> refs, long maxResourceFileSize) {
+        try {
+            long size = Files.size(entry);
+            // Read the first 8000 bytes to detect binary files (same heuristic as git)
+            if (isBinaryFile(entry, size)) {
+                logger.debug("Skipping binary file: {}", entry);
+                return false;
+            }
+            if (size > maxResourceFileSize) {
+                // Conservative: treat oversized text files as potentially affected
+                logger.warn(
+                        "Filtered resource {} ({} bytes) exceeds size limit ({} bytes)."
+                                + " Module will be conservatively marked as affected."
+                                + " Increase the limit with -D{}=<bytes> or disable filtering"
+                                + " for this resource.",
+                        entry,
+                        size,
+                        maxResourceFileSize,
+                        ScalpelConfiguration.MAX_RESOURCE_FILE_SIZE);
+                return true;
+            }
+            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
+            for (String ref : refs) {
+                if (content.contains(ref)) {
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            // Skip unreadable files
+        }
+        return false;
+    }
+
+    /**
+     * Detect binary files using the same heuristic as git: scan for a NUL byte (0x00)
+     * in the first 8000 bytes of the file.
+     */
+    private static boolean isBinaryFile(Path file, long fileSize) {
+        int bytesToRead = (int) Math.min(fileSize, 8000);
+        if (bytesToRead == 0) {
+            return false;
+        }
+        byte[] buffer = new byte[bytesToRead];
+        try (InputStream in = Files.newInputStream(file)) {
+            int read = in.read(buffer, 0, bytesToRead);
+            for (int i = 0; i < read; i++) {
+                if (buffer[i] == 0) {
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            // If we can't read the file, treat as non-binary (will fail later when reading full content)
         }
         return false;
     }
