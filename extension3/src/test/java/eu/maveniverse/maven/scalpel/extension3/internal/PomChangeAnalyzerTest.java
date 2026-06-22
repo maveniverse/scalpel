@@ -1866,6 +1866,233 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void analyzeChanges_parentPropertyChangePropagatesToBomManagedDepConsumers() throws Exception {
+        // Scenario: property defined in root parent pom, BOM uses it in managed dep version,
+        // module-a imports BOM and uses the managed dep.
+        // When the ROOT property changes, module-a should be detected as affected
+        // (via root -> BOM managed dep -> module-a consumer chain).
+        // This is the pattern used by projects like Apache Camel Quarkus where version
+        // properties live in the root pom.xml but are consumed in a separate BOM module.
+        Path root = setupReactorRootWithBom();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>bom</module><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <lib.version>2.0</lib.version>
+                  </properties>
+                </project>
+                """;
+
+        // BOM has no property of its own — it inherits lib.version from parent
+        String bomPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>bom</artifactId>
+                  <packaging>pom</packaging>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-x</artifactId>
+                      <version>${lib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+
+        // module-a: imports BOM, uses lib-x
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>bom</artifactId>
+                      <version>${project.version}</version>
+                      <type>pom</type>
+                      <scope>import</scope>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
+        // module-b: no BOM import, no lib-x
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("pom.xml"), parentPomXml);
+        writePom(root.resolve("bom/pom.xml"), bomPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        MavenProject parent = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+        parent.setOriginalModel(parseModel(parentPomXml));
+        parent.getModel().setPackaging("pom");
+
+        MavenProject bom = createProject(
+                "com.example", "bom", "1.0", root.resolve("bom/pom.xml").toFile());
+        bom.setOriginalModel(parseModel(bomPomXml));
+        bom.getModel().setPackaging("pom");
+        bom.setParent(parent);
+
+        MavenProject moduleA = createProject(
+                "com.example",
+                "module-a",
+                "1.0",
+                root.resolve("module-a/pom.xml").toFile());
+        moduleA.setOriginalModel(parseModel(moduleAPomXml));
+        moduleA.setParent(parent);
+
+        MavenProject moduleB = createProject(
+                "com.example",
+                "module-b",
+                "1.0",
+                root.resolve("module-b/pom.xml").toFile());
+        moduleB.setOriginalModel(parseModel(moduleBPomXml));
+        moduleB.setParent(parent);
+
+        List<MavenProject> projects = new ArrayList<>();
+        projects.add(parent);
+        projects.add(bom);
+        projects.add(moduleA);
+        projects.add(moduleB);
+
+        // Old parent pom had lib.version=1.0
+        String oldParentPom = parentPomXml.replace("<lib.version>2.0</lib.version>", "<lib.version>1.0</lib.version>");
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        // BOM is directly affected because it references ${lib.version} in its managed dep version
+        assertTrue(
+                result.getAffectedProjects().contains(bom),
+                "BOM references ${lib.version} in managed dep version and should be directly affected");
+
+        // module-b does not use lib-x at all
+        assertFalse(
+                result.getAffectedProjects().contains(moduleB),
+                "module-b does not use lib-x and should NOT be affected");
+
+        // lib-x is added to changedManagedDependencyGAs by propagating
+        // through the BOM's managed deps that reference the changed property. This enables
+        // computeTransitivelyAffected (in ScalpelLifecycleParticipant) to subsequently find
+        // consumers of lib-x (like module-a) via Maven dependency resolution.
+        assertTrue(
+                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                "Changed managed dep GAs should include lib-x (property defined in root, consumed in BOM managed dep)");
+
+        assertTrue(
+                result.getChangedProperties().contains("lib.version"), "Changed properties should include lib.version");
+    }
+
+    @Test
+    void analyzeChanges_parentPropertyChangePropagatesToBomManagedPluginConsumers() throws Exception {
+        Path root = setupReactorRootWithBom();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>bom</module><module>module-a</module></modules>
+                  <properties>
+                    <compiler.version>3.12.0</compiler.version>
+                  </properties>
+                </project>
+                """;
+
+        String bomPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>bom</artifactId>
+                  <packaging>pom</packaging>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-compiler-plugin</artifactId>
+                      <version>${compiler.version}</version>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), parentPomXml);
+        writePom(root.resolve("bom/pom.xml"), bomPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        MavenProject parent = createProject(
+                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
+        parent.setOriginalModel(parseModel(parentPomXml));
+        parent.getModel().setPackaging("pom");
+
+        MavenProject bom = createProject(
+                "com.example", "bom", "1.0", root.resolve("bom/pom.xml").toFile());
+        bom.setOriginalModel(parseModel(bomPomXml));
+        bom.getModel().setPackaging("pom");
+        bom.setParent(parent);
+
+        MavenProject moduleA = createProject(
+                "com.example",
+                "module-a",
+                "1.0",
+                root.resolve("module-a/pom.xml").toFile());
+        moduleA.setOriginalModel(parseModel(moduleAPomXml));
+        moduleA.setParent(parent);
+
+        List<MavenProject> projects = List.of(parent, bom, moduleA);
+
+        String oldParentPom = parentPomXml.replace(
+                "<compiler.version>3.12.0</compiler.version>", "<compiler.version>3.11.0</compiler.version>");
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(
+                Set.of("pom.xml"), Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)), projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(bom),
+                "BOM references ${compiler.version} in managed plugin and should be affected");
+        assertTrue(
+                result.getChangedManagedPluginGAs().contains("org.apache.maven.plugins:maven-compiler-plugin"),
+                "Changed managed plugin GAs should include maven-compiler-plugin"
+                        + " (property in root, consumed in BOM managed plugin)");
+    }
+
+    @Test
     void analyzeChanges_bomImportScopeNewBomMarksAllImporters() throws Exception {
         // New BOM POM (no old bytes) should mark all importers as affected
         Path root = setupReactorRootWithBom();

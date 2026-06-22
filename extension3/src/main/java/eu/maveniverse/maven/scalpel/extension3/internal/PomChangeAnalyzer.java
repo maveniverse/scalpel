@@ -379,6 +379,17 @@ class PomChangeAnalyzer {
 
             if (childAffected) {
                 affected.add(child);
+                // If the affected child has managed deps/plugins referencing the changed
+                // property (e.g. it's a BOM), propagate those GAs so transitive consumers
+                // are detected.
+                if (!changedProperties.isEmpty()) {
+                    augmentWithPropertyReferences(
+                            changedProperties,
+                            allChangedManagedDepGAs,
+                            getManagedDependencies(child.getOriginalModel()));
+                    augmentWithPluginPropertyReferences(
+                            changedProperties, allChangedManagedPluginGAs, getManagedPlugins(child.getOriginalModel()));
+                }
             }
         }
     }
