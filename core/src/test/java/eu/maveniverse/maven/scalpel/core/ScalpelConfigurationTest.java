@@ -16,6 +16,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.List;
 import java.util.Properties;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class ScalpelConfigurationTest {
 
@@ -381,10 +383,16 @@ class ScalpelConfigurationTest {
     // Mode validation
     // ---------------------------------------------------------------
 
-    @Test
-    void invalidMode_throwsException() {
+    @ParameterizedTest
+    @CsvSource({
+        "scalpel.mode, invalid",
+        "scalpel.maxResourceFileSize, not-a-number",
+        "scalpel.maxResourceFileSize, -1",
+        "scalpel.maxResourceFileSize, 0"
+    })
+    void invalidPropertyValue_throwsException(String key, String value) {
         Properties sys = new Properties();
-        sys.setProperty("scalpel.mode", "invalid");
+        sys.setProperty(key, value);
         Properties user = new Properties();
         assertThrows(IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, user));
     }
@@ -401,6 +409,21 @@ class ScalpelConfigurationTest {
 
     // ---------------------------------------------------------------
     // Whitespace trimming
+    // ---------------------------------------------------------------
+
+    @Test
+    void maxResourceFileSize_defaultValue() {
+        assertEquals(10L * 1024 * 1024, defaultConfig().getMaxResourceFileSize());
+    }
+
+    @Test
+    void maxResourceFileSize_customValue() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.maxResourceFileSize", "5242880");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertEquals(5242880L, config.getMaxResourceFileSize());
+    }
+
     // ---------------------------------------------------------------
 
     @Test

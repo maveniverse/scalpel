@@ -46,6 +46,7 @@ public final class ScalpelConfiguration {
     public static final String BUILD_ALL_IF_NO_CHANGES = PREFIX + "buildAllIfNoChanges";
     public static final String IMPACTED_LOG = PREFIX + "impactedLog";
     public static final String REPORT_FILE = PREFIX + "reportFile";
+    public static final String MAX_RESOURCE_FILE_SIZE = PREFIX + "maxResourceFileSize";
 
     public static final String MODE_TRIM = "trim";
     public static final String MODE_SKIP_TESTS = "skip-tests";
@@ -53,6 +54,7 @@ public final class ScalpelConfiguration {
 
     private static final String DEFAULT_FULL_BUILD_TRIGGERS = ".mvn/**";
     private static final String DEFAULT_REPORT_FILE = "target/scalpel-report.json";
+    public static final long DEFAULT_MAX_RESOURCE_FILE_SIZE = 10L * 1024 * 1024; // 10 MB
 
     private final boolean enabled;
     private final String baseBranch;
@@ -78,6 +80,7 @@ public final class ScalpelConfiguration {
     private final boolean failSafe;
     private final String mode;
     private final String reportFile;
+    private final long maxResourceFileSize;
 
     private ScalpelConfiguration(
             boolean enabled,
@@ -103,7 +106,8 @@ public final class ScalpelConfiguration {
             String impactedLog,
             boolean failSafe,
             String mode,
-            String reportFile) {
+            String reportFile,
+            long maxResourceFileSize) {
         this.enabled = enabled;
         this.baseBranch = baseBranch;
         this.head = head;
@@ -128,6 +132,7 @@ public final class ScalpelConfiguration {
         this.failSafe = failSafe;
         this.mode = mode;
         this.reportFile = reportFile;
+        this.maxResourceFileSize = maxResourceFileSize;
     }
 
     public static ScalpelConfiguration fromProperties(Properties system, Properties user) {
@@ -165,6 +170,20 @@ public final class ScalpelConfiguration {
                     + ", " + MODE_SKIP_TESTS + ", " + MODE_REPORT);
         }
         String reportFile = resolve(system, user, REPORT_FILE, DEFAULT_REPORT_FILE);
+        String maxResourceFileSizeStr = resolve(system, user, MAX_RESOURCE_FILE_SIZE, null);
+        long maxResourceFileSize = DEFAULT_MAX_RESOURCE_FILE_SIZE;
+        if (maxResourceFileSizeStr != null) {
+            try {
+                maxResourceFileSize = Long.parseLong(maxResourceFileSizeStr);
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException("Invalid " + MAX_RESOURCE_FILE_SIZE + " '" + maxResourceFileSizeStr
+                        + "', expected a positive integer (bytes)");
+            }
+            if (maxResourceFileSize <= 0) {
+                throw new IllegalArgumentException("Invalid " + MAX_RESOURCE_FILE_SIZE + " '" + maxResourceFileSizeStr
+                        + "', must be a positive integer (bytes)");
+            }
+        }
 
         return new ScalpelConfiguration(
                 enabled,
@@ -190,7 +209,8 @@ public final class ScalpelConfiguration {
                 impactedLog,
                 failSafe,
                 mode,
-                reportFile);
+                reportFile,
+                maxResourceFileSize);
     }
 
     private static String resolve(Properties system, Properties user, String key, String defaultValue) {
@@ -344,6 +364,10 @@ public final class ScalpelConfiguration {
         return reportFile;
     }
 
+    public long getMaxResourceFileSize() {
+        return maxResourceFileSize;
+    }
+
     @Override
     public String toString() {
         return "ScalpelConfiguration{"
@@ -371,6 +395,7 @@ public final class ScalpelConfiguration {
                 + ", impactedLog='" + impactedLog + '\''
                 + ", failSafe=" + failSafe
                 + ", reportFile='" + reportFile + '\''
+                + ", maxResourceFileSize=" + maxResourceFileSize
                 + '}';
     }
 }
