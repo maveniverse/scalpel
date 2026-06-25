@@ -720,7 +720,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (ctx.forceIncluded.contains(project)) {
                 reasons.add(ScalpelReport.REASON_FORCE_BUILD);
             }
-            logger.debug("Report: {} -> category=DIRECT, reasons={}", key(project), reasons);
+            if (logger.isDebugEnabled()) {
+                logger.debug("Report: {} -> category=DIRECT, reasons={}", key(project), reasons);
+            }
             builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                             project.getGroupId(), project.getArtifactId(), path, reasons)
                     .category(ScalpelReport.CATEGORY_DIRECT)
@@ -750,7 +752,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (category == null) {
                 category = ScalpelReport.CATEGORY_TRANSITIVE;
             }
-            logger.debug("Report: {} -> category={}, reasons={}", key(project), category, entry.getValue());
+            if (logger.isDebugEnabled()) {
+                logger.debug("Report: {} -> category={}, reasons={}", key(project), category, entry.getValue());
+            }
             builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                             project.getGroupId(), project.getArtifactId(), path, entry.getValue())
                     .category(category)
@@ -776,8 +780,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         for (MavenProject project : ctx.trimResult.getUpstreamOnly()) {
             if (!ctx.directlyAffected.contains(project) && !ctx.transitivelyAffected.containsKey(project)) {
                 upstreamCount++;
-                logger.debug(
-                        "Excluding upstream build-prerequisite {} from report (not genuinely affected)", key(project));
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Excluding upstream build-prerequisite {} from report (not genuinely affected)",
+                            key(project));
+                }
             }
         }
         if (upstreamCount > 0) {
@@ -816,7 +823,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())
                                 ? ScalpelReport.REASON_EXCLUDED_DOWNSTREAM
                                 : null;
-                logger.debug("Report: {} -> category=DOWNSTREAM, reason={}", key(project), reason);
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Report: {} -> category=DOWNSTREAM, reason={}", key(project), reason);
+                }
                 builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                                 project.getGroupId(), project.getArtifactId(), path, Collections.singletonList(reason))
                         .category(ScalpelReport.CATEGORY_DOWNSTREAM)

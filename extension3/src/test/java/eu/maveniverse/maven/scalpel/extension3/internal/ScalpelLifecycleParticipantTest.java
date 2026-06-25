@@ -2767,9 +2767,7 @@ class ScalpelLifecycleParticipantTest {
                 + "</project>\n";
         writePom(root, "pom.xml", rootPom);
 
-        // Parent POM (like Camel's parent/pom.xml) - has kafka-version property
-        // but does NOT use it in dependencyManagement.
-        // Has a large dependencyManagement with camel-* modules using ${project.version}
+        // Parent POM: defines kafka-version property but does not use it in managed deps
         String oldParentPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -2819,7 +2817,7 @@ class ScalpelLifecycleParticipantTest {
                 """;
         writePom(root, "camel-core/pom.xml", corePom);
 
-        // camel-kafka: directly uses ${kafka-version}
+        // camel-kafka: directly references the changed property
         String kafkaPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -2841,7 +2839,7 @@ class ScalpelLifecycleParticipantTest {
                 """;
         writePom(root, "camel-kafka/pom.xml", kafkaPom);
 
-        // camel-debezium: also uses ${kafka-version}
+        // camel-debezium: also references the changed property
         String debeziumPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -2859,7 +2857,7 @@ class ScalpelLifecycleParticipantTest {
                 """;
         writePom(root, "camel-debezium/pom.xml", debeziumPom);
 
-        // camel-ibm: also uses ${kafka-version}
+        // camel-ibm: also references the changed property
         String ibmPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -2994,14 +2992,13 @@ class ScalpelLifecycleParticipantTest {
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
 
         // Count modules by category
-        int directCount = 0, downstreamCount = 0, upstreamCount = 0, transitiveCount = 0, otherCount = 0;
+        int directCount = 0, downstreamCount = 0, upstreamCount = 0, transitiveCount = 0;
         for (String line : json.split("\n")) {
             if (line.contains("\"category\":")) {
                 if (line.contains("\"DIRECT\"")) directCount++;
                 else if (line.contains("\"DOWNSTREAM\"")) downstreamCount++;
                 else if (line.contains("\"UPSTREAM\"")) upstreamCount++;
                 else if (line.contains("\"TRANSITIVE\"")) transitiveCount++;
-                else otherCount++;
             }
         }
 

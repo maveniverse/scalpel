@@ -92,7 +92,7 @@ class ReactorTrimmer {
                             newUpstream++;
                         }
                     }
-                    if (newUpstream > 0) {
+                    if (newUpstream > 0 && logger.isDebugEnabled()) {
                         logger.debug(
                                 "Adding {} upstream dependencies of {} ({} total upstream of this module)",
                                 newUpstream,

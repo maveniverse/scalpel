@@ -384,7 +384,9 @@ class PomChangeAnalyzer {
             }
 
             if (childAffected) {
-                logger.debug("Child {} is DIRECTLY AFFECTED by parent {} change", key(child), key(parentProject));
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Child {} is DIRECTLY AFFECTED by parent {} change", key(child), key(parentProject));
+                }
                 affected.add(child);
                 // If the affected child has managed deps/plugins referencing the changed
                 // property (e.g. it's a BOM), propagate those GAs so transitive consumers
@@ -398,10 +400,12 @@ class PomChangeAnalyzer {
                             changedProperties, allChangedManagedPluginGAs, getManagedPlugins(child.getOriginalModel()));
                 }
             } else {
-                logger.debug(
-                        "Child {} is NOT affected by parent {} change (no property ref, no managed dep/plugin use, no filtered resources)",
-                        key(child),
-                        key(parentProject));
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Child {} is NOT affected by parent {} change (no property ref, no managed dep/plugin use, no filtered resources)",
+                            key(child),
+                            key(parentProject));
+                }
             }
         }
         int affectedCount = 0;
@@ -410,11 +414,13 @@ class PomChangeAnalyzer {
                 affectedCount++;
             }
         }
-        logger.debug(
-                "Parent {} analysis complete: {} of {} dependents affected",
-                key(parentProject),
-                affectedCount,
-                dependentProjects.size());
+        if (logger.isDebugEnabled()) {
+            logger.debug(
+                    "Parent {} analysis complete: {} of {} dependents affected",
+                    key(parentProject),
+                    affectedCount,
+                    dependentProjects.size());
+        }
     }
 
     /**
@@ -1003,7 +1009,9 @@ class PomChangeAnalyzer {
             List<MavenProject> children = findChildren(project, allProjects);
             dependents.addAll(children);
             childCount = children.size();
-            logger.debug("{} has {} child modules via parent inheritance", key(project), childCount);
+            if (logger.isDebugEnabled()) {
+                logger.debug("{} has {} child modules via parent inheritance", key(project), childCount);
+            }
         }
         int bomCount = 0;
         List<MavenProject> importers = bomImporters.get(project);
@@ -1014,11 +1022,11 @@ class PomChangeAnalyzer {
                     bomCount++;
                 }
             }
-            if (bomCount > 0) {
+            if (bomCount > 0 && logger.isDebugEnabled()) {
                 logger.debug("{} has {} BOM importers", key(project), bomCount);
             }
         }
-        if (childCount > 0 && bomCount > 0) {
+        if (childCount > 0 && bomCount > 0 && logger.isDebugEnabled()) {
             logger.debug(
                     "{} total dependents: {} ({} children + {} BOM importers)",
                     key(project),
@@ -1124,14 +1132,19 @@ class PomChangeAnalyzer {
                 continue;
             }
             filteredDirCount++;
-            logger.debug("Scanning filtered resource directory {} of {} for property refs", resourceDir, key(project));
-            if (scanDirectoryForPropertyRefs(resourceDir, refs, maxResourceFileSize)) {
+            if (logger.isDebugEnabled()) {
                 logger.debug(
-                        "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
+                        "Scanning filtered resource directory {} of {} for property refs", resourceDir, key(project));
+            }
+            if (scanDirectoryForPropertyRefs(resourceDir, refs, maxResourceFileSize)) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
+                }
                 return true;
             }
         }
-        if (filteredDirCount > 0) {
+        if (filteredDirCount > 0 && logger.isDebugEnabled()) {
             logger.debug(
                     "No property references found in {} filtered resource directories of {}",
                     filteredDirCount,
