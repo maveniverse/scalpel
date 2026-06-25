@@ -1004,14 +1004,16 @@ class PomChangeAnalyzer {
             Map<MavenProject, List<MavenProject>> bomImporters,
             List<MavenProject> allProjects) {
         List<MavenProject> dependents = new ArrayList<>();
+        int childCount = 0;
         if (parents.contains(project)) {
             List<MavenProject> children = findChildren(project, allProjects);
             dependents.addAll(children);
-            logger.debug("{} has {} child modules via parent inheritance", key(project), children.size());
+            childCount = children.size();
+            logger.debug("{} has {} child modules via parent inheritance", key(project), childCount);
         }
+        int bomCount = 0;
         List<MavenProject> importers = bomImporters.get(project);
         if (importers != null) {
-            int bomCount = 0;
             for (MavenProject importer : importers) {
                 if (!dependents.contains(importer)) {
                     dependents.add(importer);
@@ -1022,8 +1024,13 @@ class PomChangeAnalyzer {
                 logger.debug("{} has {} BOM importers", key(project), bomCount);
             }
         }
-        if (!dependents.isEmpty()) {
-            logger.debug("{} total dependents: {} (children + BOM importers)", key(project), dependents.size());
+        if (childCount > 0 && bomCount > 0) {
+            logger.debug(
+                    "{} total dependents: {} ({} children + {} BOM importers)",
+                    key(project),
+                    dependents.size(),
+                    childCount,
+                    bomCount);
         }
         return dependents;
     }

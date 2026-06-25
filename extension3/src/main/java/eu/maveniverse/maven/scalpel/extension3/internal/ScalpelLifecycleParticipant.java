@@ -688,7 +688,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
         addDirectlyAffectedModules(builder, ctx, reactorRoot);
         addTransitivelyAffectedModules(builder, ctx, config, reactorRoot);
-        addTrimResultModules(builder, ctx, config, reactorRoot);
+        int excludedUpstream = addTrimResultModules(builder, ctx, config, reactorRoot);
+        builder.excludedUpstreamCount(excludedUpstream);
 
         try {
             ScalpelReport report = builder.build();
@@ -758,10 +759,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
     }
 
-    private void addTrimResultModules(
+    /**
+     * Adds downstream modules from the trim result to the report and returns the number of
+     * upstream build-prerequisite modules that were excluded.
+     */
+    private int addTrimResultModules(
             ScalpelReport.Builder builder, AnalysisContext ctx, ScalpelConfiguration config, Path reactorRoot) {
         if (ctx.trimResult == null) {
-            return;
+            return 0;
         }
         // Upstream modules are build-order prerequisites, not genuinely affected by the change.
         // Including them in affectedModules inflates the report (e.g. a sync-point module like
@@ -794,6 +799,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 reactorRoot,
                 ctx.trimResult.getDownstreamTestOnly(),
                 ScalpelReport.REASON_DOWNSTREAM_TEST);
+        return upstreamCount;
     }
 
     private void addDownstreamModules(

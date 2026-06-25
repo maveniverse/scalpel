@@ -24,6 +24,7 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -2400,7 +2401,7 @@ class ScalpelLifecycleParticipantTest {
 
         Path reportFile = root.resolve("target/scalpel-report.json");
         assertTrue(Files.exists(reportFile));
-        String json = new String(java.nio.file.Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         assertTrue(moduleHasReason(json, "module-b", "SOURCE_CHANGE"), "module-b should have SOURCE_CHANGE");
         // Fix #39: upstream modules (build prerequisites) are excluded from the report.
         // module-a is only in the build set because module-b depends on it — it is not
@@ -2408,6 +2409,10 @@ class ScalpelLifecycleParticipantTest {
         assertFalse(
                 modulePresent(json, "module-a"),
                 "module-a should NOT be in report (it's a build prerequisite, not affected by the change)");
+        // Verify the excludedUpstreamCount is present in the JSON report
+        assertTrue(
+                json.contains("\"excludedUpstreamCount\": 1"),
+                "Report should show 1 excluded upstream module (module-a)");
     }
 
     // --- Helper methods ---
@@ -2544,6 +2549,191 @@ class ScalpelLifecycleParticipantTest {
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse POM XML: " + xml.substring(0, Math.min(xml.length(), 100)), e);
         }
+    }
+
+    /**
+     * Verifies that BOM property changes with no directly affected modules still produce
+     * a report with transitively affected modules. This covers the scenario fixed in #33:
+     * a version property change in a BOM's dependencyManagement should be detected via
+     * transitive dependency resolution even when no child module directly references
+     * the property in its POM text.
+     */
+    @Test
+    void reportMode_bomPropertyChangeWithTransitiveOnlyAffectedModules() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String rootPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>root</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules>
+                    <module>bom</module>
+                    <module>module-a</module>
+                    <module>module-b</module>
+                  </modules>
+                </project>
+                """;
+        writePom(root, "pom.xml", rootPom);
+
+        String oldBomPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>bom</artifactId>
+                  <packaging>pom</packaging>
+                  <properties>
+                    <graphql.version>2.18.1</graphql.version>
+                  </properties>
+                  <dependencyManagement>
+                    <dependencies>
+                      <dependency>
+                        <groupId>io.smallrye</groupId>
+                        <artifactId>smallrye-graphql</artifactId>
+                        <version>${graphql.version}</version>
+                      </dependency>
+                      <dependency>
+                        <groupId>io.smallrye</groupId>
+                        <artifactId>smallrye-graphql-api</artifactId>
+                        <version>${graphql.version}</version>
+                      </dependency>
+                    </dependencies>
+                  </dependencyManagement>
+                </project>
+                """;
+
+        String newBomPom = oldBomPom.replace(
+                "<graphql.version>2.18.1</graphql.version>", "<graphql.version>2.18.2</graphql.version>");
+        writePom(root, "bom/pom.xml", newBomPom);
+
+        // module-a: imports the BOM, gets smallrye-graphql transitively via dependency resolution
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencyManagement>
+                    <dependencies>
+                      <dependency>
+                        <groupId>com.example</groupId>
+                        <artifactId>bom</artifactId>
+                        <version>${project.version}</version>
+                        <type>pom</type>
+                        <scope>import</scope>
+                      </dependency>
+                    </dependencies>
+                  </dependencyManagement>
+                </project>
+                """;
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        // module-b: does NOT import the BOM or use graphql
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>com.example</groupId>
+                    <artifactId>root</artifactId>
+                    <version>1.0</version>
+                  </parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject rootProject = createProject("com.example", "root", "1.0", root, "pom.xml", rootPom);
+        rootProject.getModel().setPackaging("pom");
+        MavenProject bomProject = createProject("com.example", "bom", "1.0", root, "bom/pom.xml", newBomPom);
+        bomProject.getModel().setPackaging("pom");
+        bomProject.setParent(rootProject);
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(rootProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(rootProject);
+
+        List<MavenProject> allProjects = List.of(rootProject, bomProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("bom/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // module-a has smallrye-graphql as a transitive dependency
+        org.eclipse.aether.graph.Dependency graphqlDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("io.smallrye", "smallrye-graphql", "jar", "2.18.2"), "compile");
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getResolvedDependencies()).thenReturn(List.of(graphqlDep));
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getResolvedDependencies()).thenReturn(List.of());
+                    return empty;
+                });
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-a should be transitively affected (has the changed dep in its resolved deps)
+        assertTrue(
+                moduleHasReason(json, "module-a", "TRANSITIVE_DEPENDENCY"),
+                "module-a should have TRANSITIVE_DEPENDENCY reason (transitive dep on changed managed GA)");
+        assertTrue(
+                moduleHasField(json, "module-a", "category", "TRANSITIVE"), "module-a should have TRANSITIVE category");
+
+        // module-b should NOT be affected (no dependency on changed GAs)
+        assertFalse(modulePresent(json, "module-b"), "module-b should NOT be in report");
+
+        // changedManagedDependencies should include the GAs
+        assertTrue(json.contains("\"io.smallrye:smallrye-graphql\""), "Report should include changed managed dep GA");
+        assertTrue(
+                json.contains("\"io.smallrye:smallrye-graphql-api\""),
+                "Report should include changed managed dep GA for api");
+
+        // excludedUpstreamCount should be 0 (no upstream modules in this scenario)
+        assertTrue(
+                json.contains("\"excludedUpstreamCount\": 0"),
+                "excludedUpstreamCount should be 0 when no upstream modules exist");
     }
 
     /**
@@ -2729,7 +2919,7 @@ class ScalpelLifecycleParticipantTest {
                 createProject("org.apache.camel", "camel-ibm", "4.21.0-SNAPSHOT", root, "camel-ibm/pom.xml", ibmPom);
         ibmModule.setParent(parentProject);
 
-        List<MavenProject> otherModules = new java.util.ArrayList<>();
+        List<MavenProject> otherModules = new ArrayList<>();
         for (int i = 1; i <= 20; i++) {
             String otherPom = new String(
                     Files.readAllBytes(root.resolve("camel-other-" + i + "/pom.xml")), StandardCharsets.UTF_8);
@@ -2744,7 +2934,7 @@ class ScalpelLifecycleParticipantTest {
             otherModules.add(other);
         }
 
-        List<MavenProject> allProjects = new java.util.ArrayList<>();
+        List<MavenProject> allProjects = new ArrayList<>();
         allProjects.add(rootProject);
         allProjects.add(parentProject);
         allProjects.add(coreModule);
@@ -2847,6 +3037,11 @@ class ScalpelLifecycleParticipantTest {
         assertEquals(3, downstreamCount, "Should have 3 DOWNSTREAM modules");
         assertEquals(0, upstreamCount, "UPSTREAM modules should be excluded from report");
         assertEquals(0, transitiveCount, "Should have 0 TRANSITIVE modules (changedManagedDepGAs is empty)");
+
+        // Verify excludedUpstreamCount: camel-core is the only upstream build prerequisite
+        assertTrue(
+                json.contains("\"excludedUpstreamCount\": 1"),
+                "Report should show 1 excluded upstream module (camel-core)");
     }
 
     /**
@@ -2983,7 +3178,7 @@ class ScalpelLifecycleParticipantTest {
                 "org.apache.camel", "camel-kafka", "4.21.0-SNAPSHOT", root, "camel-kafka/pom.xml", kafkaPom);
         kafkaModule.setParent(parentProject);
 
-        List<MavenProject> compModules = new java.util.ArrayList<>();
+        List<MavenProject> compModules = new ArrayList<>();
         for (int i = 1; i <= 30; i++) {
             String compPomStr = new String(
                     Files.readAllBytes(root.resolve("camel-comp-" + i + "/pom.xml")), StandardCharsets.UTF_8);
@@ -3008,7 +3203,7 @@ class ScalpelLifecycleParticipantTest {
         allcompModule.getModel().setPackaging("pom");
         allcompModule.setParent(parentProject);
 
-        List<MavenProject> allProjects = new java.util.ArrayList<>();
+        List<MavenProject> allProjects = new ArrayList<>();
         allProjects.add(rootProject);
         allProjects.add(parentProject);
         allProjects.add(coreModule);
@@ -3049,7 +3244,7 @@ class ScalpelLifecycleParticipantTest {
         when(graph.getDownstreamProjects(kafkaModule, true)).thenReturn(List.of(allcompModule));
 
         // camel-allcomponents upstream = ALL components + kafka + core (it depends on everything)
-        List<MavenProject> allcompUpstream = new java.util.ArrayList<>();
+        List<MavenProject> allcompUpstream = new ArrayList<>();
         allcompUpstream.add(kafkaModule);
         allcompUpstream.add(coreModule);
         allcompUpstream.addAll(compModules);
@@ -3111,5 +3306,10 @@ class ScalpelLifecycleParticipantTest {
         // Total should be exactly 2: 1 DIRECT + 1 DOWNSTREAM
         int total = directCount + downstreamCount + upstreamCount + transitiveCount;
         assertEquals(2, total, "Report should contain only genuinely affected modules");
+
+        // Verify excludedUpstreamCount in JSON: 31 upstream modules excluded (30 comp + camel-core)
+        assertTrue(
+                json.contains("\"excludedUpstreamCount\": 31"),
+                "Report should show 31 excluded upstream modules (30 comp modules + camel-core)");
     }
 }

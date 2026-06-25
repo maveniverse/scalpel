@@ -22,7 +22,13 @@ public final class ScalpelReport {
     public static final String REASON_TRANSITIVE_DEPENDENCY = "TRANSITIVE_DEPENDENCY";
     public static final String REASON_MANAGED_PLUGIN = "MANAGED_PLUGIN";
     public static final String REASON_FORCE_BUILD = "FORCE_BUILD";
+    /**
+     * @deprecated Upstream modules are no longer included in report mode (see #39).
+     *             They are build-order prerequisites, not genuinely affected modules.
+     */
+    @Deprecated
     public static final String REASON_UPSTREAM_DEPENDENCY = "UPSTREAM_DEPENDENCY";
+
     public static final String REASON_DOWNSTREAM_DEPENDENT = "DOWNSTREAM_DEPENDENT";
     public static final String REASON_TEST_CHANGE = "TEST_CHANGE";
     public static final String REASON_DOWNSTREAM_TEST = "DOWNSTREAM_TEST";
@@ -42,6 +48,7 @@ public final class ScalpelReport {
     private final List<String> changedManagedDependencies;
     private final List<String> changedManagedPlugins;
     private final List<AffectedModule> affectedModules;
+    private final int excludedUpstreamCount;
 
     private ScalpelReport(
             String baseBranch,
@@ -51,7 +58,8 @@ public final class ScalpelReport {
             List<String> changedProperties,
             List<String> changedManagedDependencies,
             List<String> changedManagedPlugins,
-            List<AffectedModule> affectedModules) {
+            List<AffectedModule> affectedModules,
+            int excludedUpstreamCount) {
         this.baseBranch = baseBranch;
         this.fullBuildTriggered = fullBuildTriggered;
         this.triggerFile = triggerFile;
@@ -60,6 +68,7 @@ public final class ScalpelReport {
         this.changedManagedDependencies = changedManagedDependencies;
         this.changedManagedPlugins = changedManagedPlugins;
         this.affectedModules = affectedModules;
+        this.excludedUpstreamCount = excludedUpstreamCount;
     }
 
     public static class AffectedModule {
@@ -199,6 +208,7 @@ public final class ScalpelReport {
         sb.append("  \"changedManagedPlugins\": ")
                 .append(jsonStringArray(changedManagedPlugins))
                 .append(",\n");
+        sb.append("  \"excludedUpstreamCount\": ").append(excludedUpstreamCount).append(",\n");
         sb.append("  \"affectedModules\": ");
         if (affectedModules.isEmpty()) {
             sb.append("[]");
@@ -306,6 +316,7 @@ public final class ScalpelReport {
         private final List<String> changedManagedDependencies = new ArrayList<>();
         private final List<String> changedManagedPlugins = new ArrayList<>();
         private final List<AffectedModule> affectedModules = new ArrayList<>();
+        private int excludedUpstreamCount;
 
         public Builder baseBranch(String baseBranch) {
             this.baseBranch = baseBranch;
@@ -347,6 +358,11 @@ public final class ScalpelReport {
             return this;
         }
 
+        public Builder excludedUpstreamCount(int count) {
+            this.excludedUpstreamCount = count;
+            return this;
+        }
+
         public ScalpelReport build() {
             if (baseBranch == null) {
                 throw new IllegalStateException("baseBranch is required");
@@ -359,7 +375,8 @@ public final class ScalpelReport {
                     changedProperties,
                     changedManagedDependencies,
                     changedManagedPlugins,
-                    affectedModules);
+                    affectedModules,
+                    excludedUpstreamCount);
         }
     }
 }
