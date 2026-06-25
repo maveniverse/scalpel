@@ -752,9 +752,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (category == null) {
                 category = ScalpelReport.CATEGORY_TRANSITIVE;
             }
-            if (logger.isDebugEnabled()) {
-                logger.debug("Report: {} -> category={}, reasons={}", key(project), category, entry.getValue());
-            }
+            logger.debug("Report: {} -> category={}, reasons={}", key(project), category, entry.getValue());
             builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                             project.getGroupId(), project.getArtifactId(), path, entry.getValue())
                     .category(category)

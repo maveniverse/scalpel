@@ -1132,19 +1132,14 @@ class PomChangeAnalyzer {
                 continue;
             }
             filteredDirCount++;
-            if (logger.isDebugEnabled()) {
-                logger.debug(
-                        "Scanning filtered resource directory {} of {} for property refs", resourceDir, key(project));
-            }
+            logger.debug("Scanning filtered resource directory {} of {} for property refs", resourceDir, key(project));
             if (scanDirectoryForPropertyRefs(resourceDir, refs, maxResourceFileSize)) {
-                if (logger.isDebugEnabled()) {
-                    logger.debug(
-                            "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
-                }
+                logger.debug(
+                        "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
                 return true;
             }
         }
-        if (filteredDirCount > 0 && logger.isDebugEnabled()) {
+        if (filteredDirCount > 0) {
             logger.debug(
                     "No property references found in {} filtered resource directories of {}",
                     filteredDirCount,
