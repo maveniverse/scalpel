@@ -404,10 +404,16 @@ class PomChangeAnalyzer {
                         key(parentProject));
             }
         }
+        int affectedCount = 0;
+        for (MavenProject dep : dependentProjects) {
+            if (affected.contains(dep)) {
+                affectedCount++;
+            }
+        }
         logger.debug(
                 "Parent {} analysis complete: {} of {} dependents affected",
                 key(parentProject),
-                affected.size(),
+                affectedCount,
                 dependentProjects.size());
     }
 

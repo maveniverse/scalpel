@@ -2549,8 +2549,8 @@ class ScalpelLifecycleParticipantTest {
     /**
      * Reproduce scalpel#39: Camel-like structure where kafka-version property is defined
      * in parent POM but NOT used in parent's dependencyManagement. It's only used directly
-     * in 3 child modules' dependencies. With alsoMake=true (default), the report should
-     * contain DIRECT + DOWNSTREAM + UPSTREAM but NOT inflate with unrelated modules.
+     * in 3 child modules' dependencies. The report should contain only DIRECT + DOWNSTREAM
+     * modules; upstream build prerequisites are excluded (fix for #39).
      */
     @Test
     void reportMode_camelLike_kafkaVersionInChildDepsOnly() throws Exception {
@@ -2803,14 +2803,8 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(Files.exists(reportFile), "Report file should be created");
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
 
-        // Print the full report for debugging
-        System.out.println("=== SCALPEL REPORT (Camel-like scenario) ===");
-        System.out.println(json);
-        System.out.println("=== END REPORT ===");
-
         // Count modules by category
         int directCount = 0, downstreamCount = 0, upstreamCount = 0, transitiveCount = 0, otherCount = 0;
-        // Simple counting by looking for category fields
         for (String line : json.split("\n")) {
             if (line.contains("\"category\":")) {
                 if (line.contains("\"DIRECT\"")) directCount++;
@@ -2820,8 +2814,6 @@ class ScalpelLifecycleParticipantTest {
                 else otherCount++;
             }
         }
-        System.out.println("Category counts: DIRECT=" + directCount + " DOWNSTREAM=" + downstreamCount + " UPSTREAM="
-                + upstreamCount + " TRANSITIVE=" + transitiveCount + " OTHER=" + otherCount);
 
         // Verify: 3 modules should be DIRECT (camel-kafka, camel-debezium, camel-ibm)
         assertTrue(moduleHasField(json, "camel-kafka", "category", "DIRECT"), "camel-kafka should be DIRECT");
@@ -2864,14 +2856,13 @@ class ScalpelLifecycleParticipantTest {
      * modules. When kafka-version changes, camel-kafka becomes DIRECT. Since camel-allcomponents
      * depends on camel-kafka, it becomes DOWNSTREAM. Then alsoMake=true computes
      * getUpstreamProjects(camel-allcomponents, true) which returns ALL ~459 components.
-     * Those 459 components are added as UPSTREAM to the report, inflating affectedModules
-     * from ~45 useful entries to 649.
      *
-     * This test demonstrates the problem: a sync-point module that depends on everything
-     * causes the upstream closure to pull the entire reactor into the report.
+     * This test verifies that upstream build-prerequisite modules are excluded from the report,
+     * preventing the sync-point module from inflating affectedModules with hundreds of
+     * unrelated upstream dependencies (see scalpel#39).
      */
     @Test
-    void reportMode_camelLike_allcomponentsSyncPoint_causesUpstreamInflation() throws Exception {
+    void reportMode_camelLike_allcomponentsSyncPoint_excludesUpstreamPrerequisites() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
@@ -3090,13 +3081,6 @@ class ScalpelLifecycleParticipantTest {
                 else if (line.contains("\"TRANSITIVE\"")) transitiveCount++;
             }
         }
-
-        System.out.println("=== SCALPEL#39 FIX VERIFICATION ===");
-        System.out.println("DIRECT=" + directCount + " DOWNSTREAM=" + downstreamCount + " UPSTREAM=" + upstreamCount
-                + " TRANSITIVE=" + transitiveCount);
-        System.out.println(
-                "Total affectedModules = " + (directCount + downstreamCount + upstreamCount + transitiveCount));
-        System.out.println("=== END ===");
 
         // Only camel-kafka is DIRECT (references ${kafka-version})
         assertEquals(1, directCount, "Only camel-kafka should be DIRECT");
