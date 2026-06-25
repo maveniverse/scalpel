@@ -2128,158 +2128,6 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
-    void impactedLog_includesTransitivelyAffectedModules() throws Exception {
-        Path root = tempDir.resolve("project");
-        Files.createDirectories(root);
-
-        String rootPom = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <groupId>com.example</groupId>
-                  <artifactId>root</artifactId>
-                  <version>1.0</version>
-                  <packaging>pom</packaging>
-                  <modules>
-                    <module>bom</module>
-                    <module>module-a</module>
-                    <module>module-b</module>
-                  </modules>
-                </project>
-                """;
-        writePom(root, "pom.xml", rootPom);
-
-        String oldBomPom = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent>
-                    <groupId>com.example</groupId>
-                    <artifactId>root</artifactId>
-                    <version>1.0</version>
-                  </parent>
-                  <artifactId>bom</artifactId>
-                  <packaging>pom</packaging>
-                  <properties>
-                    <graphql.version>2.18.1</graphql.version>
-                  </properties>
-                  <dependencyManagement>
-                    <dependencies>
-                      <dependency>
-                        <groupId>io.smallrye</groupId>
-                        <artifactId>smallrye-graphql</artifactId>
-                        <version>${graphql.version}</version>
-                      </dependency>
-                    </dependencies>
-                  </dependencyManagement>
-                </project>
-                """;
-
-        String newBomPom = oldBomPom.replace(
-                "<graphql.version>2.18.1</graphql.version>", "<graphql.version>2.18.2</graphql.version>");
-        writePom(root, "bom/pom.xml", newBomPom);
-
-        String moduleAPom = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent>
-                    <groupId>com.example</groupId>
-                    <artifactId>root</artifactId>
-                    <version>1.0</version>
-                  </parent>
-                  <artifactId>module-a</artifactId>
-                  <dependencyManagement>
-                    <dependencies>
-                      <dependency>
-                        <groupId>com.example</groupId>
-                        <artifactId>bom</artifactId>
-                        <version>${project.version}</version>
-                        <type>pom</type>
-                        <scope>import</scope>
-                      </dependency>
-                    </dependencies>
-                  </dependencyManagement>
-                </project>
-                """;
-        writePom(root, "module-a/pom.xml", moduleAPom);
-
-        String moduleBPom = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent>
-                    <groupId>com.example</groupId>
-                    <artifactId>root</artifactId>
-                    <version>1.0</version>
-                  </parent>
-                  <artifactId>module-b</artifactId>
-                </project>
-                """;
-        writePom(root, "module-b/pom.xml", moduleBPom);
-
-        MavenProject rootProject = createProject("com.example", "root", "1.0", root, "pom.xml", rootPom);
-        rootProject.getModel().setPackaging("pom");
-        MavenProject bomProject = createProject("com.example", "bom", "1.0", root, "bom/pom.xml", newBomPom);
-        bomProject.getModel().setPackaging("pom");
-        bomProject.setParent(rootProject);
-        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
-        moduleA.setParent(rootProject);
-        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
-        moduleB.setParent(rootProject);
-
-        List<MavenProject> allProjects = List.of(rootProject, bomProject, moduleA, moduleB);
-
-        Set<String> changedFiles = new LinkedHashSet<>();
-        changedFiles.add("bom/pom.xml");
-        Map<String, byte[]> oldPoms = new HashMap<>();
-        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
-
-        org.eclipse.aether.graph.Dependency graphqlDep = new org.eclipse.aether.graph.Dependency(
-                new DefaultArtifact("io.smallrye", "smallrye-graphql", "jar", "2.18.2"), "compile");
-        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
-                .thenAnswer(invocation -> {
-                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
-                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getResolvedDependencies()).thenReturn(List.of(graphqlDep));
-                        return res;
-                    }
-                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getResolvedDependencies()).thenReturn(List.of());
-                    return empty;
-                });
-
-        MavenSession session = mock(MavenSession.class);
-        Properties sysProps = new Properties();
-        sysProps.setProperty("scalpel.mode", "report");
-        sysProps.setProperty("scalpel.baseBranch", "base");
-        sysProps.setProperty("scalpel.impactedLog", "target/scalpel-impacted.log");
-        when(session.getSystemProperties()).thenReturn(sysProps);
-        when(session.getUserProperties()).thenReturn(new Properties());
-        when(session.getProjects()).thenReturn(allProjects);
-        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
-        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
-        when(session.getRequest()).thenReturn(execRequest);
-        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
-        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
-        when(graph.getSortedProjects()).thenReturn(allProjects);
-        when(session.getProjectDependencyGraph()).thenReturn(graph);
-
-        participant.afterProjectsRead(session);
-
-        Path logFile = root.resolve("target/scalpel-impacted.log");
-        assertTrue(Files.exists(logFile), "Impacted log file should be created");
-        String content = new String(Files.readAllBytes(logFile), StandardCharsets.UTF_8);
-        assertTrue(content.contains("module-a"), "Impacted log should contain transitively affected module-a");
-        assertFalse(content.contains("module-b"), "Impacted log should NOT contain unaffected module-b");
-    }
-
-    @Test
     void skipTestsMode_skipTestsForUpstream_skipsUpstreamTests() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
@@ -2509,7 +2357,7 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
-    void reportMode_upstreamModulesInReport() throws Exception {
+    void reportMode_upstreamModulesExcludedFromReport() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
@@ -2554,194 +2402,12 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(Files.exists(reportFile));
         String json = new String(java.nio.file.Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         assertTrue(moduleHasReason(json, "module-b", "SOURCE_CHANGE"), "module-b should have SOURCE_CHANGE");
-        assertTrue(
-                moduleHasReason(json, "module-a", "UPSTREAM_DEPENDENCY"),
-                "module-a should have UPSTREAM_DEPENDENCY reason in report");
-        assertTrue(moduleHasField(json, "module-a", "category", "UPSTREAM"), "module-a should have UPSTREAM category");
-    }
-
-    @Test
-    void reportMode_bomPropertyChangeWithNoDirectlyAffectedModules() throws Exception {
-        // Simulates a BOM-only property change (e.g. bumping a version property in bom/application/pom.xml)
-        // where no module directly references the changed property in its own POM text,
-        // but modules transitively depend on the changed managed dependencies.
-        // Before the fix, this produced an empty report (no affected modules).
-        Path root = tempDir.resolve("project");
-        Files.createDirectories(root);
-
-        // Root aggregator
-        String rootPom = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <groupId>com.example</groupId>
-                  <artifactId>root</artifactId>
-                  <version>1.0</version>
-                  <packaging>pom</packaging>
-                  <modules>
-                    <module>bom</module>
-                    <module>module-a</module>
-                    <module>module-b</module>
-                  </modules>
-                </project>
-                """;
-        writePom(root, "pom.xml", rootPom);
-
-        // BOM with a property-based version (old)
-        String oldBomPom = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent>
-                    <groupId>com.example</groupId>
-                    <artifactId>root</artifactId>
-                    <version>1.0</version>
-                  </parent>
-                  <artifactId>bom</artifactId>
-                  <packaging>pom</packaging>
-                  <properties>
-                    <graphql.version>2.18.1</graphql.version>
-                  </properties>
-                  <dependencyManagement>
-                    <dependencies>
-                      <dependency>
-                        <groupId>io.smallrye</groupId>
-                        <artifactId>smallrye-graphql</artifactId>
-                        <version>${graphql.version}</version>
-                      </dependency>
-                      <dependency>
-                        <groupId>io.smallrye</groupId>
-                        <artifactId>smallrye-graphql-api</artifactId>
-                        <version>${graphql.version}</version>
-                      </dependency>
-                    </dependencies>
-                  </dependencyManagement>
-                </project>
-                """;
-
-        // BOM (new — version bumped)
-        String newBomPom = oldBomPom.replace(
-                "<graphql.version>2.18.1</graphql.version>", "<graphql.version>2.18.2</graphql.version>");
-        writePom(root, "bom/pom.xml", newBomPom);
-
-        // module-a: imports the BOM but does NOT directly declare any graphql dependency.
-        // It gets smallrye-graphql transitively via dependency resolution.
-        String moduleAPom = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent>
-                    <groupId>com.example</groupId>
-                    <artifactId>root</artifactId>
-                    <version>1.0</version>
-                  </parent>
-                  <artifactId>module-a</artifactId>
-                  <dependencyManagement>
-                    <dependencies>
-                      <dependency>
-                        <groupId>com.example</groupId>
-                        <artifactId>bom</artifactId>
-                        <version>${project.version}</version>
-                        <type>pom</type>
-                        <scope>import</scope>
-                      </dependency>
-                    </dependencies>
-                  </dependencyManagement>
-                </project>
-                """;
-        writePom(root, "module-a/pom.xml", moduleAPom);
-
-        // module-b: does NOT import the BOM or use graphql
-        String moduleBPom = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent>
-                    <groupId>com.example</groupId>
-                    <artifactId>root</artifactId>
-                    <version>1.0</version>
-                  </parent>
-                  <artifactId>module-b</artifactId>
-                </project>
-                """;
-        writePom(root, "module-b/pom.xml", moduleBPom);
-
-        // Build projects
-        MavenProject rootProject = createProject("com.example", "root", "1.0", root, "pom.xml", rootPom);
-        rootProject.getModel().setPackaging("pom");
-        MavenProject bomProject = createProject("com.example", "bom", "1.0", root, "bom/pom.xml", newBomPom);
-        bomProject.getModel().setPackaging("pom");
-        bomProject.setParent(rootProject);
-        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
-        moduleA.setParent(rootProject);
-        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
-        moduleB.setParent(rootProject);
-
-        List<MavenProject> allProjects = List.of(rootProject, bomProject, moduleA, moduleB);
-
-        // Only BOM POM changed
-        Set<String> changedFiles = new LinkedHashSet<>();
-        changedFiles.add("bom/pom.xml");
-        Map<String, byte[]> oldPoms = new HashMap<>();
-        oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
-
-        // module-a has smallrye-graphql as a transitive dependency
-        org.eclipse.aether.graph.Dependency graphqlDep = new org.eclipse.aether.graph.Dependency(
-                new DefaultArtifact("io.smallrye", "smallrye-graphql", "jar", "2.18.2"), "compile");
-        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
-                .thenAnswer(invocation -> {
-                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
-                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getResolvedDependencies()).thenReturn(List.of(graphqlDep));
-                        return res;
-                    }
-                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getResolvedDependencies()).thenReturn(List.of());
-                    return empty;
-                });
-
-        MavenSession session = mock(MavenSession.class);
-        Properties sysProps = new Properties();
-        sysProps.setProperty("scalpel.mode", "report");
-        sysProps.setProperty("scalpel.baseBranch", "base");
-        when(session.getSystemProperties()).thenReturn(sysProps);
-        when(session.getUserProperties()).thenReturn(new Properties());
-        when(session.getProjects()).thenReturn(allProjects);
-        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
-        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
-        when(session.getRequest()).thenReturn(execRequest);
-        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
-        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
-        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
-        when(graph.getSortedProjects()).thenReturn(allProjects);
-        when(session.getProjectDependencyGraph()).thenReturn(graph);
-
-        participant.afterProjectsRead(session);
-
-        Path reportFile = root.resolve("target/scalpel-report.json");
-        assertTrue(Files.exists(reportFile), "Report file should be created");
-
-        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
-
-        // module-a should be transitively affected (has the changed dep in its resolved deps)
-        assertTrue(
-                moduleHasReason(json, "module-a", "TRANSITIVE_DEPENDENCY"),
-                "module-a should have TRANSITIVE_DEPENDENCY reason (transitive dep on changed managed GA)");
-        assertTrue(
-                moduleHasField(json, "module-a", "category", "TRANSITIVE"), "module-a should have TRANSITIVE category");
-
-        // module-b should NOT be affected (no dependency on changed GAs)
-        assertFalse(modulePresent(json, "module-b"), "module-b should NOT be in report");
-
-        // changedManagedDependencies should include the GAs
-        assertTrue(json.contains("\"io.smallrye:smallrye-graphql\""), "Report should include changed managed dep GA");
-        assertTrue(
-                json.contains("\"io.smallrye:smallrye-graphql-api\""),
-                "Report should include changed managed dep GA for api");
+        // Fix #39: upstream modules (build prerequisites) are excluded from the report.
+        // module-a is only in the build set because module-b depends on it — it is not
+        // genuinely affected by the change. Including it inflates affectedModules.
+        assertFalse(
+                modulePresent(json, "module-a"),
+                "module-a should NOT be in report (it's a build prerequisite, not affected by the change)");
     }
 
     // --- Helper methods ---
@@ -2878,5 +2544,588 @@ class ScalpelLifecycleParticipantTest {
         } catch (Exception e) {
             throw new RuntimeException("Failed to parse POM XML: " + xml.substring(0, Math.min(xml.length(), 100)), e);
         }
+    }
+
+    /**
+     * Reproduce scalpel#39: Camel-like structure where kafka-version property is defined
+     * in parent POM but NOT used in parent's dependencyManagement. It's only used directly
+     * in 3 child modules' dependencies. With alsoMake=true (default), the report should
+     * contain DIRECT + DOWNSTREAM + UPSTREAM but NOT inflate with unrelated modules.
+     */
+    @Test
+    void reportMode_camelLike_kafkaVersionInChildDepsOnly() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // Root aggregator (like Camel's root pom.xml)
+        StringBuilder rootModules = new StringBuilder();
+        rootModules.append("<module>parent</module>");
+        rootModules.append("<module>camel-core</module>");
+        rootModules.append("<module>camel-kafka</module>");
+        rootModules.append("<module>camel-debezium</module>");
+        rootModules.append("<module>camel-ibm</module>");
+        for (int i = 1; i <= 20; i++) {
+            rootModules.append("<module>camel-other-").append(i).append("</module>");
+        }
+        String rootPom = "<?xml version=\"1.0\"?>\n<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>org.apache.camel</groupId>\n"
+                + "  <artifactId>camel</artifactId>\n"
+                + "  <version>4.21.0-SNAPSHOT</version>\n"
+                + "  <packaging>pom</packaging>\n"
+                + "  <modules>" + rootModules + "</modules>\n"
+                + "</project>\n";
+        writePom(root, "pom.xml", rootPom);
+
+        // Parent POM (like Camel's parent/pom.xml) - has kafka-version property
+        // but does NOT use it in dependencyManagement.
+        // Has a large dependencyManagement with camel-* modules using ${project.version}
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent>
+                    <groupId>org.apache.camel</groupId>
+                    <artifactId>camel</artifactId>
+                    <version>4.21.0-SNAPSHOT</version>
+                  </parent>
+                  <artifactId>camel-parent</artifactId>
+                  <packaging>pom</packaging>
+                  <properties>
+                    <kafka-version>4.3.1</kafka-version>
+                    <commons-lang-version>3.14.0</commons-lang-version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>org.apache.camel</groupId>
+                      <artifactId>camel-core</artifactId>
+                      <version>${project.version}</version>
+                    </dependency>
+                    <dependency>
+                      <groupId>org.apache.camel</groupId>
+                      <artifactId>camel-kafka</artifactId>
+                      <version>${project.version}</version>
+                    </dependency>
+                    <dependency>
+                      <groupId>commons-lang</groupId>
+                      <artifactId>commons-lang</artifactId>
+                      <version>${commons-lang-version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        String newParentPom =
+                oldParentPom.replace("<kafka-version>4.3.1</kafka-version>", "<kafka-version>4.3.0</kafka-version>");
+        writePom(root, "parent/pom.xml", newParentPom);
+
+        // camel-core: no kafka dependency
+        String corePom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                  <artifactId>camel-core</artifactId>
+                </project>
+                """;
+        writePom(root, "camel-core/pom.xml", corePom);
+
+        // camel-kafka: directly uses ${kafka-version}
+        String kafkaPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                  <artifactId>camel-kafka</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>org.apache.camel</groupId>
+                      <artifactId>camel-core</artifactId>
+                    </dependency>
+                    <dependency>
+                      <groupId>org.apache.kafka</groupId>
+                      <artifactId>kafka-clients</artifactId>
+                      <version>${kafka-version}</version>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "camel-kafka/pom.xml", kafkaPom);
+
+        // camel-debezium: also uses ${kafka-version}
+        String debeziumPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                  <artifactId>camel-debezium</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>org.apache.kafka</groupId>
+                      <artifactId>kafka-clients</artifactId>
+                      <version>${kafka-version}</version>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "camel-debezium/pom.xml", debeziumPom);
+
+        // camel-ibm: also uses ${kafka-version}
+        String ibmPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                  <artifactId>camel-ibm</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>org.apache.kafka</groupId>
+                      <artifactId>kafka-clients</artifactId>
+                      <version>${kafka-version}</version>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "camel-ibm/pom.xml", ibmPom);
+
+        // 20 "other" modules: no kafka dependency, depend on camel-core
+        for (int i = 1; i <= 20; i++) {
+            String otherPom = """
+                    <?xml version="1.0"?>
+                    <project>
+                      <modelVersion>4.0.0</modelVersion>
+                      <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                      <artifactId>camel-other-PLACEHOLDER</artifactId>
+                      <dependencies>
+                        <dependency><groupId>org.apache.camel</groupId><artifactId>camel-core</artifactId></dependency>
+                      </dependencies>
+                    </project>
+                    """.replace("PLACEHOLDER", String.valueOf(i));
+            writePom(root, "camel-other-" + i + "/pom.xml", otherPom);
+        }
+
+        // Build MavenProject objects
+        MavenProject rootProject =
+                createProject("org.apache.camel", "camel", "4.21.0-SNAPSHOT", root, "pom.xml", rootPom);
+        rootProject.getModel().setPackaging("pom");
+
+        MavenProject parentProject = createProject(
+                "org.apache.camel", "camel-parent", "4.21.0-SNAPSHOT", root, "parent/pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        parentProject.setParent(rootProject);
+
+        MavenProject coreModule =
+                createProject("org.apache.camel", "camel-core", "4.21.0-SNAPSHOT", root, "camel-core/pom.xml", corePom);
+        coreModule.setParent(parentProject);
+
+        MavenProject kafkaModule = createProject(
+                "org.apache.camel", "camel-kafka", "4.21.0-SNAPSHOT", root, "camel-kafka/pom.xml", kafkaPom);
+        kafkaModule.setParent(parentProject);
+
+        MavenProject debeziumModule = createProject(
+                "org.apache.camel", "camel-debezium", "4.21.0-SNAPSHOT", root, "camel-debezium/pom.xml", debeziumPom);
+        debeziumModule.setParent(parentProject);
+
+        MavenProject ibmModule =
+                createProject("org.apache.camel", "camel-ibm", "4.21.0-SNAPSHOT", root, "camel-ibm/pom.xml", ibmPom);
+        ibmModule.setParent(parentProject);
+
+        List<MavenProject> otherModules = new java.util.ArrayList<>();
+        for (int i = 1; i <= 20; i++) {
+            String otherPom = new String(
+                    Files.readAllBytes(root.resolve("camel-other-" + i + "/pom.xml")), StandardCharsets.UTF_8);
+            MavenProject other = createProject(
+                    "org.apache.camel",
+                    "camel-other-" + i,
+                    "4.21.0-SNAPSHOT",
+                    root,
+                    "camel-other-" + i + "/pom.xml",
+                    otherPom);
+            other.setParent(parentProject);
+            otherModules.add(other);
+        }
+
+        List<MavenProject> allProjects = new java.util.ArrayList<>();
+        allProjects.add(rootProject);
+        allProjects.add(parentProject);
+        allProjects.add(coreModule);
+        allProjects.add(kafkaModule);
+        allProjects.add(debeziumModule);
+        allProjects.add(ibmModule);
+        allProjects.addAll(otherModules);
+
+        // Mock ScalpelCore: only parent/pom.xml changed
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("parent/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("parent/pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // No transitive dep resolution matches (changedManagedDepGAs should be empty anyway)
+        setupEmptyDependencyResolution();
+
+        // Session
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(org.eclipse.aether.RepositorySystemSession.class));
+
+        // Dependency graph: kafka/debezium/ibm depend on core, other-N depend on core
+        // Some other-N depend on camel-kafka (downstream)
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        // camel-kafka has 3 downstream dependents: other-1, other-2, other-3
+        when(graph.getDownstreamProjects(kafkaModule, true))
+                .thenReturn(List.of(otherModules.get(0), otherModules.get(1), otherModules.get(2)));
+        // camel-core is upstream of kafka and all others
+        when(graph.getUpstreamProjects(kafkaModule, true)).thenReturn(List.of(coreModule));
+        when(graph.getUpstreamProjects(debeziumModule, true)).thenReturn(List.of(coreModule));
+        when(graph.getUpstreamProjects(ibmModule, true)).thenReturn(List.of(coreModule));
+        for (MavenProject other : otherModules) {
+            when(graph.getUpstreamProjects(other, true)).thenReturn(List.of(coreModule));
+        }
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        // Run
+        participant.afterProjectsRead(session);
+
+        // Verify report
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // Print the full report for debugging
+        System.out.println("=== SCALPEL REPORT (Camel-like scenario) ===");
+        System.out.println(json);
+        System.out.println("=== END REPORT ===");
+
+        // Count modules by category
+        int directCount = 0, downstreamCount = 0, upstreamCount = 0, transitiveCount = 0, otherCount = 0;
+        // Simple counting by looking for category fields
+        for (String line : json.split("\n")) {
+            if (line.contains("\"category\":")) {
+                if (line.contains("\"DIRECT\"")) directCount++;
+                else if (line.contains("\"DOWNSTREAM\"")) downstreamCount++;
+                else if (line.contains("\"UPSTREAM\"")) upstreamCount++;
+                else if (line.contains("\"TRANSITIVE\"")) transitiveCount++;
+                else otherCount++;
+            }
+        }
+        System.out.println("Category counts: DIRECT=" + directCount + " DOWNSTREAM=" + downstreamCount + " UPSTREAM="
+                + upstreamCount + " TRANSITIVE=" + transitiveCount + " OTHER=" + otherCount);
+
+        // Verify: 3 modules should be DIRECT (camel-kafka, camel-debezium, camel-ibm)
+        assertTrue(moduleHasField(json, "camel-kafka", "category", "DIRECT"), "camel-kafka should be DIRECT");
+        assertTrue(moduleHasField(json, "camel-debezium", "category", "DIRECT"), "camel-debezium should be DIRECT");
+        assertTrue(moduleHasField(json, "camel-ibm", "category", "DIRECT"), "camel-ibm should be DIRECT");
+
+        // camel-other-1,2,3 should be DOWNSTREAM (downstream of camel-kafka)
+        assertTrue(
+                moduleHasField(json, "camel-other-1", "category", "DOWNSTREAM"), "camel-other-1 should be DOWNSTREAM");
+        assertTrue(
+                moduleHasField(json, "camel-other-2", "category", "DOWNSTREAM"), "camel-other-2 should be DOWNSTREAM");
+        assertTrue(
+                moduleHasField(json, "camel-other-3", "category", "DOWNSTREAM"), "camel-other-3 should be DOWNSTREAM");
+
+        // camel-core is a build prerequisite (upstream), NOT genuinely affected.
+        // After the fix for #39, UPSTREAM modules are excluded from the report.
+        assertFalse(
+                modulePresent(json, "camel-core"),
+                "camel-core should NOT be in report (it's a build prerequisite, not affected by kafka-version)");
+
+        // KEY ASSERTION: other-4 through other-20 should NOT be in the report!
+        // They don't reference kafka-version and aren't downstream of affected modules.
+        for (int i = 4; i <= 20; i++) {
+            assertFalse(
+                    modulePresent(json, "camel-other-" + i),
+                    "camel-other-" + i + " should NOT be in report (no kafka dep, not downstream)");
+        }
+
+        // Total should be 3 DIRECT + 3 DOWNSTREAM = 6 (no UPSTREAM in report after #39 fix)
+        assertEquals(3, directCount, "Should have 3 DIRECT modules");
+        assertEquals(3, downstreamCount, "Should have 3 DOWNSTREAM modules");
+        assertEquals(0, upstreamCount, "UPSTREAM modules should be excluded from report");
+        assertEquals(0, transitiveCount, "Should have 0 TRANSITIVE modules (changedManagedDepGAs is empty)");
+    }
+
+    /**
+     * Reproduce scalpel#39: The real inflation mechanism.
+     *
+     * Camel has a "camel-allcomponents" sync-point module that depends on ALL ~459 component
+     * modules. When kafka-version changes, camel-kafka becomes DIRECT. Since camel-allcomponents
+     * depends on camel-kafka, it becomes DOWNSTREAM. Then alsoMake=true computes
+     * getUpstreamProjects(camel-allcomponents, true) which returns ALL ~459 components.
+     * Those 459 components are added as UPSTREAM to the report, inflating affectedModules
+     * from ~45 useful entries to 649.
+     *
+     * This test demonstrates the problem: a sync-point module that depends on everything
+     * causes the upstream closure to pull the entire reactor into the report.
+     */
+    @Test
+    void reportMode_camelLike_allcomponentsSyncPoint_causesUpstreamInflation() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // Parent POM with kafka-version property (NOT used in dependencyManagement)
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>org.apache.camel</groupId>
+                  <artifactId>camel-parent</artifactId>
+                  <version>4.21.0-SNAPSHOT</version>
+                  <packaging>pom</packaging>
+                  <properties>
+                    <kafka-version>4.3.1</kafka-version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>org.apache.camel</groupId>
+                      <artifactId>camel-core</artifactId>
+                      <version>${project.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        String newParentPom =
+                oldParentPom.replace("<kafka-version>4.3.1</kafka-version>", "<kafka-version>4.3.0</kafka-version>");
+        writePom(root, "parent/pom.xml", newParentPom);
+
+        // Root aggregator POM
+        StringBuilder rootModules = new StringBuilder();
+        rootModules.append("<module>parent</module><module>camel-core</module>");
+        rootModules.append("<module>camel-kafka</module><module>camel-allcomponents</module>");
+        for (int i = 1; i <= 30; i++) {
+            rootModules.append("<module>camel-comp-").append(i).append("</module>");
+        }
+        String rootPom = "<?xml version=\"1.0\"?>\n<project>\n"
+                + "  <modelVersion>4.0.0</modelVersion>\n"
+                + "  <groupId>org.apache.camel</groupId>\n<artifactId>camel</artifactId>\n"
+                + "  <version>4.21.0-SNAPSHOT</version>\n<packaging>pom</packaging>\n"
+                + "  <modules>" + rootModules + "</modules>\n</project>\n";
+        writePom(root, "pom.xml", rootPom);
+
+        // camel-core: no kafka dep
+        String corePom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                  <artifactId>camel-core</artifactId>
+                </project>
+                """;
+        writePom(root, "camel-core/pom.xml", corePom);
+
+        // camel-kafka: uses ${kafka-version} → DIRECT
+        String kafkaPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                  <artifactId>camel-kafka</artifactId>
+                  <dependencies>
+                    <dependency><groupId>org.apache.kafka</groupId><artifactId>kafka-clients</artifactId><version>${kafka-version}</version></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "camel-kafka/pom.xml", kafkaPom);
+
+        // 30 component modules: no kafka dep, depend on camel-core
+        for (int i = 1; i <= 30; i++) {
+            String compPom = """
+                    <?xml version="1.0"?>
+                    <project>
+                      <modelVersion>4.0.0</modelVersion>
+                      <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                      <artifactId>camel-comp-PLACEHOLDER</artifactId>
+                    </project>
+                    """.replace("PLACEHOLDER", String.valueOf(i));
+            writePom(root, "camel-comp-" + i + "/pom.xml", compPom);
+        }
+
+        // camel-allcomponents: sync-point that depends on ALL components + camel-kafka
+        StringBuilder allcompDeps = new StringBuilder();
+        allcompDeps.append(
+                "<dependency><groupId>org.apache.camel</groupId><artifactId>camel-kafka</artifactId></dependency>");
+        for (int i = 1; i <= 30; i++) {
+            allcompDeps
+                    .append("<dependency><groupId>org.apache.camel</groupId><artifactId>camel-comp-")
+                    .append(i)
+                    .append("</artifactId></dependency>");
+        }
+        String allcompPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>org.apache.camel</groupId><artifactId>camel-parent</artifactId><version>4.21.0-SNAPSHOT</version></parent>
+                  <artifactId>camel-allcomponents</artifactId>
+                  <packaging>pom</packaging>
+                  <dependencies>DEPS_PLACEHOLDER</dependencies>
+                </project>
+                """.replace("DEPS_PLACEHOLDER", allcompDeps.toString());
+        writePom(root, "camel-allcomponents/pom.xml", allcompPom);
+
+        // Build MavenProject objects
+        MavenProject rootProject =
+                createProject("org.apache.camel", "camel", "4.21.0-SNAPSHOT", root, "pom.xml", rootPom);
+        rootProject.getModel().setPackaging("pom");
+
+        MavenProject parentProject = createProject(
+                "org.apache.camel", "camel-parent", "4.21.0-SNAPSHOT", root, "parent/pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        parentProject.setParent(rootProject);
+
+        MavenProject coreModule =
+                createProject("org.apache.camel", "camel-core", "4.21.0-SNAPSHOT", root, "camel-core/pom.xml", corePom);
+        coreModule.setParent(parentProject);
+
+        MavenProject kafkaModule = createProject(
+                "org.apache.camel", "camel-kafka", "4.21.0-SNAPSHOT", root, "camel-kafka/pom.xml", kafkaPom);
+        kafkaModule.setParent(parentProject);
+
+        List<MavenProject> compModules = new java.util.ArrayList<>();
+        for (int i = 1; i <= 30; i++) {
+            String compPomStr = new String(
+                    Files.readAllBytes(root.resolve("camel-comp-" + i + "/pom.xml")), StandardCharsets.UTF_8);
+            MavenProject comp = createProject(
+                    "org.apache.camel",
+                    "camel-comp-" + i,
+                    "4.21.0-SNAPSHOT",
+                    root,
+                    "camel-comp-" + i + "/pom.xml",
+                    compPomStr);
+            comp.setParent(parentProject);
+            compModules.add(comp);
+        }
+
+        MavenProject allcompModule = createProject(
+                "org.apache.camel",
+                "camel-allcomponents",
+                "4.21.0-SNAPSHOT",
+                root,
+                "camel-allcomponents/pom.xml",
+                allcompPom);
+        allcompModule.getModel().setPackaging("pom");
+        allcompModule.setParent(parentProject);
+
+        List<MavenProject> allProjects = new java.util.ArrayList<>();
+        allProjects.add(rootProject);
+        allProjects.add(parentProject);
+        allProjects.add(coreModule);
+        allProjects.add(kafkaModule);
+        allProjects.addAll(compModules);
+        allProjects.add(allcompModule);
+
+        // Mock ScalpelCore: only parent/pom.xml changed
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("parent/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("parent/pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+        setupEmptyDependencyResolution();
+
+        // Session
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(org.eclipse.aether.RepositorySystemSession.class));
+
+        // Dependency graph simulating the real Camel structure:
+        // - camel-kafka is downstream-ed by camel-allcomponents (allcomponents depends on kafka)
+        // - camel-allcomponents upstream includes ALL 30 comp modules + camel-kafka + camel-core
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+
+        // camel-kafka's downstream includes camel-allcomponents (the sync point depends on it)
+        when(graph.getDownstreamProjects(kafkaModule, true)).thenReturn(List.of(allcompModule));
+
+        // camel-allcomponents upstream = ALL components + kafka + core (it depends on everything)
+        List<MavenProject> allcompUpstream = new java.util.ArrayList<>();
+        allcompUpstream.add(kafkaModule);
+        allcompUpstream.add(coreModule);
+        allcompUpstream.addAll(compModules);
+        when(graph.getUpstreamProjects(allcompModule, true)).thenReturn(allcompUpstream);
+
+        // Each component has camel-core as upstream
+        when(graph.getUpstreamProjects(kafkaModule, true)).thenReturn(List.of(coreModule));
+        for (MavenProject comp : compModules) {
+            when(graph.getUpstreamProjects(comp, true)).thenReturn(List.of(coreModule));
+        }
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        // Run
+        participant.afterProjectsRead(session);
+
+        // Read report
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // Count modules by category
+        int directCount = 0, downstreamCount = 0, upstreamCount = 0, transitiveCount = 0;
+        for (String line : json.split("\n")) {
+            if (line.contains("\"category\":")) {
+                if (line.contains("\"DIRECT\"")) directCount++;
+                else if (line.contains("\"DOWNSTREAM\"")) downstreamCount++;
+                else if (line.contains("\"UPSTREAM\"")) upstreamCount++;
+                else if (line.contains("\"TRANSITIVE\"")) transitiveCount++;
+            }
+        }
+
+        System.out.println("=== SCALPEL#39 FIX VERIFICATION ===");
+        System.out.println("DIRECT=" + directCount + " DOWNSTREAM=" + downstreamCount + " UPSTREAM=" + upstreamCount
+                + " TRANSITIVE=" + transitiveCount);
+        System.out.println(
+                "Total affectedModules = " + (directCount + downstreamCount + upstreamCount + transitiveCount));
+        System.out.println("=== END ===");
+
+        // Only camel-kafka is DIRECT (references ${kafka-version})
+        assertEquals(1, directCount, "Only camel-kafka should be DIRECT");
+        assertTrue(moduleHasField(json, "camel-kafka", "category", "DIRECT"));
+
+        // camel-allcomponents is DOWNSTREAM (depends on camel-kafka)
+        assertEquals(1, downstreamCount, "camel-allcomponents should be DOWNSTREAM");
+        assertTrue(moduleHasField(json, "camel-allcomponents", "category", "DOWNSTREAM"));
+
+        // FIX: UPSTREAM modules should NOT be in the report.
+        // Before the fix, all 30 comp modules + camel-core would appear as UPSTREAM (31 total).
+        // After the fix, they are excluded — they're build-order prerequisites, not affected modules.
+        assertEquals(
+                0,
+                upstreamCount,
+                "UPSTREAM modules should be excluded from report (they are build prerequisites, not affected modules)");
+
+        // Verify no unrelated modules leaked into the report
+        for (int i = 1; i <= 30; i++) {
+            assertFalse(
+                    modulePresent(json, "camel-comp-" + i),
+                    "camel-comp-" + i + " should NOT be in report (not affected by kafka-version change)");
+        }
+        assertFalse(
+                modulePresent(json, "camel-core"),
+                "camel-core should NOT be in report (it's a build prerequisite, not affected)");
+
+        // Total should be exactly 2: 1 DIRECT + 1 DOWNSTREAM
+        int total = directCount + downstreamCount + upstreamCount + transitiveCount;
+        assertEquals(2, total, "Report should contain only genuinely affected modules");
     }
 }

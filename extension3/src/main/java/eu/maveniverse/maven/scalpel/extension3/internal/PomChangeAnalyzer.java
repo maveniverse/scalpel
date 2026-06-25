@@ -188,6 +188,12 @@ class PomChangeAnalyzer {
             }
         }
 
+        logger.debug(
+                "POM change analysis complete: {} affected modules, changedProperties={}, changedManagedDeps={}, changedManagedPlugins={}",
+                affected.size(),
+                allChangedProperties,
+                allChangedManagedDepGAs,
+                allChangedManagedPluginGAs);
         return new Result(affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties);
     }
 
@@ -378,6 +384,7 @@ class PomChangeAnalyzer {
             }
 
             if (childAffected) {
+                logger.debug("Child {} is DIRECTLY AFFECTED by parent {} change", key(child), key(parentProject));
                 affected.add(child);
                 // If the affected child has managed deps/plugins referencing the changed
                 // property (e.g. it's a BOM), propagate those GAs so transitive consumers
@@ -390,8 +397,18 @@ class PomChangeAnalyzer {
                     augmentWithPluginPropertyReferences(
                             changedProperties, allChangedManagedPluginGAs, getManagedPlugins(child.getOriginalModel()));
                 }
+            } else {
+                logger.debug(
+                        "Child {} is NOT affected by parent {} change (no property ref, no managed dep/plugin use, no filtered resources)",
+                        key(child),
+                        key(parentProject));
             }
         }
+        logger.debug(
+                "Parent {} analysis complete: {} of {} dependents affected",
+                key(parentProject),
+                affected.size(),
+                dependentProjects.size());
     }
 
     /**
@@ -894,6 +911,10 @@ class PomChangeAnalyzer {
         for (Dependency dep : dependencies) {
             String ga = dep.getGroupId() + ":" + dep.getArtifactId();
             if (!changedGAs.contains(ga) && referencesAnyProperty(dep, changedProperties)) {
+                logger.debug(
+                        "Managed dependency {} references changed property via version={} -> adding to changedManagedDepGAs",
+                        ga,
+                        dep.getVersion());
                 changedGAs.add(ga);
             }
         }
@@ -904,6 +925,10 @@ class PomChangeAnalyzer {
         for (Plugin plugin : plugins) {
             String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
             if (!changedGAs.contains(ga) && referencesAnyProperty(plugin, changedProperties)) {
+                logger.debug(
+                        "Managed plugin {} references changed property via version={} -> adding to changedManagedPluginGAs",
+                        ga,
+                        plugin.getVersion());
                 changedGAs.add(ga);
             }
         }
@@ -974,15 +999,25 @@ class PomChangeAnalyzer {
             List<MavenProject> allProjects) {
         List<MavenProject> dependents = new ArrayList<>();
         if (parents.contains(project)) {
-            dependents.addAll(findChildren(project, allProjects));
+            List<MavenProject> children = findChildren(project, allProjects);
+            dependents.addAll(children);
+            logger.debug("{} has {} child modules via parent inheritance", key(project), children.size());
         }
         List<MavenProject> importers = bomImporters.get(project);
         if (importers != null) {
+            int bomCount = 0;
             for (MavenProject importer : importers) {
                 if (!dependents.contains(importer)) {
                     dependents.add(importer);
+                    bomCount++;
                 }
             }
+            if (bomCount > 0) {
+                logger.debug("{} has {} BOM importers", key(project), bomCount);
+            }
+        }
+        if (!dependents.isEmpty()) {
+            logger.debug("{} total dependents: {} (children + BOM importers)", key(project), dependents.size());
         }
         return dependents;
     }
@@ -1065,6 +1100,7 @@ class PomChangeAnalyzer {
             allResources.addAll(project.getTestResources());
         }
 
+        int filteredDirCount = 0;
         for (Resource resource : allResources) {
             if (!resource.isFiltering()) {
                 continue;
@@ -1073,6 +1109,7 @@ class PomChangeAnalyzer {
             if (dir == null) {
                 continue;
             }
+            filteredDirCount++;
             Path resourceDir = Paths.get(dir);
             if (!resourceDir.isAbsolute()) {
                 resourceDir = project.getBasedir().toPath().resolve(resourceDir);
@@ -1080,9 +1117,18 @@ class PomChangeAnalyzer {
             if (!Files.isDirectory(resourceDir)) {
                 continue;
             }
+            logger.debug("Scanning filtered resource directory {} of {} for property refs", resourceDir, key(project));
             if (scanDirectoryForPropertyRefs(resourceDir, refs, maxResourceFileSize)) {
+                logger.debug(
+                        "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
                 return true;
             }
+        }
+        if (filteredDirCount > 0) {
+            logger.debug(
+                    "No property references found in {} filtered resource directories of {}",
+                    filteredDirCount,
+                    key(project));
         }
         return false;
     }

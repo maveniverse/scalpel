@@ -392,8 +392,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenSession session) {
         Map<MavenProject, List<String>> transitivelyAffected = new LinkedHashMap<>();
         if (changedManagedDepGAs.isEmpty() && changedManagedPluginGAs.isEmpty()) {
+            logger.debug("Skipping transitive analysis: no changed managed dependencies or plugins to check against");
             return transitivelyAffected;
         }
+        logger.debug(
+                "Computing transitively affected modules: checking {} non-direct modules against {} changed managed deps and {} changed managed plugins",
+                allProjects.size() - directlyAffected.size(),
+                changedManagedDepGAs.size(),
+                changedManagedPluginGAs.size());
         Map<MavenProject, DependencyResolutionResult> resolveCache = new LinkedHashMap<>();
         for (MavenProject project : allProjects) {
             if (directlyAffected.contains(project)) {
@@ -672,6 +678,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 .changedManagedDependencies(ctx.changedManagedDepGAs)
                 .changedManagedPlugins(ctx.changedManagedPluginGAs);
 
+        logger.debug(
+                "Building report: {} directly affected, {} transitively affected, trim result has {} upstream / {} downstream / {} downstream-test",
+                ctx.directlyAffected.size(),
+                ctx.transitivelyAffected.size(),
+                ctx.trimResult != null ? ctx.trimResult.getUpstreamOnly().size() : 0,
+                ctx.trimResult != null ? ctx.trimResult.getDownstreamOnly().size() : 0,
+                ctx.trimResult != null ? ctx.trimResult.getDownstreamTestOnly().size() : 0);
+
         addDirectlyAffectedModules(builder, ctx, reactorRoot);
         addTransitivelyAffectedModules(builder, ctx, config, reactorRoot);
         addTrimResultModules(builder, ctx, config, reactorRoot);
@@ -705,6 +719,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (ctx.forceIncluded.contains(project)) {
                 reasons.add(ScalpelReport.REASON_FORCE_BUILD);
             }
+            logger.debug("Report: {} -> category=DIRECT, reasons={}", key(project), reasons);
             builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                             project.getGroupId(), project.getArtifactId(), path, reasons)
                     .category(ScalpelReport.CATEGORY_DIRECT)
@@ -734,6 +749,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (category == null) {
                 category = ScalpelReport.CATEGORY_TRANSITIVE;
             }
+            logger.debug("Report: {} -> category={}, reasons={}", key(project), category, entry.getValue());
             builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                             project.getGroupId(), project.getArtifactId(), path, entry.getValue())
                     .category(category)
@@ -747,17 +763,22 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         if (ctx.trimResult == null) {
             return;
         }
+        // Upstream modules are build-order prerequisites, not genuinely affected by the change.
+        // Including them in affectedModules inflates the report (e.g. a sync-point module like
+        // camel-allcomponents that depends on everything pulls the entire reactor as UPSTREAM).
+        // Log the count for transparency but don't include them in the report.
+        int upstreamCount = 0;
         for (MavenProject project : ctx.trimResult.getUpstreamOnly()) {
             if (!ctx.directlyAffected.contains(project) && !ctx.transitivelyAffected.containsKey(project)) {
-                String path = relativePath(reactorRoot, project);
-                builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
-                                project.getGroupId(),
-                                project.getArtifactId(),
-                                path,
-                                Collections.singletonList(ScalpelReport.REASON_UPSTREAM_DEPENDENCY))
-                        .category(ScalpelReport.CATEGORY_UPSTREAM)
-                        .build());
+                upstreamCount++;
+                logger.debug(
+                        "Excluding upstream build-prerequisite {} from report (not genuinely affected)", key(project));
             }
+        }
+        if (upstreamCount > 0) {
+            logger.info(
+                    "Scalpel: {} upstream build-prerequisite modules excluded from report (use trim/skip-tests mode for full build set)",
+                    upstreamCount);
         }
         addDownstreamModules(
                 builder,
@@ -789,6 +810,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())
                                 ? ScalpelReport.REASON_EXCLUDED_DOWNSTREAM
                                 : null;
+                logger.debug("Report: {} -> category=DOWNSTREAM, reason={}", key(project), reason);
                 builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                                 project.getGroupId(), project.getArtifactId(), path, Collections.singletonList(reason))
                         .category(ScalpelReport.CATEGORY_DOWNSTREAM)
