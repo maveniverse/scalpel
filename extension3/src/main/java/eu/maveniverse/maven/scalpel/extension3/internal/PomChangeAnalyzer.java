@@ -917,10 +917,7 @@ class PomChangeAnalyzer {
         for (Dependency dep : dependencies) {
             String ga = dep.getGroupId() + ":" + dep.getArtifactId();
             if (!changedGAs.contains(ga) && referencesAnyProperty(dep, changedProperties)) {
-                logger.debug(
-                        "Managed dependency {} references changed property via version={} -> adding to changedManagedDepGAs",
-                        ga,
-                        dep.getVersion());
+                logger.debug("Managed dependency {} references changed property -> adding to changedManagedDepGAs", ga);
                 changedGAs.add(ga);
             }
         }
@@ -931,10 +928,7 @@ class PomChangeAnalyzer {
         for (Plugin plugin : plugins) {
             String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
             if (!changedGAs.contains(ga) && referencesAnyProperty(plugin, changedProperties)) {
-                logger.debug(
-                        "Managed plugin {} references changed property via version={} -> adding to changedManagedPluginGAs",
-                        ga,
-                        plugin.getVersion());
+                logger.debug("Managed plugin {} references changed property -> adding to changedManagedPluginGAs", ga);
                 changedGAs.add(ga);
             }
         }
@@ -1122,7 +1116,6 @@ class PomChangeAnalyzer {
             if (dir == null) {
                 continue;
             }
-            filteredDirCount++;
             Path resourceDir = Paths.get(dir);
             if (!resourceDir.isAbsolute()) {
                 resourceDir = project.getBasedir().toPath().resolve(resourceDir);
@@ -1130,6 +1123,7 @@ class PomChangeAnalyzer {
             if (!Files.isDirectory(resourceDir)) {
                 continue;
             }
+            filteredDirCount++;
             logger.debug("Scanning filtered resource directory {} of {} for property refs", resourceDir, key(project));
             if (scanDirectoryForPropertyRefs(resourceDir, refs, maxResourceFileSize)) {
                 logger.debug(
