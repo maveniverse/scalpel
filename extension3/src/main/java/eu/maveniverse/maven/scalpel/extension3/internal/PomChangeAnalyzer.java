@@ -188,6 +188,12 @@ class PomChangeAnalyzer {
             }
         }
 
+        logger.debug(
+                "POM change analysis complete: {} affected modules, changedProperties={}, changedManagedDeps={}, changedManagedPlugins={}",
+                affected.size(),
+                allChangedProperties,
+                allChangedManagedDepGAs,
+                allChangedManagedPluginGAs);
         return new Result(affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties);
     }
 
@@ -378,6 +384,9 @@ class PomChangeAnalyzer {
             }
 
             if (childAffected) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Child {} is DIRECTLY AFFECTED by parent {} change", key(child), key(parentProject));
+                }
                 affected.add(child);
                 // If the affected child has managed deps/plugins referencing the changed
                 // property (e.g. it's a BOM), propagate those GAs so transitive consumers
@@ -390,7 +399,27 @@ class PomChangeAnalyzer {
                     augmentWithPluginPropertyReferences(
                             changedProperties, allChangedManagedPluginGAs, getManagedPlugins(child.getOriginalModel()));
                 }
+            } else {
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Child {} is NOT affected by parent {} change (no property ref, no managed dep/plugin use, no filtered resources)",
+                            key(child),
+                            key(parentProject));
+                }
             }
+        }
+        int affectedCount = 0;
+        for (MavenProject dep : dependentProjects) {
+            if (affected.contains(dep)) {
+                affectedCount++;
+            }
+        }
+        if (logger.isDebugEnabled()) {
+            logger.debug(
+                    "Parent {} analysis complete: {} of {} dependents affected",
+                    key(parentProject),
+                    affectedCount,
+                    dependentProjects.size());
         }
     }
 
@@ -894,6 +923,7 @@ class PomChangeAnalyzer {
         for (Dependency dep : dependencies) {
             String ga = dep.getGroupId() + ":" + dep.getArtifactId();
             if (!changedGAs.contains(ga) && referencesAnyProperty(dep, changedProperties)) {
+                logger.debug("Managed dependency {} references changed property -> adding to changedManagedDepGAs", ga);
                 changedGAs.add(ga);
             }
         }
@@ -904,6 +934,7 @@ class PomChangeAnalyzer {
         for (Plugin plugin : plugins) {
             String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
             if (!changedGAs.contains(ga) && referencesAnyProperty(plugin, changedProperties)) {
+                logger.debug("Managed plugin {} references changed property -> adding to changedManagedPluginGAs", ga);
                 changedGAs.add(ga);
             }
         }
@@ -973,16 +1004,35 @@ class PomChangeAnalyzer {
             Map<MavenProject, List<MavenProject>> bomImporters,
             List<MavenProject> allProjects) {
         List<MavenProject> dependents = new ArrayList<>();
+        int childCount = 0;
         if (parents.contains(project)) {
-            dependents.addAll(findChildren(project, allProjects));
+            List<MavenProject> children = findChildren(project, allProjects);
+            dependents.addAll(children);
+            childCount = children.size();
+            if (logger.isDebugEnabled()) {
+                logger.debug("{} has {} child modules via parent inheritance", key(project), childCount);
+            }
         }
+        int bomCount = 0;
         List<MavenProject> importers = bomImporters.get(project);
         if (importers != null) {
             for (MavenProject importer : importers) {
                 if (!dependents.contains(importer)) {
                     dependents.add(importer);
+                    bomCount++;
                 }
             }
+            if (bomCount > 0 && logger.isDebugEnabled()) {
+                logger.debug("{} has {} BOM importers", key(project), bomCount);
+            }
+        }
+        if (childCount > 0 && bomCount > 0 && logger.isDebugEnabled()) {
+            logger.debug(
+                    "{} total dependents: {} ({} children + {} BOM importers)",
+                    key(project),
+                    dependents.size(),
+                    childCount,
+                    bomCount);
         }
         return dependents;
     }
@@ -1065,6 +1115,7 @@ class PomChangeAnalyzer {
             allResources.addAll(project.getTestResources());
         }
 
+        int filteredDirCount = 0;
         for (Resource resource : allResources) {
             if (!resource.isFiltering()) {
                 continue;
@@ -1080,9 +1131,19 @@ class PomChangeAnalyzer {
             if (!Files.isDirectory(resourceDir)) {
                 continue;
             }
+            filteredDirCount++;
+            logger.debug("Scanning filtered resource directory {} of {} for property refs", resourceDir, key(project));
             if (scanDirectoryForPropertyRefs(resourceDir, refs, maxResourceFileSize)) {
+                logger.debug(
+                        "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
                 return true;
             }
+        }
+        if (filteredDirCount > 0) {
+            logger.debug(
+                    "No property references found in {} filtered resource directories of {}",
+                    filteredDirCount,
+                    key(project));
         }
         return false;
     }

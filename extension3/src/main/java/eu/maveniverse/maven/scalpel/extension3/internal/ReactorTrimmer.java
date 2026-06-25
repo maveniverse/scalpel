@@ -8,7 +8,6 @@
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
-import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.keys;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.util.ArrayList;
@@ -83,18 +82,34 @@ class ReactorTrimmer {
             for (MavenProject project : new ArrayList<>(buildSet)) {
                 List<MavenProject> upstream = graph.getUpstreamProjects(project, true);
                 if (!upstream.isEmpty()) {
-                    logger.debug("Adding upstream dependencies of {}: {}", key(project), keys(upstream));
+                    int newUpstream = 0;
                     for (MavenProject us : upstream) {
                         if (!directlyAffected.contains(us)
                                 && !downstreamOnly.contains(us)
                                 && !downstreamTestOnly.contains(us)
                                 && buildSet.add(us)) {
                             upstreamOnly.add(us);
+                            newUpstream++;
                         }
+                    }
+                    if (newUpstream > 0 && logger.isDebugEnabled()) {
+                        logger.debug(
+                                "Adding {} upstream dependencies of {} ({} total upstream of this module)",
+                                newUpstream,
+                                key(project),
+                                upstream.size());
                     }
                 }
             }
         }
+
+        logger.debug(
+                "Build set computed: {} total ({} direct, {} downstream, {} downstream-test, {} upstream)",
+                buildSet.size(),
+                directlyAffected.size(),
+                downstreamOnly.size(),
+                downstreamTestOnly.size(),
+                upstreamOnly.size());
 
         // Sort in reactor build order
         List<MavenProject> sortedProjects = graph.getSortedProjects();
