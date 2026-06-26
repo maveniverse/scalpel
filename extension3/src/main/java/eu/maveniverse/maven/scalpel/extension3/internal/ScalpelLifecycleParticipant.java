@@ -150,11 +150,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
             // Separate POM changes from source changes
+            // .mvn/ files are Maven build infrastructure (extensions.xml, maven.config, jvm.config)
+            // and should not be mapped to the root module as source changes — doing so would
+            // make the root DIRECT and cascade every reactor module as DOWNSTREAM.
             Set<String> pomChanges = new LinkedHashSet<>();
             Set<String> sourceChanges = new LinkedHashSet<>();
             for (String file : changedFiles) {
                 if (file.endsWith("/pom.xml") || file.equals("pom.xml")) {
                     pomChanges.add(file);
+                } else if (file.startsWith(".mvn/")) {
+                    logger.debug("Ignoring build infrastructure file: {}", file);
                 } else {
                     sourceChanges.add(file);
                 }

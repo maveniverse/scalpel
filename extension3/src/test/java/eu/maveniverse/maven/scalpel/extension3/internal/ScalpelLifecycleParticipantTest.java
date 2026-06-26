@@ -3309,4 +3309,133 @@ class ScalpelLifecycleParticipantTest {
                 json.contains("\"excludedUpstreamCount\": 31"),
                 "Report should show 31 excluded upstream modules (30 comp modules + camel-core)");
     }
+
+    @Test
+    void reportMode_mvnExtensionsXmlDoesNotInflateRootModule() throws Exception {
+        // Reproduces issue #39 (reopened): changing .mvn/extensions.xml should NOT cause
+        // the root module to be flagged as DIRECT (SOURCE_CHANGE), which would cascade
+        // ALL reactor modules as DOWNSTREAM.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // Change both .mvn/extensions.xml AND a real source file in module-a
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add(".mvn/extensions.xml");
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        // Override default fullBuildTriggers (.mvn/**) — same as CI config
+        session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", "");
+
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of(moduleA, moduleB));
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // .mvn/extensions.xml should still appear in changedFiles (for transparency)
+        assertTrue(json.contains(".mvn/extensions.xml"), "changedFiles should include .mvn/extensions.xml");
+
+        // module-a should be DIRECT (real source change)
+        assertTrue(moduleHasField(json, "module-a", "category", "DIRECT"), "module-a should be DIRECT");
+        assertTrue(moduleHasReason(json, "module-a", "SOURCE_CHANGE"), "module-a should have SOURCE_CHANGE reason");
+
+        // module-b should be DOWNSTREAM (depends on module-a)
+        assertTrue(moduleHasField(json, "module-b", "category", "DOWNSTREAM"), "module-b should be DOWNSTREAM");
+
+        // KEY: root/parent module should NOT be in the report — .mvn/ files are build
+        // infrastructure and should not flag the root module as SOURCE_CHANGE
+        assertFalse(
+                modulePresent(json, "parent"),
+                "parent/root module should NOT be DIRECT — .mvn/ files are build infrastructure");
+    }
+
+    @Test
+    void reportMode_testsSkippedBooleanPresentWhenReasonSet() throws Exception {
+        // Verifies that the report JSON includes a "testsSkipped": true boolean
+        // alongside "testsSkippedReason" for easier CI parsing (jq .testsSkipped == true).
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
+
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-b should have both testsSkipped boolean and testsSkippedReason string
+        String moduleBBlock = extractModuleBlock(json, "module-b");
+        assertTrue(moduleBBlock != null, "module-b should be in the report");
+        assertTrue(
+                moduleBBlock.contains("\"testsSkipped\": true"),
+                "module-b should have testsSkipped=true boolean for jq compatibility");
+        assertTrue(
+                moduleBBlock.contains("\"testsSkippedReason\": \"EXCLUDED_DOWNSTREAM\""),
+                "module-b should have testsSkippedReason=EXCLUDED_DOWNSTREAM");
+
+        // module-a should NOT have testsSkipped (it's DIRECT, not excluded downstream)
+        String moduleABlock = extractModuleBlock(json, "module-a");
+        assertTrue(moduleABlock != null, "module-a should be in the report");
+        assertFalse(moduleABlock.contains("\"testsSkipped\""), "module-a should NOT have testsSkipped (it's DIRECT)");
+    }
 }

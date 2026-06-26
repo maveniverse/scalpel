@@ -235,7 +235,11 @@ public final class ScalpelReport {
         sb.append("      \"reasons\": ").append(jsonStringArray(m.reasons));
         appendOptionalField(sb, "category", m.category);
         appendOptionalField(sb, "sourceSet", m.sourceSet);
-        appendOptionalField(sb, "testsSkippedReason", m.testsSkippedReason);
+        if (m.testsSkippedReason != null) {
+            sb.append(",\n");
+            sb.append("      \"testsSkipped\": true");
+            appendOptionalField(sb, "testsSkippedReason", m.testsSkippedReason);
+        }
         sb.append("\n");
         sb.append("    }");
     }
