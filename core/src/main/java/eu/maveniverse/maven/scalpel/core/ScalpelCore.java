@@ -112,7 +112,7 @@ public class ScalpelCore {
                 if (baseId == null) {
                     try {
                         gitChangeDetector.fetchBranch(repository, baseBranch);
-                    } catch (IOException e) {
+                    } catch (IOException | JGitInternalException e) {
                         if (config.isFailSafe()) {
                             logger.warn(
                                     "Scalpel: Failed to fetch {}, building all modules: {}",

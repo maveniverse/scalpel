@@ -283,7 +283,7 @@ class ScalpelCoreTest {
     };
 
     @Test
-    void detectChanges_failSafe_catchesRuntimeException() throws Exception {
+    void detectChanges_failSafe_catchesJGitInternalException() throws Exception {
         try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
             Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
@@ -307,7 +307,7 @@ class ScalpelCoreTest {
     }
 
     @Test
-    void detectChanges_failSafeDisabled_throwsOnRuntimeException() throws Exception {
+    void detectChanges_failSafeDisabled_throwsOnJGitInternalException() throws Exception {
         try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
             Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
