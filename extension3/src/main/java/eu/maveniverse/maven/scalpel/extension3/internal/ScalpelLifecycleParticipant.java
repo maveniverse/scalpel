@@ -281,6 +281,44 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<MavenProject> allAffected = new LinkedHashSet<>(directlyAffected);
             allAffected.addAll(transitivelyAffected.keySet());
 
+            // Apply includePaths module filter: restrict affected modules by path while
+            // keeping full diff visibility for change detection and POM analysis above.
+            // The matchers are compiled once here and reused later in trim/report/skip-tests
+            // mode to also filter downstream expansions and managed-dep re-enabling.
+            List<PathMatcher> includeMatchers = compileGlobMatchers(config.getIncludePaths());
+            if (!includeMatchers.isEmpty()) {
+                int beforeCount = allAffected.size();
+                directlyAffected.removeIf(p -> !matchesIncludePaths(p, includeMatchers, reactorRoot));
+                transitivelyAffected.keySet().removeIf(p -> !matchesIncludePaths(p, includeMatchers, reactorRoot));
+                testOnlyModules.retainAll(directlyAffected);
+                forceIncluded.retainAll(directlyAffected);
+
+                allAffected = new LinkedHashSet<>(directlyAffected);
+                allAffected.addAll(transitivelyAffected.keySet());
+
+                int removedCount = beforeCount - allAffected.size();
+                if (removedCount > 0) {
+                    logger.info("Scalpel: {} modules excluded by includePaths filters", removedCount);
+                }
+
+                if (allAffected.isEmpty()) {
+                    logger.info("Scalpel: No modules match includePaths filters");
+                    if (config.isModeReport()) {
+                        writeReport(
+                                config,
+                                reactorRoot,
+                                AnalysisContext.empty(
+                                        changedFiles,
+                                        changedProperties,
+                                        changedManagedDepGAs,
+                                        changedManagedPluginGAs));
+                    } else if (config.isModeSkipTests()) {
+                        skipTestsOnAll(allProjects);
+                    }
+                    return;
+                }
+            }
+
             // Write impacted module log if configured
             if (config.getImpactedLog() != null) {
                 writeImpactedLog(config, reactorRoot, allAffected);
@@ -316,15 +354,30 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
 
             if (config.isModeSkipTests()) {
-                applySkipTests(session, allProjects, trimResult, config, changedManagedDepGAs, changedManagedPluginGAs);
+                applySkipTests(
+                        session,
+                        allProjects,
+                        trimResult,
+                        config,
+                        changedManagedDepGAs,
+                        changedManagedPluginGAs,
+                        includeMatchers,
+                        reactorRoot);
             } else {
                 // trim mode: remove unaffected projects from reactor
+                List<MavenProject> buildSet = trimResult.getBuildSet();
+                if (!includeMatchers.isEmpty()) {
+                    // Filter downstream modules outside includePaths scope while keeping
+                    // upstream build prerequisites and directly/transitively affected modules
+                    Set<MavenProject> finalAllAffected = allAffected;
+                    buildSet = new ArrayList<>(buildSet);
+                    buildSet.removeIf(p -> !finalAllAffected.contains(p)
+                            && !trimResult.getUpstreamOnly().contains(p)
+                            && !matchesIncludePaths(p, includeMatchers, reactorRoot));
+                }
                 logger.info(
-                        "Scalpel: Building {} of {} modules: {}",
-                        trimResult.getBuildSet().size(),
-                        allProjects.size(),
-                        keys(trimResult.getBuildSet()));
-                session.setProjects(trimResult.getBuildSet());
+                        "Scalpel: Building {} of {} modules: {}", buildSet.size(), allProjects.size(), keys(buildSet));
+                session.setProjects(buildSet);
                 // Apply per-category args in trim mode
                 applyPerCategoryArgs(trimResult, config);
             }
@@ -348,13 +401,21 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         return false;
     }
 
-    private Set<String> filterExcludedPaths(Set<String> changedFiles, ScalpelConfiguration config) {
-        if (config.getExcludePaths().isEmpty()) {
-            return changedFiles;
+    private static List<PathMatcher> compileGlobMatchers(List<String> patterns) {
+        if (patterns.isEmpty()) {
+            return Collections.emptyList();
         }
-        List<PathMatcher> excludeMatchers = new ArrayList<>();
-        for (String pattern : config.getExcludePaths()) {
-            excludeMatchers.add(FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + pattern));
+        List<PathMatcher> matchers = new ArrayList<>(patterns.size());
+        for (String pattern : patterns) {
+            matchers.add(FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + pattern));
+        }
+        return matchers;
+    }
+
+    private Set<String> filterExcludedPaths(Set<String> changedFiles, ScalpelConfiguration config) {
+        List<PathMatcher> excludeMatchers = compileGlobMatchers(config.getExcludePaths());
+        if (excludeMatchers.isEmpty()) {
+            return changedFiles;
         }
         Set<String> filtered = new LinkedHashSet<>();
         for (String file : changedFiles) {
@@ -374,6 +435,19 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             logger.info("Scalpel: {} files excluded by path filters", excludedCount);
         }
         return filtered;
+    }
+
+    private boolean matchesIncludePaths(MavenProject project, List<PathMatcher> matchers, Path reactorRoot) {
+        String relPath = relativePath(reactorRoot, project);
+        Path modulePath = Paths.get(relPath);
+        for (PathMatcher matcher : matchers) {
+            // Match the module path directly (e.g., "module-a" matches pattern "module-a")
+            // or match a file within the module (e.g., "module-a/pom.xml" matches pattern "module-a/**")
+            if (matcher.matches(modulePath) || matcher.matches(modulePath.resolve("pom.xml"))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String findFullBuildTrigger(Set<String> changedFiles, ScalpelConfiguration config) {
@@ -454,7 +528,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             TrimResult trimResult,
             ScalpelConfiguration config,
             Set<String> changedManagedDepGAs,
-            Set<String> changedManagedPluginGAs) {
+            Set<String> changedManagedPluginGAs,
+            List<PathMatcher> includeMatchers,
+            Path reactorRoot) {
 
         Set<MavenProject> buildSetLookup = new LinkedHashSet<>(trimResult.getBuildSet());
         List<MavenProject> testProjects = new ArrayList<>();
@@ -493,6 +569,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         for (MavenProject project : allProjects) {
             if (buildSetLookup.contains(project)) {
                 continue; // Already handled above
+            }
+
+            // Skip tests on modules outside includePaths scope — managed dep/plugin
+            // re-enabling should not override the user's includePaths restriction
+            if (!includeMatchers.isEmpty() && !matchesIncludePaths(project, includeMatchers, reactorRoot)) {
+                project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
+                skippedProjects.add(project);
+                continue;
             }
 
             // Check effective build plugins against changed managed plugins
@@ -819,8 +903,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Path reactorRoot,
             Set<MavenProject> downstreamProjects,
             String reason) {
+        List<PathMatcher> includeMatchers = compileGlobMatchers(config.getIncludePaths());
         for (MavenProject project : downstreamProjects) {
             if (!ctx.directlyAffected.contains(project) && !ctx.transitivelyAffected.containsKey(project)) {
+                // Skip downstream modules outside includePaths scope
+                if (!includeMatchers.isEmpty() && !matchesIncludePaths(project, includeMatchers, reactorRoot)) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Excluding downstream module {} from report (outside includePaths)", key(project));
+                    }
+                    continue;
+                }
                 String path = relativePath(reactorRoot, project);
                 String testsSkippedReason =
                         matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())

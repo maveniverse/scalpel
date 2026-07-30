@@ -28,6 +28,7 @@ public final class ScalpelConfiguration {
     public static final String DISABLE_ON_BRANCH = PREFIX + "disableOnBranch";
     public static final String DISABLE_ON_BASE_BRANCH = PREFIX + "disableOnBaseBranch";
     public static final String EXCLUDE_PATHS = PREFIX + "excludePaths";
+    public static final String INCLUDE_PATHS = PREFIX + "includePaths";
     public static final String DISABLE_TRIGGERS = PREFIX + "disableTriggers";
 
     public static final String DISABLE_ON_SELECTED_PROJECTS = PREFIX + "disableOnSelectedProjects";
@@ -65,6 +66,7 @@ public final class ScalpelConfiguration {
     private final List<String> disableOnBranch;
     private final List<String> disableOnBaseBranch;
     private final List<String> excludePaths;
+    private final List<String> includePaths;
     private final List<String> disableTriggers;
     private final boolean disableOnSelectedProjects;
     private final boolean fetchBaseBranch;
@@ -92,6 +94,7 @@ public final class ScalpelConfiguration {
             List<String> disableOnBranch,
             List<String> disableOnBaseBranch,
             List<String> excludePaths,
+            List<String> includePaths,
             List<String> disableTriggers,
             boolean disableOnSelectedProjects,
             boolean fetchBaseBranch,
@@ -117,6 +120,7 @@ public final class ScalpelConfiguration {
         this.disableOnBranch = disableOnBranch;
         this.disableOnBaseBranch = disableOnBaseBranch;
         this.excludePaths = excludePaths;
+        this.includePaths = includePaths;
         this.disableTriggers = disableTriggers;
         this.disableOnSelectedProjects = disableOnSelectedProjects;
         this.fetchBaseBranch = fetchBaseBranch;
@@ -149,6 +153,7 @@ public final class ScalpelConfiguration {
         List<String> disableOnBranch = parseList(resolve(system, user, DISABLE_ON_BRANCH, null));
         List<String> disableOnBaseBranch = parseList(resolve(system, user, DISABLE_ON_BASE_BRANCH, null));
         List<String> excludePaths = parseList(resolve(system, user, EXCLUDE_PATHS, null));
+        List<String> includePaths = parseList(resolve(system, user, INCLUDE_PATHS, null));
         List<String> disableTriggers = parseList(resolve(system, user, DISABLE_TRIGGERS, null));
         boolean disableOnSelectedProjects =
                 Boolean.parseBoolean(resolve(system, user, DISABLE_ON_SELECTED_PROJECTS, "false"));
@@ -195,6 +200,7 @@ public final class ScalpelConfiguration {
                 disableOnBranch,
                 disableOnBaseBranch,
                 excludePaths,
+                includePaths,
                 disableTriggers,
                 disableOnSelectedProjects,
                 fetchBaseBranch,
@@ -292,6 +298,10 @@ public final class ScalpelConfiguration {
         return excludePaths;
     }
 
+    public List<String> getIncludePaths() {
+        return includePaths;
+    }
+
     public List<String> getDisableTriggers() {
         return disableTriggers;
     }
@@ -381,6 +391,7 @@ public final class ScalpelConfiguration {
                 + ", disableOnBranch=" + disableOnBranch
                 + ", disableOnBaseBranch=" + disableOnBaseBranch
                 + ", excludePaths=" + excludePaths
+                + ", includePaths=" + includePaths
                 + ", disableTriggers=" + disableTriggers
                 + ", disableOnSelectedProjects=" + disableOnSelectedProjects
                 + ", fetchBaseBranch=" + fetchBaseBranch

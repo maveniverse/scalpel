@@ -201,6 +201,20 @@ class ScalpelConfigurationTest {
     }
 
     @Test
+    void includePaths_parsedAsList() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.includePaths", "extensions/**,extensions-core/**,tooling/**");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertEquals(List.of("extensions/**", "extensions-core/**", "tooling/**"), config.getIncludePaths());
+    }
+
+    @Test
+    void includePaths_defaultEmpty() {
+        ScalpelConfiguration config = defaultConfig();
+        assertTrue(config.getIncludePaths().isEmpty());
+    }
+
+    @Test
     void disableTriggers_parsedAsList() {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableTriggers", ".github/**,Jenkinsfile");
@@ -345,6 +359,7 @@ class ScalpelConfigurationTest {
         assertEquals("scalpel.disableOnBranch", ScalpelConfiguration.DISABLE_ON_BRANCH);
         assertEquals("scalpel.disableOnBaseBranch", ScalpelConfiguration.DISABLE_ON_BASE_BRANCH);
         assertEquals("scalpel.excludePaths", ScalpelConfiguration.EXCLUDE_PATHS);
+        assertEquals("scalpel.includePaths", ScalpelConfiguration.INCLUDE_PATHS);
         assertEquals("scalpel.disableTriggers", ScalpelConfiguration.DISABLE_TRIGGERS);
         assertEquals("scalpel.disableOnSelectedProjects", ScalpelConfiguration.DISABLE_ON_SELECTED_PROJECTS);
         assertEquals("scalpel.fetchBaseBranch", ScalpelConfiguration.FETCH_BASE_BRANCH);
