@@ -11,6 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
@@ -20,6 +21,10 @@ import java.nio.file.Paths;
 import java.util.Properties;
 import java.util.Set;
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.errors.JGitInternalException;
+import org.eclipse.jgit.errors.MissingObjectException;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.Repository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.junit.jupiter.api.io.TempDir;
@@ -266,6 +271,63 @@ class ScalpelCoreTest {
             String readOldPom = new String(result.getOldPomContents().get("pom.xml"), StandardCharsets.UTF_8);
             assertTrue(readOldPom.contains("1.0"), "Old POM should contain original version");
             assertFalse(readOldPom.contains("2.0"), "Old POM should not contain new version");
+        }
+    }
+
+    private static final GitChangeDetector THROWING_DETECTOR = new GitChangeDetector() {
+        @Override
+        public ObjectId findMergeBase(Repository repository, String baseBranch, String head) {
+            throw new JGitInternalException(
+                    "Missing unknown abc123", new MissingObjectException(ObjectId.zeroId(), "commit"));
+        }
+    };
+
+    @Test
+    void detectChanges_failSafe_catchesJGitInternalException() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            Files.write(tempDir.resolve("new.txt"), "world".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("new.txt").call();
+            git.commit().setMessage("change").call();
+
+            ScalpelCore core = new ScalpelCore(THROWING_DETECTOR);
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            sys.setProperty("scalpel.failSafe", "true");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
+
+            assertNull(result, "failSafe should return null (build all) on RuntimeException");
+        }
+    }
+
+    @Test
+    void detectChanges_failSafeDisabled_throwsOnJGitInternalException() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            Files.write(tempDir.resolve("new.txt"), "world".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("new.txt").call();
+            git.commit().setMessage("change").call();
+
+            ScalpelCore core = new ScalpelCore(THROWING_DETECTOR);
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            sys.setProperty("scalpel.failSafe", "false");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            assertThrows(
+                    ScalpelException.class,
+                    () -> core.detectChanges(tempDir, config, Set.of()),
+                    "Should throw ScalpelException when failSafe is disabled");
         }
     }
 }

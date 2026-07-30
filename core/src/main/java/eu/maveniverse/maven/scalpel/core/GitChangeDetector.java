@@ -19,6 +19,7 @@ import javax.inject.Singleton;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.api.errors.JGitInternalException;
 import org.eclipse.jgit.diff.DiffEntry;
 import org.eclipse.jgit.diff.DiffFormatter;
 import org.eclipse.jgit.lib.ObjectId;
@@ -154,7 +155,7 @@ public class GitChangeDetector {
             uncommitted.addAll(status.getMissing());
             uncommitted.addAll(status.getConflicting());
             untracked.addAll(status.getUntracked());
-        } catch (GitAPIException e) {
+        } catch (GitAPIException | JGitInternalException e) {
             throw new IOException("Failed to get git status", e);
         }
         logger.debug("Uncommitted files: {}", uncommitted);
@@ -176,7 +177,7 @@ public class GitChangeDetector {
         logger.info("Scalpel: Fetching {} from {}", branch, remote);
         try (Git git = new Git(repository)) {
             git.fetch().setRemote(remote).setRefSpecs(new RefSpec(refspec)).call();
-        } catch (GitAPIException e) {
+        } catch (GitAPIException | JGitInternalException e) {
             throw new IOException("Failed to fetch " + baseBranch, e);
         }
     }
