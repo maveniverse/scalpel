@@ -53,6 +53,7 @@ import org.slf4j.LoggerFactory;
 class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private static final String MAVEN_TEST_SKIP = "maven.test.skip";
+    private static final String SKIP_TESTS = "skipTests";
     private static final String GLOB_PREFIX = "glob:";
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
@@ -600,12 +601,69 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         // Apply per-category args
         applyPerCategoryArgs(trimResult, config);
 
+        // Softening must have the last word on maven.test.skip/skipTests: it runs after
+        // applyPerCategoryArgs so user-configured upstreamArgs/downstreamArgs cannot
+        // reintroduce the #47 failure on a consumed test-jar producer.
+        Set<MavenProject> softenedProjects = softenTestJarProducers(testProjects, skippedProjects);
+
         logger.info(
-                "Scalpel: Testing {} of {} modules, skipping tests on {} modules: {}",
+                "Scalpel: Testing {}, {} compile-only (test-jar producers), skipping tests on {} of {} modules: {}",
                 testProjects.size(),
-                allProjects.size(),
+                softenedProjects.size(),
                 skippedProjects.size(),
+                allProjects.size(),
                 keys(skippedProjects));
+    }
+
+    /**
+     * Modules slated for a full test skip (maven.test.skip=true) also skip test-compile, which
+     * suppresses their test-jar. If some other module that will still run tests (directly, or
+     * because it was already softened by a previous pass) depends on that test-jar
+     * (&lt;type&gt;test-jar&lt;/type&gt;), its test-compile would fail looking for classes that
+     * were never built. Soften those producers: drop maven.test.skip and use skipTests=true
+     * instead, which only disables the surefire/failsafe execution while leaving test-compile
+     * (and jar:test-jar) intact. Softening a producer can itself depend on another skipped
+     * producer's test-jar (chained test-jar consumers), so this iterates to a fixpoint.
+     */
+    private Set<MavenProject> softenTestJarProducers(
+            List<MavenProject> testProjects, List<MavenProject> skippedProjects) {
+        Set<MavenProject> compilingTests = new LinkedHashSet<>(testProjects);
+        Set<MavenProject> softenedProjects = new LinkedHashSet<>();
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (MavenProject candidate : skippedProjects) {
+                if (softenedProjects.contains(candidate)) {
+                    continue;
+                }
+                for (MavenProject consumer : compilingTests) {
+                    if (reactorTrimmer.hasTestJarDependency(consumer, candidate)) {
+                        candidate.getProperties().remove(MAVEN_TEST_SKIP);
+                        candidate.getProperties().setProperty(SKIP_TESTS, "true");
+                        softenedProjects.add(candidate);
+                        compilingTests.add(candidate);
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(
+                                    "Scalpel: Keeping test-compile for {} because its test-jar is consumed"
+                                            + " in-reactor by {} (softened: skipTests=true instead of"
+                                            + " maven.test.skip=true)",
+                                    key(candidate),
+                                    key(consumer));
+                        }
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        }
+        skippedProjects.removeAll(softenedProjects);
+        if (!softenedProjects.isEmpty()) {
+            logger.info(
+                    "Scalpel: {} modules had test-compile restored for in-reactor test-jar consumers: {}",
+                    softenedProjects.size(),
+                    keys(softenedProjects));
+        }
+        return softenedProjects;
     }
 
     private boolean usesChangedPlugin(MavenProject project, Set<String> changedPluginGAs) {

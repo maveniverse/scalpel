@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.maveniverse.maven.scalpel.it.skipteststestjar</groupId>
+        <artifactId>skip-tests-test-jar</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>module-common</artifactId>
+
+    <name>${project.groupId}:${project.artifactId}</name>
+
+    <!-- Produces a test-jar consumed in-reactor by module-a. Scalpel's skip-tests mode must
+         not suppress this module's test-compile via maven.test.skip, or the test-jar built
+         below will be empty and module-a's test-compile will fail (see scalpel#47). -->
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>test-jar</id>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

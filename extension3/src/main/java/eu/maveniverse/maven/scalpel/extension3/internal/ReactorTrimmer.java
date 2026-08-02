@@ -123,7 +123,12 @@ class ReactorTrimmer {
         return new TrimResult(result, directlyAffected, upstreamOnly, downstreamOnly, downstreamTestOnly);
     }
 
-    private boolean hasTestJarDependency(MavenProject downstream, MavenProject upstream) {
+    /**
+     * Returns true if {@code downstream} has a direct {@code <type>test-jar</type>} dependency
+     * on {@code upstream}. Package-private so {@link ScalpelLifecycleParticipant} can reuse this
+     * check when deciding whether a skip-test candidate's test-compile must be preserved.
+     */
+    boolean hasTestJarDependency(MavenProject downstream, MavenProject upstream) {
         String groupId = upstream.getGroupId();
         String artifactId = upstream.getArtifactId();
         for (Dependency dep : downstream.getDependencies()) {

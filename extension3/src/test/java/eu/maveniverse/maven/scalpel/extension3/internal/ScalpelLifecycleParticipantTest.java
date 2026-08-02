@@ -968,6 +968,219 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void skipTestsMode_softensTestSkipForInReactorTestJarConsumer() throws Exception {
+        // module-b is the changed module and depends on module-common's main jar only, so
+        // module-common becomes upstream-only (skip-test candidate with skipTestsForUpstream).
+        // module-a depends on module-b (so it stays in the "will run tests" set as a downstream
+        // module) and also consumes module-common's test-jar. If module-common got
+        // maven.test.skip=true, its test-compile (and therefore its test-jar) would be
+        // suppressed, breaking module-a. Scalpel must soften module-common to skipTests=true
+        // instead, which only skips the surefire/failsafe execution.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-common", "module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleCommonPom = simpleChildPom("module-common");
+        writePom(root, "module-common/pom.xml", moduleCommonPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-common");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleCommon =
+                createProject("com.example", "module-common", "1.0", root, "module-common/pom.xml", moduleCommonPom);
+        moduleCommon.setParent(parentProject);
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        // module-a depends on module-b (compile) and on module-common's test-jar (test scope)
+        Dependency depOnB = new Dependency();
+        depOnB.setGroupId("com.example");
+        depOnB.setArtifactId("module-b");
+        depOnB.setVersion("1.0");
+        moduleA.getDependencies().add(depOnB);
+        Dependency depOnCommonTestJar = new Dependency();
+        depOnCommonTestJar.setGroupId("com.example");
+        depOnCommonTestJar.setArtifactId("module-common");
+        depOnCommonTestJar.setVersion("1.0");
+        depOnCommonTestJar.setType("test-jar");
+        depOnCommonTestJar.setScope("test");
+        moduleA.getDependencies().add(depOnCommonTestJar);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleCommon, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-b/src/main/java/Bar.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
+        session.getSystemProperties().setProperty("scalpel.skipTestsForUpstream", "true");
+        ProjectDependencyGraph graph = session.getProjectDependencyGraph();
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of(moduleA));
+        when(graph.getUpstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of(moduleCommon));
+        when(graph.getUpstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB, moduleCommon));
+
+        participant.afterProjectsRead(session);
+
+        assertFalse(
+                "true".equals(moduleCommon.getProperties().getProperty("maven.test.skip")),
+                "module-common must NOT have maven.test.skip=true (its test-jar is consumed in-reactor)");
+        assertTrue(
+                "true".equals(moduleCommon.getProperties().getProperty("skipTests")),
+                "module-common should have skipTests=true (softened skip)");
+        assertFalse(
+                "true".equals(moduleA.getProperties().getProperty("maven.test.skip")),
+                "module-a should run tests (it is a test-jar consumer, not a skip candidate)");
+    }
+
+    @Test
+    void skipTestsMode_softensChainedTestJarProducersViaFixpointIteration() throws Exception {
+        // module-x is the changed module (directly affected, runs tests).
+        // module-b is upstream-only (skip candidate) and its test-jar is consumed by module-x.
+        // module-a is upstream-only (skip candidate) and its test-jar is consumed by module-b.
+        // module-a is ordered BEFORE module-b in the reactor (and therefore in skippedProjects),
+        // so on the first while-pass module-b has not been softened yet when module-a is
+        // checked, and module-a is NOT softened; only the second pass (after module-b is
+        // softened) can soften module-a. A single-pass implementation would leave module-a with
+        // maven.test.skip=true, which would break module-b's test-compile.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b", "module-x");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+        String moduleXPom = simpleChildPom("module-x");
+        writePom(root, "module-x/pom.xml", moduleXPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+        MavenProject moduleX = createProject("com.example", "module-x", "1.0", root, "module-x/pom.xml", moduleXPom);
+        moduleX.setParent(parentProject);
+
+        // module-b consumes module-a's test-jar; module-x consumes module-b's test-jar.
+        Dependency depBOnATestJar = new Dependency();
+        depBOnATestJar.setGroupId("com.example");
+        depBOnATestJar.setArtifactId("module-a");
+        depBOnATestJar.setVersion("1.0");
+        depBOnATestJar.setType("test-jar");
+        depBOnATestJar.setScope("test");
+        moduleB.getDependencies().add(depBOnATestJar);
+
+        Dependency depXOnBTestJar = new Dependency();
+        depXOnBTestJar.setGroupId("com.example");
+        depXOnBTestJar.setArtifactId("module-b");
+        depXOnBTestJar.setVersion("1.0");
+        depXOnBTestJar.setType("test-jar");
+        depXOnBTestJar.setScope("test");
+        moduleX.getDependencies().add(depXOnBTestJar);
+
+        // Reactor (and sortedProjects) order places module-a before module-b before module-x,
+        // which drives the order candidates are visited within skippedProjects.
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleX);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-x/src/main/java/Baz.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
+        session.getSystemProperties().setProperty("scalpel.skipTestsForUpstream", "true");
+        ProjectDependencyGraph graph = session.getProjectDependencyGraph();
+        // module-a and module-b are both (transitively) upstream of the changed module-x.
+        when(graph.getUpstreamProjects(eq(moduleX), anyBoolean())).thenReturn(List.of(moduleB, moduleA));
+
+        participant.afterProjectsRead(session);
+
+        assertFalse(
+                "true".equals(moduleA.getProperties().getProperty("maven.test.skip")),
+                "module-a must NOT have maven.test.skip=true (its test-jar is consumed in-reactor via "
+                        + "module-b, only reachable on the second fixpoint pass)");
+        assertTrue(
+                "true".equals(moduleA.getProperties().getProperty("skipTests")),
+                "module-a should have skipTests=true (softened skip, second fixpoint pass)");
+        assertFalse(
+                "true".equals(moduleB.getProperties().getProperty("maven.test.skip")),
+                "module-b must NOT have maven.test.skip=true (its test-jar is consumed in-reactor by module-x)");
+        assertTrue(
+                "true".equals(moduleB.getProperties().getProperty("skipTests")),
+                "module-b should have skipTests=true (softened skip, first fixpoint pass)");
+    }
+
+    @Test
+    void skipTestsMode_softensTestJarProducerOutsideBuildSet() throws Exception {
+        // module-c is the changed module (directly affected, in includePaths scope).
+        // module-p has no reactor dependency relation to module-c (not upstream/downstream), so
+        // it never enters trimResult.getBuildSet() at all: it is only visited by the SECOND loop
+        // in applySkipTests (over allProjects, skipping buildSet members), where it gets skipped
+        // because it falls outside includePaths scope. module-c still consumes module-p's
+        // test-jar, so softenTestJarProducers must reach into that second-loop population and
+        // soften module-p, not just first-loop (buildSet) candidates.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-c", "module-p");
+        writePom(root, "pom.xml", parentPom);
+        String moduleCPom = simpleChildPom("module-c");
+        writePom(root, "module-c/pom.xml", moduleCPom);
+        String modulePPom = simpleChildPom("module-p");
+        writePom(root, "module-p/pom.xml", modulePPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleC = createProject("com.example", "module-c", "1.0", root, "module-c/pom.xml", moduleCPom);
+        moduleC.setParent(parentProject);
+        MavenProject moduleP = createProject("com.example", "module-p", "1.0", root, "module-p/pom.xml", modulePPom);
+        moduleP.setParent(parentProject);
+
+        // module-c consumes module-p's test-jar even though module-p has no build-graph relation
+        // to module-c.
+        Dependency depCOnPTestJar = new Dependency();
+        depCOnPTestJar.setGroupId("com.example");
+        depCOnPTestJar.setArtifactId("module-p");
+        depCOnPTestJar.setVersion("1.0");
+        depCOnPTestJar.setType("test-jar");
+        depCOnPTestJar.setScope("test");
+        moduleC.getDependencies().add(depCOnPTestJar);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleC, moduleP);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-c/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
+        // module-p is outside includePaths scope; module-c is not, so it stays directly affected.
+        session.getSystemProperties().setProperty("scalpel.includePaths", "module-c/**");
+
+        participant.afterProjectsRead(session);
+
+        assertFalse(
+                "true".equals(moduleP.getProperties().getProperty("maven.test.skip")),
+                "module-p must NOT have maven.test.skip=true (its test-jar is consumed in-reactor by "
+                        + "module-c, even though module-p is outside the trimmed build set)");
+        assertTrue(
+                "true".equals(moduleP.getProperties().getProperty("skipTests")),
+                "module-p should have skipTests=true (softened skip reached from the second loop population)");
+    }
+
+    @Test
     void reportMode_forceBuildModulesIncludesMatching() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
