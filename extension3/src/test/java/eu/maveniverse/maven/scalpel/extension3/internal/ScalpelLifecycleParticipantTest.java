@@ -357,6 +357,222 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void reportMode_totalResolutionFailureMarksModuleAffected() throws Exception {
+        // A module whose dependency resolution fails with NO partial result must be
+        // conservatively treated as affected (issue #82: never under-build on a
+        // swallowed failure). Contrast with reportMode_includesTransitivelyAffectedModules,
+        // where a PARTIAL result with an empty graph legitimately yields no match.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // Parent POM manages commons-lang with property-based version (old value 1.0)
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-e</module></modules>
+                  <properties>
+                    <lib.version>1.0</lib.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>commons-lang</groupId>
+                      <artifactId>commons-lang</artifactId>
+                      <version>${lib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        String newParentPom = oldParentPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
+        writePom(root, "pom.xml", newParentPom);
+
+        // module-a: directly uses managed dep commons-lang (directly affected)
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        // module-e: no dependencies; resolution fails totally (no partial result)
+        String moduleEPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-e</artifactId>
+                </project>
+                """;
+        writePom(root, "module-e/pom.xml", moduleEPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleE = createProject("com.example", "module-e", "1.0", root, "module-e/pom.xml", moduleEPom);
+        moduleE.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleE);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // module-e: total resolution failure, exception carries NO partial result
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    MavenProject reqProject = req.getMavenProject();
+                    if ("module-e".equals(reqProject.getArtifactId())) {
+                        // Total failure: the exception's partial result carries no
+                        // dependency graph at all, so nothing can be concluded.
+                        DependencyResolutionResult partial = mock(DependencyResolutionResult.class);
+                        throw new DependencyResolutionException(partial, "Cannot resolve", new Exception("disk error"));
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
+                });
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        assertTrue(moduleHasReason(json, "module-a", "POM_CHANGE"), "module-a should have POM_CHANGE reason");
+        assertTrue(
+                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY"),
+                "module-e with total resolution failure should be conservatively marked as affected");
+    }
+
+    @Test
+    void reportMode_resolutionFailureWithMissingModelMarksModuleAffected() throws Exception {
+        // Covers the propagation pass: a module whose effective models could not be
+        // built (unparseable POM) AND whose dependency resolution fails totally would
+        // be silently dropped by the reactor-dependency propagation loop. It must
+        // instead be conservatively marked as affected.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b", "module-e");
+        writePom(root, "pom.xml", parentPom);
+
+        // module-a: leaf module whose own POM changes (direct dependency version bump)
+        String oldModuleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency><groupId>commons-lang</groupId><artifactId>commons-lang</artifactId><version>1.0</version></dependency>
+                  </dependencies>
+                </project>
+                """;
+        String newModuleAPom = oldModuleAPom.replace("<version>1.0</version>", "<version>2.0</version>");
+        writePom(root, "module-a/pom.xml", newModuleAPom);
+
+        // module-b: depends on module-a (propagation marks it via the changed GA)
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        // module-e: POM on disk is unparseable garbage (effective models cannot be
+        // built), and dependency resolution fails totally for it as well. The
+        // in-memory model stays valid so the reactor can still be constructed.
+        writePom(root, "module-e/pom.xml", "<<< not a pom >>>");
+        String moduleEPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-e</artifactId>
+                </project>
+                """;
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", newModuleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+        MavenProject moduleE = createProject("com.example", "module-e", "1.0", root, "module-e/pom.xml", moduleEPom);
+        moduleE.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB, moduleE);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("module-a/pom.xml", oldModuleAPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    MavenProject reqProject = req.getMavenProject();
+                    String aid = reqProject.getArtifactId();
+                    if ("module-e".equals(aid)) {
+                        // Total failure: partial result without a dependency graph
+                        DependencyResolutionResult partial = mock(DependencyResolutionResult.class);
+                        throw new DependencyResolutionException(partial, "Cannot resolve", new Exception("disk error"));
+                    }
+                    if ("module-b".equals(aid)) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph())
+                                .thenReturn(createDependencyGraph(new org.eclipse.aether.graph.Dependency(
+                                        new DefaultArtifact("com.example", "module-a", "jar", "1.0"), "compile")));
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
+                });
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        assertTrue(moduleHasReason(json, "module-a", "POM_CHANGE"), "module-a should have POM_CHANGE reason");
+        assertTrue(
+                moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
+                "module-b depends on changed module-a and should be transitively affected");
+        assertTrue(
+                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY"),
+                "module-e with missing models and failed resolution should be conservatively marked as affected");
+    }
+
+    @Test
     void reportMode_managedPluginChange() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
