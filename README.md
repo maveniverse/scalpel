@@ -221,6 +221,7 @@ All properties can be set via `-D` on the command line or in `.mvn/maven.config`
 | `scalpel.alsoMakeDependents` | `true` | Include downstream dependents of affected modules (trim mode) |
 | `scalpel.fullBuildTriggers` | `.mvn/**` | Comma-separated glob patterns; if a changed file matches, a full build is triggered |
 | `scalpel.excludePaths` | *(none)* | Comma-separated glob patterns; changed files matching these are ignored |
+| `scalpel.includePaths` | *(none)* | Comma-separated glob patterns; narrows the affected set to matching modules rather than filtering changed files |
 | `scalpel.disableTriggers` | *(none)* | Comma-separated glob patterns; if any changed file matches, Scalpel is disabled entirely |
 | `scalpel.reportFile` | `target/scalpel-report.json` | Path for the JSON report (report mode), relative to reactor root |
 | `scalpel.impactedLog` | *(none)* | Write impacted module paths to this file (one per line) |
@@ -295,8 +296,8 @@ build. You can customize this with comma-separated glob patterns:
 
 ## Path Filtering
 
-Scalpel provides three levels of path-based control over change detection. All use
-comma-separated glob patterns:
+Scalpel provides three file-level filters over change detection, plus a module-level scope
+described below. All use comma-separated glob patterns:
 
 - **`scalpel.excludePaths`** — Ignore matching files from change detection. Use this for files
   that shouldn't trigger rebuilds (documentation, editor config, etc.):
@@ -315,6 +316,24 @@ comma-separated glob patterns:
 
 These filters are applied in order: disable triggers are checked first, then excluded paths are
 removed, then full build triggers are checked on the remaining files.
+
+Separately, **`scalpel.includePaths`** scopes *modules* rather than files, and is applied after the
+three filters above. It narrows the affected set to modules whose path matches, which is useful for
+scoping a CI job to one area of a large reactor:
+
+```bash
+-Dscalpel.includePaths=frontend/**,shared/**
+```
+
+Because it acts on modules, change detection still sees the whole diff. `includePaths` narrows the
+*affected set*, and each mode then applies its usual upstream and downstream rules to that narrowed
+set, so a module outside the scope can still re-enter the build as an upstream prerequisite in
+`trim` mode, or still run its tests as a dependent in `skip-tests` mode. If no module matches,
+`trim` falls back to a full build and `skip-tests` skips tests everywhere.
+
+Patterns are matched against the module directory. Use a trailing `/**` (e.g. `module-a/**`) to
+cover a module together with its submodules; a bare `module-a` matches only that module and not
+its children.
 
 ## Force-Build Modules
 
@@ -543,12 +562,13 @@ change a library, its downstream dependents *should* be rebuilt to catch breakag
 this need can set `scalpel.alsoMakeDependents=false` for a quick local cycle, or use
 `scalpel.enabled=false` to bypass Scalpel entirely.
 
-**`includePathsMatching`.** GIB supports an include-only path filter (only files matching the
-regex count as changes). Scalpel only has `excludePaths`. In practice, the two are interchangeable
-— if you want only `.java` files to trigger rebuilds, exclude everything else. More importantly,
-Scalpel's semantic POM analysis handles the main case where GIB users need path filtering:
-cosmetic POM changes (reformatting, reordering) don't trigger rebuilds in Scalpel, so there's
-no need to filter `pom.xml` changes via path patterns.
+**`includePathsMatching`.** GIB supports an include-only filter on *changed files* (only files
+matching the regex count as changes). Scalpel has no file-level include filter; use `excludePaths`
+to ignore everything you don't care about instead. `scalpel.includePaths` is not a substitute: it
+scopes which *modules* Scalpel treats as affected, leaving change detection on the full diff. More
+importantly, Scalpel's semantic POM analysis handles the main case where GIB users need path
+filtering: cosmetic POM changes (reformatting, reordering) don't trigger rebuilds in Scalpel, so
+there's no need to filter `pom.xml` changes via path patterns.
 
 **`disableBranchComparison`.** GIB can skip branch comparison entirely and detect changes based
 solely on uncommitted/untracked files — useful for IDE-like workflows where you want "what have
@@ -630,7 +650,7 @@ decisions. If Scalpel's analysis is wrong, your escape hatches are `forceBuildMo
 | `gib.failOnError` | `scalpel.failSafe` | Inverted semantics (`failSafe=true` ≈ `failOnError=false`) |
 | `gib.buildUpstreamMode` | *(no equivalent)* | Scalpel always uses the full impacted set |
 | `gib.excludeDownstreamModulesPackagedAs` | *(no equivalent)* | Use `forceBuildModules` or CI scripting |
-| `gib.includePathsMatching` | *(no equivalent)* | Use `excludePaths` to ignore unwanted files |
+| `gib.includePathsMatching` | *(no equivalent)* | File-level include filter; use `excludePaths` inversely. Not `scalpel.includePaths`, which is module-scoped |
 | `gib.disableBranchComparison` | *(no equivalent)* | Use `uncommitted`/`untracked` without setting `baseBranch` |
 | `gib.loadImpactedDependenciesFrom` | *(no equivalent)* | |
 | `gib.logImpactedFormat` | *(no equivalent)* | JSON report contains GAV information |
