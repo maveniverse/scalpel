@@ -60,7 +60,7 @@ class ModuleMapper {
         for (String changedFile : changedFiles) {
             for (MavenProject project : sortedProjects) {
                 String projectPath = getRelativePath(project, reactorRoot);
-                if (projectPath.isEmpty() || changedFile.startsWith(projectPath + "/")) {
+                if (projectPath.isEmpty() ? changedFile.contains("/") : changedFile.startsWith(projectPath + "/")) {
                     boolean isTest = isTestPath(changedFile, projectPath);
                     Boolean existing = hasMainChange.get(project);
                     if (existing == null) {
