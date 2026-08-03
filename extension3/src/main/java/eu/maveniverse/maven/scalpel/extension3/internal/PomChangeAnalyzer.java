@@ -653,7 +653,16 @@ class PomChangeAnalyzer {
         Model oldChildEffective = ctx.oldEffectiveModels.get(childRelPath);
         Model newChildEffective = ctx.newEffectiveModels.get(childRelPath);
         if (oldChildEffective == null || newChildEffective == null) {
-            return false;
+            // Conservative: if either effective model could not be built (IO or parse
+            // failure), assume the child is affected. A green build on untested code
+            // is worse than a redundant rebuild.
+            logger.warn(
+                    "Cannot build {} effective model for child {}, conservatively marking as affected (oldModel={}, newModel={})",
+                    oldChildEffective == null && newChildEffective == null ? "either" : "one of the",
+                    key(child),
+                    oldChildEffective != null,
+                    newChildEffective != null);
+            return true;
         }
 
         boolean changed = false;
@@ -1433,12 +1442,20 @@ class PomChangeAnalyzer {
     private boolean checkFileForPropertyRefs(Path entry, List<String> refs) {
         try {
             long size = Files.size(entry);
-            if (size > 1024 * 1024) {
-                // Skip files larger than 1 MB — unlikely to be property-substituted text
-                return false;
-            }
             if (isBinaryFile(entry, size)) {
                 return false;
+            }
+            if (size > 1024 * 1024) {
+                // Conservative: the pre-#131 analyzer treated filtered resources larger
+                // than the scan limit as affected; keep failing toward affected so an
+                // oversized resource that references a changed property is not silently
+                // missed. (ScalpelConfiguration.maxResourceFileSize is currently not
+                // applied here; the limit is hard-coded.)
+                logger.warn(
+                        "Filtered resource {} ({} bytes) exceeds the 1 MB scan limit, conservatively marking module as affected",
+                        entry,
+                        size);
+                return true;
             }
             String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
             for (String ref : refs) {
@@ -1447,7 +1464,13 @@ class PomChangeAnalyzer {
                 }
             }
         } catch (IOException e) {
-            // Skip unreadable files
+            // Conservative: treat an unreadable file as potentially containing
+            // property references. Under-building is the worst failure mode.
+            logger.warn(
+                    "Cannot read filtered resource {}, conservatively marking module as affected: {}",
+                    entry,
+                    e.getMessage());
+            return true;
         }
         return false;
     }
@@ -1456,7 +1479,7 @@ class PomChangeAnalyzer {
      * Detect binary files using the same heuristic as git: scan for a NUL byte (0x00)
      * in the first 8000 bytes of the file.
      */
-    private static boolean isBinaryFile(Path file, long fileSize) {
+    private boolean isBinaryFile(Path file, long fileSize) {
         int bytesToRead = (int) Math.min(fileSize, 8000);
         if (bytesToRead == 0) {
             return false;
@@ -1470,7 +1493,9 @@ class PomChangeAnalyzer {
                 }
             }
         } catch (IOException e) {
-            // If we can't read the file, treat as non-binary
+            // Treat as non-binary so the caller proceeds to read the full file,
+            // which will also fail and trigger the conservative "mark affected" path.
+            logger.warn("Cannot check binary status of {}: {}", file, e.getMessage());
         }
         return false;
     }
@@ -1663,10 +1688,16 @@ class PomChangeAnalyzer {
                 logger.debug("Partial effective model for old {}: {}", relPath, e.getMessage());
                 return e.getResult().getEffectiveModel();
             }
-            logger.debug("Cannot build effective model for old {}: {}", relPath, e.getMessage());
+            logger.warn(
+                    "Cannot build effective model for {}: {} (downstream comparisons will treat this conservatively)",
+                    relPath,
+                    e.getMessage());
             return null;
         } catch (Exception e) {
-            logger.debug("Cannot build effective model for old {}: {}", relPath, e.getMessage());
+            logger.warn(
+                    "Cannot build effective model for {}: {} (downstream comparisons will treat this conservatively)",
+                    relPath,
+                    e.getMessage());
             return null;
         }
     }
