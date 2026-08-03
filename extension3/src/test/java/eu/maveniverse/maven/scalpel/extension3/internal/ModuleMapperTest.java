@@ -135,6 +135,38 @@ class ModuleMapperTest {
         assertTrue(result.getTestOnlyAffected().isEmpty());
     }
 
+    @Test
+    void mapToProjectsClassified_repoRootFileDoesNotMapToRootAggregator() {
+        Path root = tempDir;
+        List<MavenProject> projects = createProjects(root);
+
+        // Files at the repository root (README.md, .gitignore) are not part of
+        // any module's source tree and should not trigger a rebuild of the root
+        // aggregator.  The old catch-all (projectPath.isEmpty()) matched them.
+        Set<String> changedFiles = new LinkedHashSet<>(List.of("README.md", ".gitignore"));
+
+        ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
+
+        assertTrue(result.getAllAffected().isEmpty(), "repo-root files should not map to any module");
+    }
+
+    @Test
+    void mapToProjectsClassified_rootProjectSourceStillMaps() {
+        Path root = tempDir;
+        List<MavenProject> projects = createProjects(root);
+
+        // Files within the root project's own source tree (src/main/java/...)
+        // should still map to the root project.
+        Set<String> changedFiles = new LinkedHashSet<>(List.of("src/main/java/com/example/App.java"));
+
+        ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
+
+        assertEquals(1, result.getMainAffected().size());
+        assertTrue(
+                result.getMainAffected().contains(projects.get(0)),
+                "src/ files at root should map to the root project");
+    }
+
     private List<MavenProject> createProjects(Path root) {
         MavenProject parent =
                 createProject("com.example", "parent", root.resolve("pom.xml").toFile());
