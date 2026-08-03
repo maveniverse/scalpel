@@ -10,6 +10,7 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -2398,6 +2399,8 @@ class PomChangeAnalyzerTest {
         Path unreadableFile = resourceDir.resolve("application.properties");
         Files.write(unreadableFile, "app.version=${dep.version}\n".getBytes(StandardCharsets.UTF_8));
         Files.setPosixFilePermissions(unreadableFile, EnumSet.noneOf(PosixFilePermission.class));
+        assumeTrue(
+                !Files.isReadable(unreadableFile), "Filesystem does not enforce POSIX permissions (running as root?)");
 
         MavenProject moduleA = projects.get(1);
         Resource resource = new Resource();
@@ -2450,6 +2453,7 @@ class PomChangeAnalyzerTest {
         Files.write(subDir.resolve("app.properties"), "app.version=${dep.version}\n".getBytes(StandardCharsets.UTF_8));
         // Make the subdirectory unreadable so DirectoryStream fails
         Files.setPosixFilePermissions(subDir, EnumSet.noneOf(PosixFilePermission.class));
+        assumeTrue(!Files.isReadable(subDir), "Filesystem does not enforce POSIX permissions (running as root?)");
 
         MavenProject moduleA = projects.get(1);
         Resource resource = new Resource();
