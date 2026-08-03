@@ -18,6 +18,7 @@ import java.util.Properties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class ScalpelConfigurationTest {
 
@@ -451,5 +452,136 @@ class ScalpelConfigurationTest {
         assertEquals("main", list.get(0));
         assertEquals("release/.*", list.get(1));
         assertEquals("hotfix", list.get(2));
+    }
+
+    // ---------------------------------------------------------------
+    // AC#1: Strict boolean validation
+    // ---------------------------------------------------------------
+
+    @ParameterizedTest
+    @ValueSource(strings = {"yes", "1", "on", "Yes", "TRUE!", "tru", "fals"})
+    void invalidBooleanValue_throwsException(String badValue) {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.enabled", badValue);
+        IllegalArgumentException ex = assertThrows(
+                IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, new Properties()));
+        assertTrue(ex.getMessage().contains("scalpel.enabled"), "message should mention the key");
+        assertTrue(ex.getMessage().contains(badValue), "message should mention the bad value");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"true, true", "false, false", "TRUE, true", "FALSE, false", "True, true", "False, false"})
+    void validBooleanValues_accepted(String input, boolean expected) {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.enabled", input);
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertEquals(expected, config.isEnabled());
+    }
+
+    @Test
+    void invalidBooleanOnFailSafe_throwsWithKeyName() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.failSafe", "1");
+        IllegalArgumentException ex = assertThrows(
+                IllegalArgumentException.class, () -> ScalpelConfiguration.fromProperties(sys, new Properties()));
+        assertTrue(ex.getMessage().contains("scalpel.failSafe"));
+    }
+
+    // ---------------------------------------------------------------
+    // AC#2: Value trimming at the source
+    // ---------------------------------------------------------------
+
+    @Test
+    void stringValue_trailingWhitespace_isTrimmed() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.baseBranch", "origin/main ");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertEquals("origin/main", config.getBaseBranch());
+    }
+
+    @Test
+    void stringValue_leadingWhitespace_isTrimmed() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.head", " HEAD");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertEquals("HEAD", config.getHead());
+    }
+
+    @Test
+    void booleanValue_surroundingWhitespace_isTrimmed() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.enabled", " true ");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertTrue(config.isEnabled());
+    }
+
+    // ---------------------------------------------------------------
+    // AC#3: Unknown scalpel key detection
+    // ---------------------------------------------------------------
+
+    @Test
+    void unknownKey_wrongCase_producesWarning() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.basebranch", "origin/main");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        List<String> warnings = config.getWarnings();
+        assertFalse(warnings.isEmpty(), "should have at least one warning");
+        assertTrue(
+                warnings.stream().anyMatch(w -> w.contains("scalpel.basebranch")),
+                "warning should mention the unknown key");
+        assertTrue(
+                warnings.stream().anyMatch(w -> w.contains("scalpel.baseBranch")),
+                "warning should suggest the correct key");
+    }
+
+    @Test
+    void unknownKey_missingSuffix_producesWarning() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.excludePath", "*.md");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        List<String> warnings = config.getWarnings();
+        assertFalse(warnings.isEmpty());
+        assertTrue(warnings.stream().anyMatch(w -> w.contains("scalpel.excludePath")));
+        assertTrue(warnings.stream().anyMatch(w -> w.contains("scalpel.excludePaths")));
+    }
+
+    @Test
+    void unknownKey_completelyWrong_producesWarning() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.foobar", "x");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        List<String> warnings = config.getWarnings();
+        assertFalse(warnings.isEmpty());
+        assertTrue(warnings.stream().anyMatch(w -> w.contains("scalpel.foobar")));
+    }
+
+    @Test
+    void unknownKey_inUserProperties_producesWarning() {
+        Properties user = new Properties();
+        user.setProperty("scalpel.enbaled", "true");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(new Properties(), user);
+        List<String> warnings = config.getWarnings();
+        assertFalse(warnings.isEmpty());
+        assertTrue(warnings.stream().anyMatch(w -> w.contains("scalpel.enbaled")));
+        assertTrue(warnings.stream().anyMatch(w -> w.contains("scalpel.enabled")));
+    }
+
+    @Test
+    void knownKeys_noWarnings() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.enabled", "true");
+        sys.setProperty("scalpel.baseBranch", "origin/main");
+        sys.setProperty("scalpel.mode", "trim");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertTrue(config.getWarnings().isEmpty(), "known keys should not produce warnings");
+    }
+
+    @Test
+    void nonScalpelKeys_noWarnings() {
+        Properties sys = new Properties();
+        sys.setProperty("maven.compiler.source", "17");
+        sys.setProperty("project.build.sourceEncoding", "UTF-8");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertTrue(config.getWarnings().isEmpty(), "non-scalpel keys should be ignored");
     }
 }
