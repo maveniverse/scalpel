@@ -326,9 +326,12 @@ public final class ScalpelConfiguration {
                 best = known;
             }
         }
-        // Only suggest if the edit distance is at most half the key length.
-        // This filters out completely unrelated keys.
-        if (best != null && bestDist <= Math.max(unknown.length(), best.length()) / 2) {
+        // Only suggest if the edit distance is at most half the suffix length
+        // (after stripping the shared "scalpel." prefix). Without this adjustment,
+        // the 8-char shared prefix inflates the threshold and causes unrelated keys
+        // like "scalpel.foobar" to incorrectly suggest "scalpel.head".
+        int suffixLen = Math.max(unknown.length(), best.length()) - PREFIX.length();
+        if (best != null && bestDist <= suffixLen / 2) {
             return best;
         }
         return null;
@@ -523,6 +526,7 @@ public final class ScalpelConfiguration {
                 + ", failSafe=" + failSafe
                 + ", reportFile='" + reportFile + '\''
                 + ", maxResourceFileSize=" + maxResourceFileSize
+                + ", warnings=" + warnings
                 + '}';
     }
 }

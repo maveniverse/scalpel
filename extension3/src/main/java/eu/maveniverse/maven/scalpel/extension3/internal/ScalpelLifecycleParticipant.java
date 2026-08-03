@@ -91,6 +91,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             return;
         }
 
+        for (String warning : config.getWarnings()) {
+            logger.warn("Scalpel: {}", warning);
+        }
+
         String version = Version.version();
 
         if (!config.isEnabled()) {
