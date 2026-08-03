@@ -8,9 +8,12 @@
 package eu.maveniverse.maven.scalpel.core;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
+import java.util.Set;
 
 public final class ScalpelConfiguration {
 
@@ -57,6 +60,34 @@ public final class ScalpelConfiguration {
     private static final String DEFAULT_REPORT_FILE = "target/scalpel-report.json";
     public static final long DEFAULT_MAX_RESOURCE_FILE_SIZE = 10L * 1024 * 1024; // 10 MB
 
+    private static final Set<String> KNOWN_KEYS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+            ENABLED,
+            BASE_BRANCH,
+            HEAD,
+            ALSO_MAKE,
+            ALSO_MAKE_DEPENDENTS,
+            FULL_BUILD_TRIGGERS,
+            FAIL_SAFE,
+            MODE,
+            DISABLE_ON_BRANCH,
+            DISABLE_ON_BASE_BRANCH,
+            EXCLUDE_PATHS,
+            INCLUDE_PATHS,
+            DISABLE_TRIGGERS,
+            DISABLE_ON_SELECTED_PROJECTS,
+            SKIP_TESTS_FOR_UPSTREAM,
+            SKIP_TESTS_FOR_DOWNSTREAM_MODULES,
+            UPSTREAM_ARGS,
+            DOWNSTREAM_ARGS,
+            FETCH_BASE_BRANCH,
+            UNCOMMITTED,
+            UNTRACKED,
+            FORCE_BUILD_MODULES,
+            BUILD_ALL_IF_NO_CHANGES,
+            IMPACTED_LOG,
+            REPORT_FILE,
+            MAX_RESOURCE_FILE_SIZE)));
+
     private final boolean enabled;
     private final String baseBranch;
     private final String head;
@@ -83,6 +114,7 @@ public final class ScalpelConfiguration {
     private final String mode;
     private final String reportFile;
     private final long maxResourceFileSize;
+    private final List<String> warnings;
 
     private ScalpelConfiguration(
             boolean enabled,
@@ -110,7 +142,8 @@ public final class ScalpelConfiguration {
             boolean failSafe,
             String mode,
             String reportFile,
-            long maxResourceFileSize) {
+            long maxResourceFileSize,
+            List<String> warnings) {
         this.enabled = enabled;
         this.baseBranch = baseBranch;
         this.head = head;
@@ -137,17 +170,19 @@ public final class ScalpelConfiguration {
         this.mode = mode;
         this.reportFile = reportFile;
         this.maxResourceFileSize = maxResourceFileSize;
+        this.warnings = warnings;
     }
 
     public static ScalpelConfiguration fromProperties(Properties system, Properties user) {
-        boolean enabled = Boolean.parseBoolean(resolve(system, user, ENABLED, "true"));
+        boolean enabled = parseStrictBoolean(ENABLED, resolve(system, user, ENABLED, "true"));
         String baseBranch = resolve(system, user, BASE_BRANCH, null);
         if (baseBranch == null) {
             baseBranch = detectBaseBranch(system);
         }
         String head = resolve(system, user, HEAD, "HEAD");
-        boolean alsoMake = Boolean.parseBoolean(resolve(system, user, ALSO_MAKE, "true"));
-        boolean alsoMakeDependents = Boolean.parseBoolean(resolve(system, user, ALSO_MAKE_DEPENDENTS, "true"));
+        boolean alsoMake = parseStrictBoolean(ALSO_MAKE, resolve(system, user, ALSO_MAKE, "true"));
+        boolean alsoMakeDependents =
+                parseStrictBoolean(ALSO_MAKE_DEPENDENTS, resolve(system, user, ALSO_MAKE_DEPENDENTS, "true"));
         String triggers = resolve(system, user, FULL_BUILD_TRIGGERS, DEFAULT_FULL_BUILD_TRIGGERS);
         List<String> fullBuildTriggers = parseList(triggers);
         List<String> disableOnBranch = parseList(resolve(system, user, DISABLE_ON_BRANCH, null));
@@ -155,20 +190,23 @@ public final class ScalpelConfiguration {
         List<String> excludePaths = parseList(resolve(system, user, EXCLUDE_PATHS, null));
         List<String> includePaths = parseList(resolve(system, user, INCLUDE_PATHS, null));
         List<String> disableTriggers = parseList(resolve(system, user, DISABLE_TRIGGERS, null));
-        boolean disableOnSelectedProjects =
-                Boolean.parseBoolean(resolve(system, user, DISABLE_ON_SELECTED_PROJECTS, "false"));
-        boolean fetchBaseBranch = Boolean.parseBoolean(resolve(system, user, FETCH_BASE_BRANCH, "false"));
-        boolean skipTestsForUpstream = Boolean.parseBoolean(resolve(system, user, SKIP_TESTS_FOR_UPSTREAM, "false"));
+        boolean disableOnSelectedProjects = parseStrictBoolean(
+                DISABLE_ON_SELECTED_PROJECTS, resolve(system, user, DISABLE_ON_SELECTED_PROJECTS, "false"));
+        boolean fetchBaseBranch =
+                parseStrictBoolean(FETCH_BASE_BRANCH, resolve(system, user, FETCH_BASE_BRANCH, "false"));
+        boolean skipTestsForUpstream =
+                parseStrictBoolean(SKIP_TESTS_FOR_UPSTREAM, resolve(system, user, SKIP_TESTS_FOR_UPSTREAM, "false"));
         List<String> skipTestsForDownstreamModules =
                 parseList(resolve(system, user, SKIP_TESTS_FOR_DOWNSTREAM_MODULES, null));
         List<String> upstreamArgs = parseList(resolve(system, user, UPSTREAM_ARGS, null));
         List<String> downstreamArgs = parseList(resolve(system, user, DOWNSTREAM_ARGS, null));
-        boolean uncommitted = Boolean.parseBoolean(resolve(system, user, UNCOMMITTED, "false"));
-        boolean untracked = Boolean.parseBoolean(resolve(system, user, UNTRACKED, "false"));
+        boolean uncommitted = parseStrictBoolean(UNCOMMITTED, resolve(system, user, UNCOMMITTED, "false"));
+        boolean untracked = parseStrictBoolean(UNTRACKED, resolve(system, user, UNTRACKED, "false"));
         List<String> forceBuildModules = parseList(resolve(system, user, FORCE_BUILD_MODULES, null));
-        boolean buildAllIfNoChanges = Boolean.parseBoolean(resolve(system, user, BUILD_ALL_IF_NO_CHANGES, "false"));
+        boolean buildAllIfNoChanges =
+                parseStrictBoolean(BUILD_ALL_IF_NO_CHANGES, resolve(system, user, BUILD_ALL_IF_NO_CHANGES, "false"));
         String impactedLog = resolve(system, user, IMPACTED_LOG, null);
-        boolean failSafe = Boolean.parseBoolean(resolve(system, user, FAIL_SAFE, "true"));
+        boolean failSafe = parseStrictBoolean(FAIL_SAFE, resolve(system, user, FAIL_SAFE, "true"));
         String mode = resolve(system, user, MODE, MODE_TRIM);
         if (!MODE_TRIM.equals(mode) && !MODE_SKIP_TESTS.equals(mode) && !MODE_REPORT.equals(mode)) {
             throw new IllegalArgumentException("Invalid scalpel.mode '" + mode + "', expected one of: " + MODE_TRIM
@@ -189,6 +227,8 @@ public final class ScalpelConfiguration {
                         + "', must be a positive integer (bytes)");
             }
         }
+
+        List<String> warnings = detectUnknownKeys(system, user);
 
         return new ScalpelConfiguration(
                 enabled,
@@ -216,17 +256,18 @@ public final class ScalpelConfiguration {
                 failSafe,
                 mode,
                 reportFile,
-                maxResourceFileSize);
+                maxResourceFileSize,
+                warnings);
     }
 
     private static String resolve(Properties system, Properties user, String key, String defaultValue) {
         String value = system.getProperty(key);
         if (value != null) {
-            return value;
+            return value.trim();
         }
         value = user.getProperty(key);
         if (value != null) {
-            return value;
+            return value.trim();
         }
         return defaultValue;
     }
@@ -241,6 +282,77 @@ public final class ScalpelConfiguration {
             result.add(part.trim());
         }
         return Collections.unmodifiableList(result);
+    }
+
+    private static boolean parseStrictBoolean(String key, String value) {
+        if ("true".equalsIgnoreCase(value)) {
+            return true;
+        }
+        if ("false".equalsIgnoreCase(value)) {
+            return false;
+        }
+        throw new IllegalArgumentException(
+                "Invalid boolean value '" + value + "' for " + key + ". Expected 'true' or 'false'.");
+    }
+
+    private static List<String> detectUnknownKeys(Properties system, Properties user) {
+        List<String> warnings = new ArrayList<>();
+        Set<String> seen = new HashSet<>();
+        collectUnknownScalpelKeys(system, seen, warnings);
+        collectUnknownScalpelKeys(user, seen, warnings);
+        return warnings.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(warnings);
+    }
+
+    private static void collectUnknownScalpelKeys(Properties props, Set<String> seen, List<String> warnings) {
+        for (String key : props.stringPropertyNames()) {
+            if (key.startsWith(PREFIX) && !KNOWN_KEYS.contains(key) && seen.add(key)) {
+                String closest = findClosestKey(key);
+                if (closest != null) {
+                    warnings.add("Unknown configuration key '" + key + "'. Did you mean '" + closest + "'?");
+                } else {
+                    warnings.add("Unknown configuration key '" + key + "'.");
+                }
+            }
+        }
+    }
+
+    private static String findClosestKey(String unknown) {
+        String best = null;
+        int bestDist = Integer.MAX_VALUE;
+        for (String known : KNOWN_KEYS) {
+            int dist = editDistance(unknown, known);
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = known;
+            }
+        }
+        // Only suggest if the edit distance is at most half the key length.
+        // This filters out completely unrelated keys.
+        if (best != null && bestDist <= Math.max(unknown.length(), best.length()) / 2) {
+            return best;
+        }
+        return null;
+    }
+
+    static int editDistance(String a, String b) {
+        int lenA = a.length();
+        int lenB = b.length();
+        int[] prev = new int[lenB + 1];
+        int[] curr = new int[lenB + 1];
+        for (int j = 0; j <= lenB; j++) {
+            prev[j] = j;
+        }
+        for (int i = 1; i <= lenA; i++) {
+            curr[0] = i;
+            for (int j = 1; j <= lenB; j++) {
+                int cost = a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1;
+                curr[j] = Math.min(Math.min(curr[j - 1] + 1, prev[j] + 1), prev[j - 1] + cost);
+            }
+            int[] tmp = prev;
+            prev = curr;
+            curr = tmp;
+        }
+        return prev[lenB];
     }
 
     private static String detectBaseBranch(Properties system) {
@@ -376,6 +488,10 @@ public final class ScalpelConfiguration {
 
     public long getMaxResourceFileSize() {
         return maxResourceFileSize;
+    }
+
+    public List<String> getWarnings() {
+        return warnings;
     }
 
     @Override
