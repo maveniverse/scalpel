@@ -331,7 +331,7 @@ set, so a module outside the scope can still re-enter the build as an upstream p
 `trim` mode, or still run its tests as a dependent in `skip-tests` mode. If no module matches,
 `trim` falls back to a full build and `skip-tests` skips tests everywhere.
 
-Patterns are matched against the module directory. Use a trailing `/**` (e.g. `module-a/**`) to
+Patterns are matched against the module directory or its `pom.xml` path. Use a trailing `/**` (e.g. `module-a/**`) to
 cover a module together with its submodules; a bare `module-a` matches only that module and not
 its children.
 
