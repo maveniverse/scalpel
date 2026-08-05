@@ -641,6 +641,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         candidate.getProperties().remove(MAVEN_TEST_SKIP);
                         candidate.getProperties().setProperty(SKIP_TESTS, "true");
                         softenedProjects.add(candidate);
+                        // Safe despite iterating compilingTests: the break below exits before the
+                        // iterator can advance, so no ConcurrentModificationException.
                         compilingTests.add(candidate);
                         if (logger.isDebugEnabled()) {
                             logger.debug(

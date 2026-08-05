@@ -36,8 +36,8 @@ assert softenedLine != null : "Expected the aggregate summary to report module-c
 // download output can interleave arbitrarily many lines within a section, so bound by the next
 // section header rather than a fixed line count.
 def sectionText = { int sectionStart ->
-    int nextSection = (sectionStart + 1..<lines.size()).find { i -> lines[i].contains('[INFO] --- ') } ?: lines.size() - 1
-    lines[sectionStart..nextSection].join('\n')
+    int nextSection = (sectionStart + 1..<lines.size()).find { i -> lines[i].contains('[INFO] --- ') } ?: lines.size()
+    lines[sectionStart..<nextSection].join('\n')
 }
 
 // module-common's surefire execution itself should be skipped (proves skipTests=true took
