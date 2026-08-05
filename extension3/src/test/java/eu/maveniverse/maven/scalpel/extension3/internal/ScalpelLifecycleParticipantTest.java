@@ -1004,13 +1004,7 @@ class ScalpelLifecycleParticipantTest {
         depOnB.setArtifactId("module-b");
         depOnB.setVersion("1.0");
         moduleA.getDependencies().add(depOnB);
-        Dependency depOnCommonTestJar = new Dependency();
-        depOnCommonTestJar.setGroupId("com.example");
-        depOnCommonTestJar.setArtifactId("module-common");
-        depOnCommonTestJar.setVersion("1.0");
-        depOnCommonTestJar.setType("test-jar");
-        depOnCommonTestJar.setScope("test");
-        moduleA.getDependencies().add(depOnCommonTestJar);
+        addTestJarDependency(moduleA, "module-common");
 
         List<MavenProject> allProjects = List.of(parentProject, moduleCommon, moduleA, moduleB);
 
@@ -1072,21 +1066,9 @@ class ScalpelLifecycleParticipantTest {
         moduleX.setParent(parentProject);
 
         // module-b consumes module-a's test-jar; module-x consumes module-b's test-jar.
-        Dependency depBOnATestJar = new Dependency();
-        depBOnATestJar.setGroupId("com.example");
-        depBOnATestJar.setArtifactId("module-a");
-        depBOnATestJar.setVersion("1.0");
-        depBOnATestJar.setType("test-jar");
-        depBOnATestJar.setScope("test");
-        moduleB.getDependencies().add(depBOnATestJar);
+        addTestJarDependency(moduleB, "module-a");
 
-        Dependency depXOnBTestJar = new Dependency();
-        depXOnBTestJar.setGroupId("com.example");
-        depXOnBTestJar.setArtifactId("module-b");
-        depXOnBTestJar.setVersion("1.0");
-        depXOnBTestJar.setType("test-jar");
-        depXOnBTestJar.setScope("test");
-        moduleX.getDependencies().add(depXOnBTestJar);
+        addTestJarDependency(moduleX, "module-b");
 
         // Reactor (and sortedProjects) order places module-a before module-b before module-x,
         // which drives the order candidates are visited within skippedProjects.
@@ -1149,13 +1131,7 @@ class ScalpelLifecycleParticipantTest {
 
         // module-c consumes module-p's test-jar even though module-p has no build-graph relation
         // to module-c.
-        Dependency depCOnPTestJar = new Dependency();
-        depCOnPTestJar.setGroupId("com.example");
-        depCOnPTestJar.setArtifactId("module-p");
-        depCOnPTestJar.setVersion("1.0");
-        depCOnPTestJar.setType("test-jar");
-        depCOnPTestJar.setScope("test");
-        moduleC.getDependencies().add(depCOnPTestJar);
+        addTestJarDependency(moduleC, "module-p");
 
         List<MavenProject> allProjects = List.of(parentProject, moduleC, moduleP);
 
@@ -3175,6 +3151,16 @@ class ScalpelLifecycleParticipantTest {
                 </artifactId><version>1.0</version></dependency></dependencies>
                 </project>
                 """;
+    }
+
+    private static void addTestJarDependency(MavenProject consumer, String artifactId) {
+        Dependency dep = new Dependency();
+        dep.setGroupId("com.example");
+        dep.setArtifactId(artifactId);
+        dep.setVersion("1.0");
+        dep.setType("test-jar");
+        dep.setScope("test");
+        consumer.getDependencies().add(dep);
     }
 
     private void writePom(Path root, String relativePath, String content) throws Exception {

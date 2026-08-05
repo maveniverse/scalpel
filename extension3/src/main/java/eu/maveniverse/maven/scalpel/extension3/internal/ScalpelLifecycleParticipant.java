@@ -636,13 +636,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 if (softenedProjects.contains(candidate)) {
                     continue;
                 }
-                for (MavenProject consumer : compilingTests) {
+                // Iterate a snapshot: compilingTests grows in the loop body as softened producers
+                // become potential consumers for later candidates, and mutating the live set during
+                // iteration would throw ConcurrentModificationException.
+                for (MavenProject consumer : new ArrayList<>(compilingTests)) {
                     if (reactorTrimmer.hasTestJarDependency(consumer, candidate)) {
                         candidate.getProperties().remove(MAVEN_TEST_SKIP);
                         candidate.getProperties().setProperty(SKIP_TESTS, "true");
                         softenedProjects.add(candidate);
-                        // Safe despite iterating compilingTests: the break below exits before the
-                        // iterator can advance, so no ConcurrentModificationException.
                         compilingTests.add(candidate);
                         if (logger.isDebugEnabled()) {
                             logger.debug(
