@@ -38,7 +38,7 @@ assert reportFile.exists() : "Report file should have been created"
 String json = reportFile.text
 def report = new groovy.json.JsonSlurper().parseText(json)
 
-assert report.version == '1' : "Report should have version 1"
+assert report.version == '2' : "Report should have version 2"
 assert report.fullBuildTriggered == false : "fullBuildTriggered should be false"
 assert report.changedManagedDependencies.contains('commons-lang:commons-lang') : "changedManagedDependencies should contain commons-lang"
 
