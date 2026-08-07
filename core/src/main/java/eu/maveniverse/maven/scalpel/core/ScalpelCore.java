@@ -180,7 +180,7 @@ public class ScalpelCore {
             return new ChangeDetectionResult(changedFiles, oldPomContents);
         } catch (ScalpelException e) {
             throw e;
-        } catch (IOException | JGitInternalException e) {
+        } catch (Exception e) {
             return handleError(config, "Error during change detection", e);
         } finally {
             repository.close();

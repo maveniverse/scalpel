@@ -330,4 +330,63 @@ class ScalpelCoreTest {
                     "Should throw ScalpelException when failSafe is disabled");
         }
     }
+
+    /**
+     * Detector that throws an unchecked IllegalArgumentException (simulates RevisionSyntaxException).
+     */
+    private static final GitChangeDetector UNCHECKED_THROWING_DETECTOR = new GitChangeDetector() {
+        @Override
+        public ObjectId findMergeBase(Repository repository, String baseBranch, String head) {
+            throw new IllegalArgumentException("Bad revision syntax: @{-99}");
+        }
+    };
+
+    @Test
+    void detectChanges_failSafe_catchesUncheckedExceptions() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            Files.write(tempDir.resolve("new.txt"), "world".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("new.txt").call();
+            git.commit().setMessage("change").call();
+
+            ScalpelCore core = new ScalpelCore(UNCHECKED_THROWING_DETECTOR);
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            sys.setProperty("scalpel.failSafe", "true");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
+
+            assertNull(result, "failSafe should return null (build all) on unchecked exception");
+        }
+    }
+
+    @Test
+    void detectChanges_failSafeDisabled_throwsOnUncheckedExceptions() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            Files.write(tempDir.resolve("new.txt"), "world".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("new.txt").call();
+            git.commit().setMessage("change").call();
+
+            ScalpelCore core = new ScalpelCore(UNCHECKED_THROWING_DETECTOR);
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            sys.setProperty("scalpel.failSafe", "false");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            assertThrows(
+                    ScalpelException.class,
+                    () -> core.detectChanges(tempDir, config, Set.of()),
+                    "Should throw ScalpelException when failSafe is disabled");
+        }
+    }
 }
