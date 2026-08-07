@@ -22,6 +22,10 @@
   <name>${project.groupId}:${project.artifactId}</name>
   <description>Scalpel Maven extension for smart reactor trimming.</description>
 
+  <properties>
+    <jacoco.skip>true</jacoco.skip>
+  </properties>
+
   <dependencies>
     <!-- Scalpel -->
     <dependency>

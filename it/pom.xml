@@ -29,6 +29,7 @@
 
   <properties>
     <enforcer.skip>true</enforcer.skip>
+    <jacoco.skip>true</jacoco.skip>
     <maven.install.skip>true</maven.install.skip>
     <maven.deploy.skip>true</maven.deploy.skip>
   </properties>
