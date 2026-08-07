@@ -405,7 +405,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private boolean matchesDisableTrigger(Set<String> changedFiles, ScalpelConfiguration config) {
         for (String pattern : config.getDisableTriggers()) {
-            PathMatcher matcher = FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + pattern);
+            PathMatcher matcher = FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + normalizeGlobPattern(pattern));
             for (String changedFile : changedFiles) {
                 if (matcher.matches(Paths.get(changedFile))) {
                     logger.info(
@@ -423,9 +423,26 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
         List<PathMatcher> matchers = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
-            matchers.add(FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + pattern));
+            matchers.add(FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + normalizeGlobPattern(pattern)));
         }
         return matchers;
+    }
+
+    /**
+     * Normalizes a user-supplied glob pattern so that bare patterns (those containing no path
+     * separator) match files at any depth in the repository tree. For example, {@code *.md} is
+     * rewritten to {@code {*.md,**&#47;*.md}} so that it matches both {@code README.md} (root)
+     * and {@code docs/guide.md} (nested). A plain {@code **&#47;} prefix alone would not match
+     * root-level files on the default {@link java.nio.file.FileSystem} because the path separator
+     * in the pattern is required to be present in the matched path. Patterns that already contain
+     * a {@code /} are returned unchanged because the user explicitly specified the directory
+     * structure.
+     */
+    static String normalizeGlobPattern(String pattern) {
+        if (pattern.contains("/")) {
+            return pattern;
+        }
+        return "{" + pattern + ",**/" + pattern + "}";
     }
 
     private Set<String> filterExcludedPaths(Set<String> changedFiles, ScalpelConfiguration config) {
@@ -468,7 +485,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private String findFullBuildTrigger(Set<String> changedFiles, ScalpelConfiguration config) {
         for (String pattern : config.getFullBuildTriggers()) {
-            PathMatcher matcher = FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + pattern);
+            PathMatcher matcher = FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + normalizeGlobPattern(pattern));
             for (String changedFile : changedFiles) {
                 if (matcher.matches(Paths.get(changedFile))) {
                     logger.info("Scalpel: Full build triggered by change to {} (matches {})", changedFile, pattern);
