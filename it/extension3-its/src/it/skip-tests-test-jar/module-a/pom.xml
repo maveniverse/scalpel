@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.maveniverse.maven.scalpel.it.skipteststestjar</groupId>
+        <artifactId>skip-tests-test-jar</artifactId>
+        <version>0.1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>module-a</artifactId>
+
+    <name>${project.groupId}:${project.artifactId}</name>
+
+    <!-- Downstream of module-b (so its own tests run when module-b changes), and an in-reactor
+         consumer of module-common's test-jar. If module-common's test-compile is suppressed by
+         maven.test.skip, module-common's test-jar will be missing TestSupport and this module's
+         test-compile will fail with "cannot find symbol: class TestSupport". -->
+    <dependencies>
+        <dependency>
+            <groupId>eu.maveniverse.maven.scalpel.it.skipteststestjar</groupId>
+            <artifactId>module-b</artifactId>
+            <version>${project.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>eu.maveniverse.maven.scalpel.it.skipteststestjar</groupId>
+            <artifactId>module-common</artifactId>
+            <version>${project.version}</version>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.13.4</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
