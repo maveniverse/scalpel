@@ -1,0 +1,47 @@
+{
+  "version": "2",
+  "scalpelVersion": "<scalpelVersion>",
+  "baseBranch": "origin/main",
+  "fullBuildTriggered": false,
+  "triggerFile": null,
+  "changedFiles": ["module-a/src/main/java/Foo.java", "module-b/src/test/java/BarTest.java", "pom.xml"],
+  "changedProperties": ["kafka.version"],
+  "changedManagedDependencies": ["org.apache.kafka:kafka-clients"],
+  "changedManagedPlugins": ["org.apache.maven.plugins:maven-compiler-plugin"],
+  "excludedUpstreamCount": 2,
+  "affectedModules": [
+    {
+      "groupId": "com.example",
+      "artifactId": "module-a",
+      "path": "module-a",
+      "reasons": ["SOURCE_CHANGE"],
+      "category": "DIRECT",
+      "sourceSet": "main"
+    },
+    {
+      "groupId": "com.example",
+      "artifactId": "module-b",
+      "path": "module-b",
+      "reasons": ["TEST_CHANGE"],
+      "category": "DIRECT",
+      "sourceSet": "test"
+    },
+    {
+      "groupId": "com.example",
+      "artifactId": "module-c",
+      "path": "module-c",
+      "reasons": ["DOWNSTREAM_DEPENDENT"],
+      "category": "DOWNSTREAM",
+      "sourceSet": "main",
+      "testsSkipped": true,
+      "testsSkippedReason": "EXCLUDED_DOWNSTREAM"
+    },
+    {
+      "groupId": "com.example",
+      "artifactId": "module-d",
+      "path": "module-d",
+      "reasons": ["TRANSITIVE_DEPENDENCY"],
+      "category": "TRANSITIVE"
+    }
+  ]
+}

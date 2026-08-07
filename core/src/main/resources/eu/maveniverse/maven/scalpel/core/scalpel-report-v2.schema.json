@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://maveniverse.eu/schemas/scalpel-report-v2.json",
+  "title": "Scalpel Report",
+  "description": "JSON report produced by Scalpel (mode=report) describing which modules in a Maven multi-module reactor are affected by a git changeset.",
+  "type": "object",
+  "required": [
+    "version",
+    "scalpelVersion",
+    "baseBranch",
+    "fullBuildTriggered",
+    "triggerFile",
+    "changedFiles",
+    "changedProperties",
+    "changedManagedDependencies",
+    "changedManagedPlugins",
+    "excludedUpstreamCount",
+    "affectedModules"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "const": "2",
+      "description": "Report schema version. '2' indicates the v2 format with category, sourceSet, excludedUpstreamCount, testsSkipped, and testsSkippedReason fields."
+    },
+    "scalpelVersion": {
+      "type": "string",
+      "description": "The version of the Scalpel extension that produced this report (e.g. '0.3.9')."
+    },
+    "baseBranch": {
+      "type": "string",
+      "description": "The base branch that was compared against (e.g. 'origin/main')."
+    },
+    "fullBuildTriggered": {
+      "type": "boolean",
+      "description": "True if a changed file matched a fullBuildTriggers pattern, causing a full reactor build."
+    },
+    "triggerFile": {
+      "type": ["string", "null"],
+      "description": "The first changed file that matched a fullBuildTriggers pattern, or null if no full build was triggered."
+    },
+    "changedFiles": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Git-relative paths of all files changed between baseBranch and HEAD."
+    },
+    "changedProperties": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Names of Maven properties whose values changed in a POM diff."
+    },
+    "changedManagedDependencies": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Coordinates (groupId:artifactId) of managed dependencies whose version changed in the root POM."
+    },
+    "changedManagedPlugins": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Coordinates (groupId:artifactId) of managed plugins whose version or configuration changed in the root POM."
+    },
+    "excludedUpstreamCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of upstream (build-prerequisite) modules excluded from affectedModules. These modules are built because of dependency ordering but are not genuinely affected by the changeset."
+    },
+    "affectedModules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/affectedModule" },
+      "description": "Modules affected by the changeset, with reasons and optional metadata."
+    }
+  },
+  "$defs": {
+    "affectedModule": {
+      "type": "object",
+      "required": ["groupId", "artifactId", "path", "reasons"],
+      "additionalProperties": false,
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "Maven groupId of the affected module."
+        },
+        "artifactId": {
+          "type": "string",
+          "description": "Maven artifactId of the affected module."
+        },
+        "path": {
+          "type": "string",
+          "description": "Reactor-relative path of the module directory."
+        },
+        "reasons": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "SOURCE_CHANGE",
+              "TEST_CHANGE",
+              "POM_CHANGE",
+              "TRANSITIVE_DEPENDENCY",
+              "TRANSITIVE_DEPENDENCY_TEST",
+              "MANAGED_PLUGIN",
+              "UPSTREAM_DEPENDENCY",
+              "DOWNSTREAM_DEPENDENT",
+              "DOWNSTREAM_TEST",
+              "FORCE_BUILD",
+              "EXCLUDED_DOWNSTREAM"
+            ]
+          },
+          "minItems": 1,
+          "description": "Why this module is included in the affected set."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["DIRECT", "UPSTREAM", "DOWNSTREAM", "TRANSITIVE"],
+          "description": "How this module relates to the change: directly changed, upstream prerequisite, downstream dependent, or transitively affected via managed dependencies/plugins."
+        },
+        "sourceSet": {
+          "type": "string",
+          "enum": ["main", "test"],
+          "description": "Which source set triggered the change. Present on directly affected modules with source changes."
+        },
+        "testsSkipped": {
+          "type": "boolean",
+          "const": true,
+          "description": "Present and true when tests are skipped for this module. The reason is given in testsSkippedReason."
+        },
+        "testsSkippedReason": {
+          "type": "string",
+          "description": "Why tests were skipped on this module (e.g. 'EXCLUDED_DOWNSTREAM' for downstream modules not in the test scope)."
+        }
+      }
+    }
+  }
+}
