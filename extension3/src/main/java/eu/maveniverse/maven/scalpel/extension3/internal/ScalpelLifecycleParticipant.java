@@ -79,8 +79,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     @Override
     public void afterProjectsRead(MavenSession session) throws MavenExecutionException {
-        ScalpelConfiguration config =
-                ScalpelConfiguration.fromProperties(session.getSystemProperties(), session.getUserProperties());
+        ScalpelConfiguration config;
+        try {
+            config = ScalpelConfiguration.fromProperties(session.getSystemProperties(), session.getUserProperties());
+        } catch (Exception e) {
+            // Default for failSafe is true; if config parsing fails we cannot check the flag,
+            // so default to the safe behaviour: warn and let the build proceed normally.
+            logger.warn("Scalpel: Error parsing configuration, building all modules: {}", e.getMessage());
+            logger.debug("Configuration parsing error details", e);
+            return;
+        }
 
         String version = Version.version();
 
@@ -384,6 +392,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
         } catch (ScalpelException e) {
+            throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
+        } catch (Exception e) {
+            if (config.isFailSafe()) {
+                logger.warn("Scalpel: Unexpected error, building all modules: {}", e.getMessage());
+                logger.debug("Unexpected error details", e);
+                return;
+            }
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
         }
     }

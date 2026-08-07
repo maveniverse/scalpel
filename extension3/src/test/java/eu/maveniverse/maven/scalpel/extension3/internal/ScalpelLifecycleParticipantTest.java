@@ -10,6 +10,7 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -32,6 +33,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import org.apache.maven.MavenExecutionException;
 import org.apache.maven.execution.MavenExecutionRequest;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.execution.ProjectDependencyGraph;
@@ -4115,5 +4117,110 @@ class ScalpelLifecycleParticipantTest {
         String moduleABlock = extractModuleBlock(json, "module-a");
         assertTrue(moduleABlock != null, "module-a should be in the report");
         assertFalse(moduleABlock.contains("\"testsSkipped\""), "module-a should NOT have testsSkipped (it's DIRECT)");
+    }
+
+    @Test
+    void afterProjectsRead_invalidMode_failSafeReturnsNormally() throws Exception {
+        // ScalpelConfiguration.fromProperties throws IllegalArgumentException for an invalid
+        // scalpel.mode. Since fromProperties is now inside a try block, the build should
+        // proceed normally (no exception) when the config fails to parse.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        sysProps.setProperty("scalpel.mode", "bogus-invalid-mode");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+
+        // Should NOT throw — config parsing error is caught and logged
+        participant.afterProjectsRead(session);
+    }
+
+    @Test
+    void afterProjectsRead_invalidGlobPattern_failSafeReturnsNormally() throws Exception {
+        // An invalid glob pattern (e.g. "[unclosed") in excludePaths causes
+        // PatternSyntaxException. With failSafe=true (default), this should be caught
+        // and the build should proceed normally.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        // Invalid glob pattern — "[unclosed" is not a valid glob
+        session.getSystemProperties().setProperty("scalpel.excludePaths", "[unclosed");
+
+        // Should NOT throw — PatternSyntaxException is caught by the failSafe handler
+        participant.afterProjectsRead(session);
+    }
+
+    @Test
+    void afterProjectsRead_invalidGlobPattern_failSafeDisabled_throws() throws Exception {
+        // With failSafe=false, an invalid glob pattern should propagate as MavenExecutionException.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        // Invalid glob pattern + failSafe disabled
+        session.getSystemProperties().setProperty("scalpel.excludePaths", "[unclosed");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "false");
+
+        // Should throw MavenExecutionException when failSafe is disabled
+        assertThrows(
+                MavenExecutionException.class,
+                () -> participant.afterProjectsRead(session),
+                "Should throw MavenExecutionException when failSafe is disabled and glob is invalid");
     }
 }
