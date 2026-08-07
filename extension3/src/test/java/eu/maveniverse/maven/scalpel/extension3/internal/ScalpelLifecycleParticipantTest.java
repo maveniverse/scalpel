@@ -4223,4 +4223,64 @@ class ScalpelLifecycleParticipantTest {
                 () -> participant.afterProjectsRead(session),
                 "Should throw MavenExecutionException when failSafe is disabled and glob is invalid");
     }
+
+    @Test
+    void normalizeGlobPattern_barePatternIsPrefixed() {
+        assertEquals("{*.md,**/*.md}", ScalpelLifecycleParticipant.normalizeGlobPattern("*.md"));
+        assertEquals("{LICENSE,**/LICENSE}", ScalpelLifecycleParticipant.normalizeGlobPattern("LICENSE"));
+        assertEquals(
+                "{.editorconfig,**/.editorconfig}", ScalpelLifecycleParticipant.normalizeGlobPattern(".editorconfig"));
+    }
+
+    @Test
+    void normalizeGlobPattern_patternWithSlashIsUnchanged() {
+        assertEquals("docs/*.md", ScalpelLifecycleParticipant.normalizeGlobPattern("docs/*.md"));
+        assertEquals("**/*.md", ScalpelLifecycleParticipant.normalizeGlobPattern("**/*.md"));
+        assertEquals(".github/**", ScalpelLifecycleParticipant.normalizeGlobPattern(".github/**"));
+    }
+
+    @Test
+    void reportMode_bareExcludePathMatchesNestedFile() throws Exception {
+        // Verifies that a bare glob like *.md (no /) excludes nested files (e.g. docs/guide.md)
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // module-a has a nested .md file changed, module-b has a source file changed
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/docs/guide.md");
+        changedFiles.add("module-b/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        // Use bare *.md pattern (no slash) — should match nested files after normalization
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.excludePaths", "*.md");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(modulePresent(json, "module-b"), "module-b should be in report (source changed)");
+        assertFalse(
+                modulePresent(json, "module-a"),
+                "module-a should NOT be in report (nested .md excluded by bare *.md pattern)");
+    }
 }
