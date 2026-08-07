@@ -24,7 +24,7 @@ File reportFile = new File(basedir, 'target/scalpel-report.json')
 assert reportFile.exists() : "Report file should have been created at target/scalpel-report.json"
 
 String json = reportFile.text
-assert json.contains('"version": "1"') : "Report should contain version field"
+assert json.contains('"version": "2"') : "Report should contain version field"
 assert json.contains('"fullBuildTriggered": false') : "fullBuildTriggered should be false"
 assert json.contains('"affectedModules"') : "Report should contain affectedModules"
 assert json.contains('"module-b"') : "module-b should appear in the report as affected"

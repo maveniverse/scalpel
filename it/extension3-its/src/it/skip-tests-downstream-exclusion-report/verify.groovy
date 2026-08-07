@@ -24,7 +24,7 @@ File reportFile = new File(basedir, 'target/scalpel-report.json')
 assert reportFile.exists() : "Report file should have been created at target/scalpel-report.json"
 
 String json = reportFile.text
-assert json.contains('"version": "1"') : "Report should contain version field"
+assert json.contains('"version": "2"') : "Report should contain version field"
 assert json.contains('"fullBuildTriggered": false') : "fullBuildTriggered should be false"
 
 // module-a should be directly affected with SOURCE_CHANGE
