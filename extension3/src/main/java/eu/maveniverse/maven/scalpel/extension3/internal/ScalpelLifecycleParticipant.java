@@ -110,7 +110,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             for (MavenProject project : allProjects) {
                 Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
                 Path relativePom = reactorRoot.toAbsolutePath().normalize().relativize(pomPath);
-                allPomPaths.add(relativePom.toString());
+                allPomPaths.add(relativePom.toString().replace('\\', '/'));
             }
 
             // Detect changes
@@ -996,7 +996,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 .toAbsolutePath()
                 .normalize()
                 .relativize(project.getBasedir().toPath().toAbsolutePath().normalize())
-                .toString();
+                .toString()
+                .replace('\\', '/');
     }
 
     private void applyPerCategoryArgs(TrimResult trimResult, ScalpelConfiguration config) {

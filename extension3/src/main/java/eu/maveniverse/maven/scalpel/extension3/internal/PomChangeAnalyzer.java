@@ -128,7 +128,7 @@ class PomChangeAnalyzer {
         for (MavenProject project : allProjects) {
             Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
             Path relativePom = reactorRoot.toAbsolutePath().normalize().relativize(pomPath);
-            projectByPomPath.put(relativePom.toString(), project);
+            projectByPomPath.put(relativePom.toString().replace('\\', '/'), project);
         }
 
         // Build set of projects that have children in the reactor

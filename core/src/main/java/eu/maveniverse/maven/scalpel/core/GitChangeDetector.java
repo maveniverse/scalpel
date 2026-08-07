@@ -79,8 +79,6 @@ public class GitChangeDetector {
 
             try (DiffFormatter diffFormatter = new DiffFormatter(NullOutputStream.INSTANCE)) {
                 diffFormatter.setRepository(repository);
-                diffFormatter.setDetectRenames(true);
-
                 for (DiffEntry entry : diffFormatter.scan(baseCommit.getTree(), headCommit.getTree())) {
                     switch (entry.getChangeType()) {
                         case ADD:
