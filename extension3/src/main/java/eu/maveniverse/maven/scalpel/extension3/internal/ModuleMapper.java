@@ -106,6 +106,6 @@ class ModuleMapper {
         if (projectDir.equals(rootDir)) {
             return "";
         }
-        return rootDir.relativize(projectDir).toString();
+        return rootDir.relativize(projectDir).toString().replace('\\', '/');
     }
 }
