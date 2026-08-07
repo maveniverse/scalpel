@@ -9,9 +9,11 @@ package eu.maveniverse.maven.scalpel.core;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import javax.inject.Named;
@@ -22,14 +24,17 @@ import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.JGitInternalException;
 import org.eclipse.jgit.diff.DiffEntry;
 import org.eclipse.jgit.diff.DiffFormatter;
+import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
+import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.revwalk.filter.RevFilter;
 import org.eclipse.jgit.transport.RefSpec;
 import org.eclipse.jgit.treewalk.TreeWalk;
+import org.eclipse.jgit.treewalk.filter.PathFilterGroup;
 import org.eclipse.jgit.util.io.NullOutputStream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -180,13 +185,36 @@ public class GitChangeDetector {
         }
     }
 
+    /**
+     * Reads multiple files at the given commit in a single TreeWalk pass.
+     * Uses a PathFilterGroup so the TreeWalk only visits matching entries,
+     * and shares a single ObjectReader/RevWalk across all reads.
+     */
     public Map<String, byte[]> readPomFilesAtCommit(Repository repository, ObjectId commitId, Set<String> paths)
             throws IOException {
+        if (paths.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        // PathFilterGroup requires a non-empty collection of path strings
+        List<String> pathList = new ArrayList<>(paths);
         Map<String, byte[]> result = new HashMap<>();
-        for (String path : paths) {
-            byte[] content = readFileAtCommit(repository, commitId, path);
-            if (content != null) {
-                result.put(path, content);
+        try (ObjectReader reader = repository.newObjectReader();
+                RevWalk revWalk = new RevWalk(reader)) {
+            RevCommit commit = revWalk.parseCommit(commitId);
+            try (TreeWalk treeWalk = new TreeWalk(reader)) {
+                treeWalk.addTree(commit.getTree());
+                treeWalk.setRecursive(true);
+                treeWalk.setFilter(PathFilterGroup.createFromStrings(pathList));
+                while (treeWalk.next()) {
+                    if (treeWalk.getFileMode(0) == FileMode.REGULAR_FILE
+                            || treeWalk.getFileMode(0) == FileMode.EXECUTABLE_FILE) {
+                        String path = treeWalk.getPathString();
+                        ObjectLoader loader = reader.open(treeWalk.getObjectId(0));
+                        ByteArrayOutputStream out = new ByteArrayOutputStream();
+                        loader.copyTo(out);
+                        result.put(path, out.toByteArray());
+                    }
+                }
             }
         }
         return result;
