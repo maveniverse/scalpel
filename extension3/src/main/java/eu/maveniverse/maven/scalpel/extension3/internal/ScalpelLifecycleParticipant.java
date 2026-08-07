@@ -26,6 +26,7 @@ import java.nio.file.PathMatcher;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -45,6 +46,8 @@ import org.apache.maven.project.DependencyResolutionResult;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
 import org.eclipse.aether.graph.Dependency;
+import org.eclipse.aether.graph.DependencyFilter;
+import org.eclipse.aether.graph.DependencyNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -260,9 +263,19 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         "Scalpel: {} modules directly affected: {}", directlyAffected.size(), keys(directlyAffected));
             }
 
+            // Single shared cache for dependency collection results — used by both
+            // computeTransitivelyAffected and applySkipTests to avoid resolving the same
+            // module twice.
+            Map<MavenProject, DependencyResolutionResult> collectCache = new LinkedHashMap<>();
+
             // Compute transitively affected modules (via changed managed deps/plugins)
             Map<MavenProject, List<String>> transitivelyAffected = computeTransitivelyAffected(
-                    allProjects, directlyAffected, changedManagedDepGAs, changedManagedPluginGAs, session);
+                    allProjects,
+                    directlyAffected,
+                    changedManagedDepGAs,
+                    changedManagedPluginGAs,
+                    session,
+                    collectCache);
 
             if (directlyAffected.isEmpty() && transitivelyAffected.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
@@ -363,7 +376,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         changedManagedDepGAs,
                         changedManagedPluginGAs,
                         includeMatchers,
-                        reactorRoot);
+                        reactorRoot,
+                        collectCache);
             } else {
                 // trim mode: remove unaffected projects from reactor
                 List<MavenProject> buildSet = trimResult.getBuildSet();
@@ -469,7 +483,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<MavenProject> directlyAffected,
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
-            MavenSession session) {
+            MavenSession session,
+            Map<MavenProject, DependencyResolutionResult> collectCache) {
         Map<MavenProject, List<String>> transitivelyAffected = new LinkedHashMap<>();
         if (changedManagedDepGAs.isEmpty() && changedManagedPluginGAs.isEmpty()) {
             logger.debug("Skipping transitive analysis: no changed managed dependencies or plugins to check against");
@@ -480,13 +495,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 allProjects.size() - directlyAffected.size(),
                 changedManagedDepGAs.size(),
                 changedManagedPluginGAs.size());
-        Map<MavenProject, DependencyResolutionResult> resolveCache = new LinkedHashMap<>();
         for (MavenProject project : allProjects) {
             if (directlyAffected.contains(project)) {
                 continue;
             }
             List<String> reasons = computeTransitiveReasons(
-                    project, changedManagedDepGAs, changedManagedPluginGAs, session, resolveCache);
+                    project, changedManagedDepGAs, changedManagedPluginGAs, session, collectCache);
             if (!reasons.isEmpty()) {
                 transitivelyAffected.put(project, reasons);
             }
@@ -505,13 +519,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
             MavenSession session,
-            Map<MavenProject, DependencyResolutionResult> resolveCache) {
+            Map<MavenProject, DependencyResolutionResult> collectCache) {
         List<String> reasons = new ArrayList<>();
         if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
             reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
         }
         if (!changedManagedDepGAs.isEmpty()) {
-            String depScope = getChangedTransitiveDependencyScope(project, session, changedManagedDepGAs, resolveCache);
+            String depScope = getChangedTransitiveDependencyScope(project, session, changedManagedDepGAs, collectCache);
             if (depScope != null) {
                 if ("test".equals(depScope)) {
                     reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
@@ -531,12 +545,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
             List<PathMatcher> includeMatchers,
-            Path reactorRoot) {
+            Path reactorRoot,
+            Map<MavenProject, DependencyResolutionResult> collectCache) {
 
         Set<MavenProject> buildSetLookup = new LinkedHashSet<>(trimResult.getBuildSet());
         List<MavenProject> testProjects = new ArrayList<>();
         List<MavenProject> skippedProjects = new ArrayList<>();
-        Map<MavenProject, DependencyResolutionResult> resolveCache = new LinkedHashMap<>();
 
         // Directly affected modules always run tests
         for (MavenProject project : trimResult.getBuildSet()) {
@@ -554,7 +568,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     session,
                     changedManagedPluginGAs,
                     changedManagedDepGAs,
-                    resolveCache)) {
+                    collectCache)) {
                 // Skip tests on excluded downstream modules (unless they also have plugin/dep changes)
                 project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
                 skippedProjects.add(project);
@@ -588,7 +602,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Check transitive dependencies if managed deps changed
             if (!changedManagedDepGAs.isEmpty()
-                    && hasChangedTransitiveDependency(project, session, changedManagedDepGAs, resolveCache)) {
+                    && hasChangedTransitiveDependency(project, session, changedManagedDepGAs, collectCache)) {
                 testProjects.add(project);
                 continue;
             }
@@ -702,7 +716,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenSession session,
             Set<String> changedManagedPluginGAs,
             Set<String> changedManagedDepGAs,
-            Map<MavenProject, DependencyResolutionResult> resolveCache) {
+            Map<MavenProject, DependencyResolutionResult> collectCache) {
         if (config.getSkipTestsForDownstreamModules().isEmpty()) {
             return false;
         }
@@ -718,53 +732,95 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             return false;
         }
         return changedManagedDepGAs.isEmpty()
-                || !hasChangedTransitiveDependency(project, session, changedManagedDepGAs, resolveCache);
+                || !hasChangedTransitiveDependency(project, session, changedManagedDepGAs, collectCache);
     }
 
     private boolean hasChangedTransitiveDependency(
             MavenProject project,
             MavenSession session,
             Set<String> changedGAs,
-            Map<MavenProject, DependencyResolutionResult> resolveCache) {
-        return getChangedTransitiveDependencyScope(project, session, changedGAs, resolveCache) != null;
+            Map<MavenProject, DependencyResolutionResult> collectCache) {
+        return getChangedTransitiveDependencyScope(project, session, changedGAs, collectCache) != null;
     }
+
+    /**
+     * A DependencyFilter that rejects all nodes, preventing artifact downloads
+     * while still allowing the dependency graph to be collected.
+     */
+    private static final DependencyFilter COLLECT_ONLY_FILTER = new DependencyFilter() {
+        @Override
+        public boolean accept(DependencyNode node, List<DependencyNode> parents) {
+            return false;
+        }
+    };
 
     /**
      * Returns the effective scope of the changed transitive dependency, or null if no match.
      * If any matching dependency has compile/runtime/provided scope, returns that scope.
      * If all matching dependencies are test-scoped, returns "test".
+     * <p>
+     * Uses a reject-all DependencyFilter so that only the dependency graph is collected
+     * without downloading any artifact files — we only need GA coordinates and scopes.
      */
     private String getChangedTransitiveDependencyScope(
             MavenProject project,
             MavenSession session,
             Set<String> changedGAs,
-            Map<MavenProject, DependencyResolutionResult> resolveCache) {
-        DependencyResolutionResult result = resolveCache.get(project);
+            Map<MavenProject, DependencyResolutionResult> collectCache) {
+        DependencyResolutionResult result = collectCache.get(project);
         if (result == null) {
             try {
                 DefaultDependencyResolutionRequest request =
                         new DefaultDependencyResolutionRequest(project, session.getRepositorySession());
+                // Reject-all filter: collects the dependency graph without downloading artifacts
+                request.setResolutionFilter(COLLECT_ONLY_FILTER);
                 result = dependenciesResolver.resolve(request);
             } catch (DependencyResolutionException e) {
                 result = e.getResult();
                 if (result == null) {
                     logger.debug(
-                            "Cannot resolve dependencies for {}, no partial results available: {}",
+                            "Cannot collect dependencies for {}, no partial results available: {}",
                             key(project),
                             e.getMessage());
                     return null;
                 }
                 logger.debug(
-                        "Partial dependency resolution for {}, checking available results: {}",
+                        "Partial dependency collection for {}, checking available results: {}",
                         key(project),
                         e.getMessage());
             }
-            resolveCache.put(project, result);
+            collectCache.put(project, result);
         }
 
+        // Walk the dependency graph tree to find matching GAs and their scopes.
+        // The reject-all filter means getResolvedDependencies() is empty, but
+        // getDependencyGraph() still contains the full collected tree.
+        DependencyNode root = result.getDependencyGraph();
+        if (root == null) {
+            return null;
+        }
+        return findChangedDependencyScope(root, changedGAs, project);
+    }
+
+    /**
+     * Walks the dependency graph tree to find any dependency matching the changed GAs,
+     * returning the narrowest non-test scope found (or "test" if only test-scoped matches).
+     */
+    private String findChangedDependencyScope(DependencyNode root, Set<String> changedGAs, MavenProject project) {
         String narrowestScope = null;
-        for (Dependency dep : result.getResolvedDependencies()) {
+        Set<String> visited = new HashSet<>();
+        List<DependencyNode> stack = new ArrayList<>();
+        stack.addAll(root.getChildren());
+        while (!stack.isEmpty()) {
+            DependencyNode node = stack.remove(stack.size() - 1);
+            Dependency dep = node.getDependency();
+            if (dep == null) {
+                continue;
+            }
             String ga = dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
+            if (!visited.add(ga)) {
+                continue; // already visited this GA
+            }
             if (changedGAs.contains(ga)) {
                 String scope = dep.getScope();
                 logger.debug(
@@ -777,6 +833,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 }
                 narrowestScope = "test";
             }
+            stack.addAll(node.getChildren());
         }
         return narrowestScope;
     }

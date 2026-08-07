@@ -47,6 +47,8 @@ import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.DefaultArtifact;
+import org.eclipse.aether.graph.DefaultDependencyNode;
+import org.eclipse.aether.graph.DependencyNode;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -210,16 +212,16 @@ class ScalpelLifecycleParticipantTest {
                     String aid = req.getMavenProject().getArtifactId();
                     if ("module-b".equals(aid) || "module-d".equals(aid)) {
                         DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
+                        when(res.getDependencyGraph()).thenReturn(createDependencyGraph(commonsLangDep));
                         return res;
                     }
                     if ("module-e".equals(aid)) {
                         DependencyResolutionResult partial = mock(DependencyResolutionResult.class);
-                        when(partial.getResolvedDependencies()).thenReturn(List.of());
+                        when(partial.getDependencyGraph()).thenReturn(createDependencyGraph());
                         throw new DependencyResolutionException(partial, "Cannot resolve", new Exception());
                     }
                     DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getResolvedDependencies()).thenReturn(List.of());
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
                     return empty;
                 });
 
@@ -378,7 +380,7 @@ class ScalpelLifecycleParticipantTest {
 
         // No transitive deps to resolve
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
 
@@ -514,7 +516,7 @@ class ScalpelLifecycleParticipantTest {
 
         // No transitive deps to resolve for this test
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
 
@@ -612,7 +614,7 @@ class ScalpelLifecycleParticipantTest {
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
 
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
 
@@ -738,7 +740,7 @@ class ScalpelLifecycleParticipantTest {
         DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
         org.eclipse.aether.graph.Dependency testDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "test");
-        when(moduleBResolution.getResolvedDependencies()).thenReturn(List.of(testDep));
+        when(moduleBResolution.getDependencyGraph()).thenReturn(createDependencyGraph(testDep));
 
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
@@ -747,7 +749,7 @@ class ScalpelLifecycleParticipantTest {
                         return moduleBResolution;
                     }
                     DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getResolvedDependencies()).thenReturn(List.of());
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
                     return empty;
                 });
 
@@ -850,7 +852,7 @@ class ScalpelLifecycleParticipantTest {
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
 
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
 
@@ -1387,11 +1389,11 @@ class ScalpelLifecycleParticipantTest {
         DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
         org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
-        when(moduleBResolution.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
+        when(moduleBResolution.getDependencyGraph()).thenReturn(createDependencyGraph(commonsLangDep));
 
         // Other modules: no matching deps
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
 
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
@@ -1771,9 +1773,9 @@ class ScalpelLifecycleParticipantTest {
         DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
         org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
-        when(moduleBResolution.getResolvedDependencies()).thenReturn(List.of(commonsLangDep));
+        when(moduleBResolution.getDependencyGraph()).thenReturn(createDependencyGraph(commonsLangDep));
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
@@ -2229,7 +2231,7 @@ class ScalpelLifecycleParticipantTest {
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
 
@@ -3087,9 +3089,23 @@ class ScalpelLifecycleParticipantTest {
 
     private void setupEmptyDependencyResolution() throws Exception {
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getResolvedDependencies()).thenReturn(List.of());
+        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
+    }
+
+    /**
+     * Creates a mock dependency graph root node with the given dependencies as direct children.
+     * Each dependency becomes a leaf child node of the root.
+     */
+    private static DependencyNode createDependencyGraph(org.eclipse.aether.graph.Dependency... deps) {
+        DefaultDependencyNode root = new DefaultDependencyNode((org.eclipse.aether.graph.Dependency) null);
+        List<DependencyNode> children = new ArrayList<>();
+        for (org.eclipse.aether.graph.Dependency dep : deps) {
+            children.add(new DefaultDependencyNode(dep));
+        }
+        root.setChildren(children);
+        return root;
     }
 
     private MavenSession createSimpleSession(Path root, List<MavenProject> allProjects, String mode) {
@@ -3361,11 +3377,11 @@ class ScalpelLifecycleParticipantTest {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
                     if ("module-a".equals(req.getMavenProject().getArtifactId())) {
                         DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getResolvedDependencies()).thenReturn(List.of(graphqlDep));
+                        when(res.getDependencyGraph()).thenReturn(createDependencyGraph(graphqlDep));
                         return res;
                     }
                     DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getResolvedDependencies()).thenReturn(List.of());
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
                     return empty;
                 });
 

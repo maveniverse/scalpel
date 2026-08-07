@@ -173,9 +173,16 @@ public class ScalpelCore {
                 return new ChangeDetectionResult(changedFiles, Collections.<String, byte[]>emptyMap());
             }
 
-            // Read old POM files for comparison
+            // Read old POM files for comparison — only read the ones that actually changed,
+            // not every reactor POM. The PomChangeAnalyzer only needs old content for changed POMs.
+            Set<String> changedPomPaths = new LinkedHashSet<>();
+            for (String path : changedFiles) {
+                if (allPomPaths.contains(path)) {
+                    changedPomPaths.add(path);
+                }
+            }
             Map<String, byte[]> oldPomContents =
-                    gitChangeDetector.readPomFilesAtCommit(repository, mergeBase, allPomPaths);
+                    gitChangeDetector.readPomFilesAtCommit(repository, mergeBase, changedPomPaths);
 
             return new ChangeDetectionResult(changedFiles, oldPomContents);
         } catch (ScalpelException e) {
