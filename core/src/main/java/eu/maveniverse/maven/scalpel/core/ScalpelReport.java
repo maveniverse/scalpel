@@ -17,6 +17,15 @@ import java.util.List;
 
 public final class ScalpelReport {
 
+    /**
+     * Report schema version. Bump this whenever the report JSON structure changes
+     * (new fields, removed fields, or semantic changes to existing fields).
+     * <p>
+     * v1 → v2: added {@code category}, {@code sourceSet}, {@code excludedUpstreamCount},
+     *           {@code testsSkipped}, {@code testsSkippedReason}.
+     */
+    public static final String REPORT_VERSION = "2";
+
     public static final String REASON_SOURCE_CHANGE = "SOURCE_CHANGE";
     public static final String REASON_POM_CHANGE = "POM_CHANGE";
     public static final String REASON_TRANSITIVE_DEPENDENCY = "TRANSITIVE_DEPENDENCY";
@@ -191,7 +200,7 @@ public final class ScalpelReport {
     public String toJson() {
         StringBuilder sb = new StringBuilder();
         sb.append("{\n");
-        sb.append("  \"version\": \"1\",\n");
+        sb.append("  \"version\": ").append(jsonString(REPORT_VERSION)).append(",\n");
         sb.append("  \"scalpelVersion\": ")
                 .append(jsonString(Version.version()))
                 .append(",\n");

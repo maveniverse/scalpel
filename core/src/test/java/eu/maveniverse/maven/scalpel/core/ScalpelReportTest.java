@@ -9,10 +9,12 @@ package eu.maveniverse.maven.scalpel.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -120,7 +122,7 @@ class ScalpelReportTest {
                 .build();
 
         String json = report.toJson();
-        assertTrue(json.contains("\"version\": \"1\""));
+        assertTrue(json.contains("\"version\": \"2\""));
         assertTrue(json.contains("\"fullBuildTriggered\": false"));
         assertTrue(json.contains("\"affectedModules\": []"));
         assertTrue(json.contains("\"changedFiles\": []"));
@@ -383,5 +385,86 @@ class ScalpelReportTest {
 
         String json = report.toJson();
         assertTrue(json.contains("path/with\\\"quotes.java"));
+    }
+
+    // ---------------------------------------------------------------
+    // Golden-file and schema tests
+    // ---------------------------------------------------------------
+
+    @Test
+    void toJson_matchesGoldenFile() throws IOException {
+        // Build a report that exercises every v2 field:
+        // category, sourceSet, excludedUpstreamCount, testsSkipped, testsSkippedReason
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(
+                        List.of("module-a/src/main/java/Foo.java", "module-b/src/test/java/BarTest.java", "pom.xml"))
+                .changedProperties(List.of("kafka.version"))
+                .changedManagedDependencies(List.of("org.apache.kafka:kafka-clients"))
+                .changedManagedPlugins(List.of("org.apache.maven.plugins:maven-compiler-plugin"))
+                .excludedUpstreamCount(2)
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE))
+                        .category(ScalpelReport.CATEGORY_DIRECT)
+                        .sourceSet("main")
+                        .build())
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example", "module-b", "module-b", List.of(ScalpelReport.REASON_TEST_CHANGE))
+                        .category(ScalpelReport.CATEGORY_DIRECT)
+                        .sourceSet("test")
+                        .build())
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example",
+                                "module-c",
+                                "module-c",
+                                List.of(ScalpelReport.REASON_DOWNSTREAM_DEPENDENT))
+                        .category(ScalpelReport.CATEGORY_DOWNSTREAM)
+                        .sourceSet("main")
+                        .testsSkippedReason(ScalpelReport.REASON_EXCLUDED_DOWNSTREAM)
+                        .build())
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example",
+                                "module-d",
+                                "module-d",
+                                List.of(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY))
+                        .category(ScalpelReport.CATEGORY_TRANSITIVE)
+                        .build())
+                .build();
+
+        String actual = report.toJson();
+
+        // The golden file uses a placeholder for scalpelVersion since it changes with every release.
+        // Replace the actual version with the placeholder before comparing.
+        String normalised =
+                actual.replaceFirst("\"scalpelVersion\": \"[^\"]*\"", "\"scalpelVersion\": \"<scalpelVersion>\"");
+
+        String expected;
+        try (InputStream is =
+                getClass().getResourceAsStream("/eu/maveniverse/maven/scalpel/core/golden-report-v2.json")) {
+            assertNotNull(is, "golden-report-v2.json must be on the test classpath");
+            expected = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        }
+
+        assertEquals(
+                expected,
+                normalised,
+                "Report JSON structure has changed — update the golden file and "
+                        + "bump REPORT_VERSION if the schema changed.");
+    }
+
+    @Test
+    void reportVersion_isTwo() {
+        assertEquals("2", ScalpelReport.REPORT_VERSION);
+    }
+
+    @Test
+    void jsonSchema_isOnClasspath() throws IOException {
+        try (InputStream is =
+                getClass().getResourceAsStream("/eu/maveniverse/maven/scalpel/core/scalpel-report-v2.schema.json")) {
+            assertNotNull(is, "scalpel-report-v2.schema.json must be on the classpath");
+            String schema = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            assertTrue(schema.contains("\"const\": \"2\""), "schema must declare version 2");
+        }
     }
 }

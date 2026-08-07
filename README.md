@@ -112,10 +112,13 @@ not as a replacement. It contains only directly affected modules (not upstream/d
 
 #### Report Format
 
+The report follows a versioned JSON schema. A [JSON Schema](core/src/main/resources/eu/maveniverse/maven/scalpel/core/scalpel-report-v2.schema.json)
+is published alongside the code. The current version is **2**.
+
 ```json
 {
-  "version": "1",
-  "scalpelVersion": "0.1.0",
+  "version": "2",
+  "scalpelVersion": "0.3.10",
   "baseBranch": "origin/main",
   "fullBuildTriggered": false,
   "triggerFile": null,
@@ -123,6 +126,7 @@ not as a replacement. It contains only directly affected modules (not upstream/d
   "changedProperties": [],
   "changedManagedDependencies": [],
   "changedManagedPlugins": [],
+  "excludedUpstreamCount": 0,
   "affectedModules": [
     {
       "groupId": "com.example",
@@ -139,10 +143,30 @@ not as a replacement. It contains only directly affected modules (not upstream/d
       "reasons": ["TEST_CHANGE"],
       "category": "DIRECT",
       "sourceSet": "test"
+    },
+    {
+      "groupId": "com.example",
+      "artifactId": "module-c",
+      "path": "module-c",
+      "reasons": ["DOWNSTREAM_DEPENDENT"],
+      "category": "DOWNSTREAM",
+      "testsSkipped": true,
+      "testsSkippedReason": "EXCLUDED_DOWNSTREAM"
     }
   ]
 }
 ```
+
+**Schema version history:**
+
+| Version | Changes |
+|---------|---------|
+| `2` | Added `category`, `sourceSet`, `excludedUpstreamCount`, `testsSkipped`, `testsSkippedReason` |
+| `1` | Initial schema |
+
+**Compatibility:** new optional fields may be added within a major version. Consumers
+should ignore unknown fields. A version bump signals structural changes that existing
+consumers may need to handle.
 
 **Affected module reasons:**
 
@@ -154,10 +178,11 @@ not as a replacement. It contains only directly affected modules (not upstream/d
 | `TRANSITIVE_DEPENDENCY` | A changed managed dependency reaches this module transitively (compile/runtime scope) |
 | `TRANSITIVE_DEPENDENCY_TEST` | A changed managed dependency reaches this module transitively via test scope only |
 | `MANAGED_PLUGIN` | This module uses a plugin whose managed version changed |
-| `UPSTREAM_DEPENDENCY` | Included as an upstream dependency (via `alsoMake`) |
+| `UPSTREAM_DEPENDENCY` | *(deprecated)* Included as an upstream dependency (via `alsoMake`) |
 | `DOWNSTREAM_DEPENDENT` | Included as a downstream dependent (via `alsoMakeDependents`) |
 | `DOWNSTREAM_TEST` | Included as a downstream dependent via test-scoped dependency only |
 | `FORCE_BUILD` | This module was force-included via `forceBuildModules` |
+| `EXCLUDED_DOWNSTREAM` | Downstream module whose tests were skipped (see `testsSkippedReason`) |
 
 **Affected module source sets** (present on directly affected modules with source changes):
 
@@ -174,6 +199,14 @@ not as a replacement. It contains only directly affected modules (not upstream/d
 | `TRANSITIVE` | Affected by a changed managed dependency or plugin (not directly changed) |
 | `UPSTREAM` | Included as an upstream dependency (via `alsoMake`) |
 | `DOWNSTREAM` | Included as a downstream dependent (via `alsoMakeDependents`) |
+
+**Additional module fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `excludedUpstreamCount` | integer | *(top-level)* Number of upstream build-prerequisite modules excluded from `affectedModules` |
+| `testsSkipped` | boolean | Present and `true` when tests are skipped for this module |
+| `testsSkippedReason` | string | Why tests were skipped (e.g. `EXCLUDED_DOWNSTREAM`) |
 
 ## Source-Set-Aware Downstream Propagation
 
