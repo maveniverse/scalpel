@@ -37,7 +37,8 @@ jobs:
         SONAR_PR_BASE: ${{ github.base_ref }}
       run: >-
         ./mvnw --no-transfer-progress
-        org.jacoco:jacoco-maven-plugin:prepare-agent verify org.jacoco:jacoco-maven-plugin:report sonar:sonar
+        org.jacoco:jacoco-maven-plugin:prepare-agent verify org.jacoco:jacoco-maven-plugin:report
+        org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
         -Dsonar.projectKey=maveniverse_scalpel
         -Dsonar.organization=maveniverse
         -Dsonar.host.url=https://sonarcloud.io
@@ -52,7 +53,8 @@ jobs:
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       run: >-
         ./mvnw --no-transfer-progress
-        org.jacoco:jacoco-maven-plugin:prepare-agent verify org.jacoco:jacoco-maven-plugin:report sonar:sonar
+        org.jacoco:jacoco-maven-plugin:prepare-agent verify org.jacoco:jacoco-maven-plugin:report
+        org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
         -Dsonar.projectKey=maveniverse_scalpel
         -Dsonar.organization=maveniverse
         -Dsonar.host.url=https://sonarcloud.io
