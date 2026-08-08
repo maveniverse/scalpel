@@ -182,7 +182,6 @@ consumers may need to handle.
 | `DOWNSTREAM_DEPENDENT` | Included as a downstream dependent (via `alsoMakeDependents`) |
 | `DOWNSTREAM_TEST` | Included as a downstream dependent via test-scoped dependency only |
 | `FORCE_BUILD` | This module was force-included via `forceBuildModules` |
-| `EXCLUDED_DOWNSTREAM` | Downstream module whose tests were skipped (see `testsSkippedReason`) |
 
 **Affected module source sets** (present on directly affected modules with source changes):
 
