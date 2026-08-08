@@ -13,20 +13,34 @@ import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * The outcome of a change-detection run: the changed files and the base-commit contents of changed
+ * POMs. The POM contents let later analysis decide whether a changed POM is materially different
+ * (dependencies, plugins, properties) rather than treating every POM touch as a change. Both
+ * collections are unmodifiable.
+ */
 public final class ChangeDetectionResult {
 
     private final Set<String> changedFiles;
     private final Map<String, byte[]> oldPomContents;
 
+    /**
+     * Constructs a change-detection result.
+     *
+     * @param changedFiles the changed file paths detected in the diff
+     * @param oldPomContents base-commit contents of changed POMs, keyed by path
+     */
     public ChangeDetectionResult(Set<String> changedFiles, Map<String, byte[]> oldPomContents) {
         this.changedFiles = Collections.unmodifiableSet(new LinkedHashSet<>(changedFiles));
         this.oldPomContents = Collections.unmodifiableMap(new LinkedHashMap<>(oldPomContents));
     }
 
+    /** Returns the changed file paths detected in the diff. */
     public Set<String> getChangedFiles() {
         return changedFiles;
     }
 
+    /** Returns the base-commit contents of changed POMs, keyed by path. */
     public Map<String, byte[]> getOldPomContents() {
         return oldPomContents;
     }
