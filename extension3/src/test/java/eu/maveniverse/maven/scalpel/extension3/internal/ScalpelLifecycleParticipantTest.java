@@ -4323,6 +4323,26 @@ class ScalpelLifecycleParticipantTest {
     }
 
     /**
+     * Mocks dependency resolution so that the module with the given artifactId gets the
+     * provided multi-level graph, and every other module gets an empty graph.
+     */
+    private void mockDependencyResolution(String targetArtifactId, DependencyNode graph)
+            throws DependencyResolutionException {
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if (targetArtifactId.equals(req.getMavenProject().getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph()).thenReturn(graph);
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
+                });
+    }
+
+    /**
      * Tests that a managed dep change is detected when the changed GA appears at the
      * second level of the dependency tree: root -> intermediate -> changed-dep.
      * The existing tests only exercise flat (single-level) graphs where the changed GA
@@ -4396,18 +4416,7 @@ class ScalpelLifecycleParticipantTest {
 
         DependencyNode graph = createMultiLevelDependencyGraph(intermediateNode);
 
-        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
-                .thenAnswer(invocation -> {
-                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
-                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getDependencyGraph()).thenReturn(graph);
-                        return res;
-                    }
-                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
-                    return empty;
-                });
+        mockDependencyResolution("module-a", graph);
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
 
@@ -4430,9 +4439,11 @@ class ScalpelLifecycleParticipantTest {
     /**
      * Tests that a diamond dependency pattern (two paths leading to the same changed GA)
      * is handled correctly by the DFS walker's visited-set deduplication.
-     * Graph: root -> path-b (compile) -> target-lib (compile, changed)
-     *        root -> path-c (compile) -> target-lib (compile, changed)
-     * The changed dep should be detected and the module included only once.
+     * Graph: root -> path-b (compile) -> target-lib (test, changed)
+     *        root -> path-c (compile) -> target-lib (test, changed)
+     * Test scope is required here: with compile scope, the walker returns immediately
+     * on the first match (line 863-864), so visited-set deduplication is never exercised.
+     * With test scope, the walker records the match and continues, reaching the second path.
      */
     @Test
     void transitiveDepChange_diamondDependency_detectedOnce() throws Exception {
@@ -4489,11 +4500,11 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // Build a diamond dependency graph:
-        // root -> path-b -> target-lib (changed)
-        //      -> path-c -> target-lib (changed)
+        // Build a diamond dependency graph (test scope to exercise visited-set deduplication):
+        // root -> path-b -> target-lib (test, changed)
+        //      -> path-c -> target-lib (test, changed)
         org.eclipse.aether.graph.Dependency targetLibDep = new org.eclipse.aether.graph.Dependency(
-                new DefaultArtifact("org.example", "target-lib", "jar", "2.0"), "compile");
+                new DefaultArtifact("org.example", "target-lib", "jar", "2.0"), "test");
 
         // Both paths lead to the same GA
         DefaultDependencyNode targetFromB = new DefaultDependencyNode(targetLibDep);
@@ -4511,18 +4522,7 @@ class ScalpelLifecycleParticipantTest {
 
         DependencyNode diamondGraph = createMultiLevelDependencyGraph(pathBNode, pathCNode);
 
-        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
-                .thenAnswer(invocation -> {
-                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
-                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getDependencyGraph()).thenReturn(diamondGraph);
-                        return res;
-                    }
-                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
-                    return empty;
-                });
+        mockDependencyResolution("module-a", diamondGraph);
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
 
@@ -4535,8 +4535,8 @@ class ScalpelLifecycleParticipantTest {
 
         // module-a should be detected exactly once despite the diamond
         assertTrue(
-                moduleHasReason(json, "module-a", "TRANSITIVE_DEPENDENCY"),
-                "module-a should have TRANSITIVE_DEPENDENCY reason (diamond dep converges on changed GA)");
+                moduleHasReason(json, "module-a", "TRANSITIVE_DEPENDENCY_TEST"),
+                "module-a should have TRANSITIVE_DEPENDENCY_TEST reason (diamond dep converges on test-scoped changed GA)");
         assertTrue(
                 moduleHasField(json, "module-a", "category", "TRANSITIVE"), "module-a should have TRANSITIVE category");
 
@@ -4605,8 +4605,8 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // Build a two-level tree where both levels are test-scoped:
-        // root -> intermediate-test-lib (test) -> deep-test-lib (test, the changed managed dep)
+        // Build a two-level tree: root -> intermediate-test-lib (test) -> deep-test-lib (test, changed).
+        // Only the scope of deep-test-lib matters -- the walker checks scope only for matched GAs.
         org.eclipse.aether.graph.Dependency deepTestLibDep = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("org.example", "deep-test-lib", "jar", "2.0"), "test");
         DefaultDependencyNode deepTestLibNode = new DefaultDependencyNode(deepTestLibDep);
@@ -4618,18 +4618,7 @@ class ScalpelLifecycleParticipantTest {
 
         DependencyNode testGraph = createMultiLevelDependencyGraph(intermediateTestNode);
 
-        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
-                .thenAnswer(invocation -> {
-                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
-                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getDependencyGraph()).thenReturn(testGraph);
-                        return res;
-                    }
-                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
-                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
-                    return empty;
-                });
+        mockDependencyResolution("module-a", testGraph);
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
 
