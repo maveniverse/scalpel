@@ -30,6 +30,17 @@
   </dependencies>
 
   <profiles>
+    <!-- Maven 4 requires JDK 17+; skip these ITs on older JDKs -->
+    <profile>
+      <id>jdk-lt-17</id>
+      <activation>
+        <jdk>(,17)</jdk>
+      </activation>
+      <properties>
+        <invoker.skip>true</invoker.skip>
+        <mdep.skip>true</mdep.skip>
+      </properties>
+    </profile>
     <profile>
       <id>run-its</id>
       <build>
