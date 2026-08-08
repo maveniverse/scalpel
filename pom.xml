@@ -69,6 +69,9 @@
     <maven3Version>3.9.16</maven3Version>
     <maven3ResolverVersion>1.9.27</maven3ResolverVersion>
 
+    <!-- Maven 4 versions -->
+    <maven4Version>4.0.0-rc-6</maven4Version>
+
     <version.slf4j>1.7.36</version.slf4j>
     <version.jacoco>0.8.13</version.jacoco>
   </properties>
