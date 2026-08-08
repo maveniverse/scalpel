@@ -23,7 +23,6 @@ import java.util.regex.PatternSyntaxException;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
-import org.eclipse.jgit.api.errors.JGitInternalException;
 import org.eclipse.jgit.errors.RepositoryNotFoundException;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
@@ -112,7 +111,7 @@ public class ScalpelCore {
                 if (baseId == null) {
                     try {
                         gitChangeDetector.fetchBranch(repository, baseBranch);
-                    } catch (IOException | JGitInternalException e) {
+                    } catch (Exception e) {
                         if (config.isFailSafe()) {
                             logger.warn(
                                     "Scalpel: Failed to fetch {}, building all modules: {}",
