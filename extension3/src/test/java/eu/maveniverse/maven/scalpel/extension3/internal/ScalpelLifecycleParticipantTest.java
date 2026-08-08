@@ -4299,4 +4299,353 @@ class ScalpelLifecycleParticipantTest {
                 modulePresent(json, "module-a"),
                 "module-a should NOT be in report (nested .md excluded by bare *.md pattern)");
     }
+
+    // --- Multi-level dependency graph tests for DFS walker ---
+
+    /**
+     * Creates a multi-level dependency graph root node. The root has no dependency itself.
+     * Children are provided as pre-built nodes (which may themselves have children).
+     */
+    private static DependencyNode createMultiLevelDependencyGraph(DependencyNode... children) {
+        DefaultDependencyNode root = new DefaultDependencyNode((org.eclipse.aether.graph.Dependency) null);
+        root.setChildren(List.of(children));
+        return root;
+    }
+
+    /**
+     * Creates a dependency node with the given dependency and child nodes.
+     */
+    private static DefaultDependencyNode createNodeWithChildren(
+            org.eclipse.aether.graph.Dependency dep, DependencyNode... children) {
+        DefaultDependencyNode node = new DefaultDependencyNode(dep);
+        node.setChildren(List.of(children));
+        return node;
+    }
+
+    /**
+     * Tests that a managed dep change is detected when the changed GA appears at the
+     * second level of the dependency tree: root -> intermediate -> changed-dep.
+     * The existing tests only exercise flat (single-level) graphs where the changed GA
+     * is a direct child of the resolution root. This test verifies the DFS walker
+     * descends into children.
+     */
+    @Test
+    void transitiveDepChange_twoLevelTree_detected() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module></modules>
+                  <properties>
+                    <lib.version>1.0</lib.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>org.example</groupId>
+                      <artifactId>deep-lib</artifactId>
+                      <version>${lib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+
+        String newParentPom = oldParentPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
+        writePom(root, "pom.xml", newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // Build a two-level dependency graph:
+        // root -> intermediate-lib (compile) -> deep-lib (compile, the changed managed dep)
+        org.eclipse.aether.graph.Dependency deepLibDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "deep-lib", "jar", "2.0"), "compile");
+        DefaultDependencyNode deepLibNode = new DefaultDependencyNode(deepLibDep);
+        deepLibNode.setChildren(List.of());
+
+        org.eclipse.aether.graph.Dependency intermediateDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "intermediate-lib", "jar", "1.0"), "compile");
+        DefaultDependencyNode intermediateNode = createNodeWithChildren(intermediateDep, deepLibNode);
+
+        DependencyNode graph = createMultiLevelDependencyGraph(intermediateNode);
+
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph()).thenReturn(graph);
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
+                });
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-a should be detected as transitively affected even though the changed GA
+        // is at depth 2 (not a direct child of the resolution root)
+        assertTrue(
+                moduleHasReason(json, "module-a", "TRANSITIVE_DEPENDENCY"),
+                "module-a should have TRANSITIVE_DEPENDENCY reason (changed dep at depth 2 in tree)");
+        assertTrue(
+                moduleHasField(json, "module-a", "category", "TRANSITIVE"), "module-a should have TRANSITIVE category");
+    }
+
+    /**
+     * Tests that a diamond dependency pattern (two paths leading to the same changed GA)
+     * is handled correctly by the DFS walker's visited-set deduplication.
+     * Graph: root -> path-b (compile) -> target-lib (compile, changed)
+     *        root -> path-c (compile) -> target-lib (compile, changed)
+     * The changed dep should be detected and the module included only once.
+     */
+    @Test
+    void transitiveDepChange_diamondDependency_detectedOnce() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module></modules>
+                  <properties>
+                    <target.version>1.0</target.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>org.example</groupId>
+                      <artifactId>target-lib</artifactId>
+                      <version>${target.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+
+        String newParentPom =
+                oldParentPom.replace("<target.version>1.0</target.version>", "<target.version>2.0</target.version>");
+        writePom(root, "pom.xml", newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // Build a diamond dependency graph:
+        // root -> path-b -> target-lib (changed)
+        //      -> path-c -> target-lib (changed)
+        org.eclipse.aether.graph.Dependency targetLibDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "target-lib", "jar", "2.0"), "compile");
+
+        // Both paths lead to the same GA
+        DefaultDependencyNode targetFromB = new DefaultDependencyNode(targetLibDep);
+        targetFromB.setChildren(List.of());
+        DefaultDependencyNode targetFromC = new DefaultDependencyNode(targetLibDep);
+        targetFromC.setChildren(List.of());
+
+        org.eclipse.aether.graph.Dependency pathBDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "path-b", "jar", "1.0"), "compile");
+        DefaultDependencyNode pathBNode = createNodeWithChildren(pathBDep, targetFromB);
+
+        org.eclipse.aether.graph.Dependency pathCDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "path-c", "jar", "1.0"), "compile");
+        DefaultDependencyNode pathCNode = createNodeWithChildren(pathCDep, targetFromC);
+
+        DependencyNode diamondGraph = createMultiLevelDependencyGraph(pathBNode, pathCNode);
+
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph()).thenReturn(diamondGraph);
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
+                });
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-a should be detected exactly once despite the diamond
+        assertTrue(
+                moduleHasReason(json, "module-a", "TRANSITIVE_DEPENDENCY"),
+                "module-a should have TRANSITIVE_DEPENDENCY reason (diamond dep converges on changed GA)");
+        assertTrue(
+                moduleHasField(json, "module-a", "category", "TRANSITIVE"), "module-a should have TRANSITIVE category");
+
+        // Verify the changed managed dep GA appears in the report
+        assertTrue(json.contains("org.example:target-lib"), "Report should include the changed managed dep GA");
+    }
+
+    /**
+     * Tests that when a changed GA appears deep in the tree but the dependency node
+     * itself is test-scoped, the result scope is "test" and the module gets the
+     * TRANSITIVE_DEPENDENCY_TEST reason.
+     * Graph: root -> intermediate-lib (test) -> deep-test-lib (test, the changed managed dep)
+     */
+    @Test
+    void transitiveDepChange_deepTestScope_returnsTest() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module></modules>
+                  <properties>
+                    <testlib.version>1.0</testlib.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>org.example</groupId>
+                      <artifactId>deep-test-lib</artifactId>
+                      <version>${testlib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+
+        String newParentPom = oldParentPom.replace(
+                "<testlib.version>1.0</testlib.version>", "<testlib.version>2.0</testlib.version>");
+        writePom(root, "pom.xml", newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        // Build a two-level tree where both levels are test-scoped:
+        // root -> intermediate-test-lib (test) -> deep-test-lib (test, the changed managed dep)
+        org.eclipse.aether.graph.Dependency deepTestLibDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "deep-test-lib", "jar", "2.0"), "test");
+        DefaultDependencyNode deepTestLibNode = new DefaultDependencyNode(deepTestLibDep);
+        deepTestLibNode.setChildren(List.of());
+
+        org.eclipse.aether.graph.Dependency intermediateTestDep = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "intermediate-test-lib", "jar", "1.0"), "test");
+        DefaultDependencyNode intermediateTestNode = createNodeWithChildren(intermediateTestDep, deepTestLibNode);
+
+        DependencyNode testGraph = createMultiLevelDependencyGraph(intermediateTestNode);
+
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph()).thenReturn(testGraph);
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
+                });
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-a should have TRANSITIVE_DEPENDENCY_TEST reason because the changed dep
+        // at depth 2 is test-scoped
+        assertTrue(
+                moduleHasReason(json, "module-a", "TRANSITIVE_DEPENDENCY_TEST"),
+                "module-a should have TRANSITIVE_DEPENDENCY_TEST reason (test-scoped dep at depth 2)");
+        assertTrue(
+                moduleHasField(json, "module-a", "category", "TRANSITIVE"), "module-a should have TRANSITIVE category");
+    }
 }
