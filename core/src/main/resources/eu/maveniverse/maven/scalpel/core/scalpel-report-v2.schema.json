@@ -17,7 +17,6 @@
     "excludedUpstreamCount",
     "affectedModules"
   ],
-  "additionalProperties": false,
   "properties": {
     "version": {
       "type": "string",
@@ -75,7 +74,6 @@
     "affectedModule": {
       "type": "object",
       "required": ["groupId", "artifactId", "path", "reasons"],
-      "additionalProperties": false,
       "properties": {
         "groupId": {
           "type": "string",
@@ -103,8 +101,7 @@
               "UPSTREAM_DEPENDENCY",
               "DOWNSTREAM_DEPENDENT",
               "DOWNSTREAM_TEST",
-              "FORCE_BUILD",
-              "EXCLUDED_DOWNSTREAM"
+              "FORCE_BUILD"
             ]
           },
           "minItems": 1,
