@@ -322,9 +322,15 @@ class GitChangeDetectorTest {
             git.commit().setMessage("initial").call();
             String pushedBranch = git.getRepository().getBranch();
             git.push().setRemote("origin").call();
+            ObjectId pushedCommit = git.getRepository().resolve("HEAD");
 
             // Fetch the branch that was actually pushed, whatever its name
             detector.fetchBranch(git.getRepository(), "origin/" + pushedBranch);
+
+            // The fetch must have materialized the remote-tracking ref at the pushed commit
+            ObjectId fetched = git.getRepository().resolve("refs/remotes/origin/" + pushedBranch);
+            assertNotNull(fetched, "Fetch should create the remote-tracking ref");
+            assertEquals(pushedCommit, fetched, "Remote-tracking ref should point at the pushed commit");
         }
     }
 
