@@ -14,8 +14,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
@@ -170,7 +168,7 @@ public class ScalpelCore {
 
             if (changedFiles.isEmpty()) {
                 logger.info("Scalpel: No changes detected between {} and {}", baseBranch, head);
-                return new ChangeDetectionResult(changedFiles, Collections.<String, byte[]>emptyMap());
+                return new ChangeDetectionResult(changedFiles, Map.of());
             }
 
             // Read old POM files for comparison — only read the ones that actually changed,
@@ -278,7 +276,7 @@ public class ScalpelCore {
 
     private static Path resolvePathFromFile(Path file, Path baseDir) throws IOException {
         String value = new String(Files.readAllBytes(file), StandardCharsets.UTF_8).trim();
-        Path path = Paths.get(value);
+        Path path = Path.of(value);
         if (!path.isAbsolute()) {
             path = baseDir.resolve(value);
         }

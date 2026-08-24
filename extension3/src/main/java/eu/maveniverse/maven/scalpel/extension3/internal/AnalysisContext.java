@@ -7,7 +7,6 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -71,13 +70,12 @@ final class AnalysisContext {
         private Set<String> changedProperties;
         private Set<String> changedManagedDepGAs;
         private Set<String> changedManagedPluginGAs;
-        private Set<MavenProject> directlyAffected = Collections.<MavenProject>emptySet();
-        private Set<MavenProject> affectedBySource = Collections.<MavenProject>emptySet();
-        private Set<MavenProject> testOnlyBySource = Collections.<MavenProject>emptySet();
-        private Set<MavenProject> affectedByPom = Collections.<MavenProject>emptySet();
-        private Set<MavenProject> forceIncluded = Collections.<MavenProject>emptySet();
-        private Map<MavenProject, List<String>> transitivelyAffected =
-                Collections.<MavenProject, List<String>>emptyMap();
+        private Set<MavenProject> directlyAffected = Set.of();
+        private Set<MavenProject> affectedBySource = Set.of();
+        private Set<MavenProject> testOnlyBySource = Set.of();
+        private Set<MavenProject> affectedByPom = Set.of();
+        private Set<MavenProject> forceIncluded = Set.of();
+        private Map<MavenProject, List<String>> transitivelyAffected = Map.of();
         private TrimResult trimResult;
 
         private Builder() {}

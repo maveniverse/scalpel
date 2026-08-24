@@ -17,9 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -460,20 +458,16 @@ class PomChangeAnalyzer {
                 logger.debug("Active profile {} was {}", profileId, oldProfile == null ? "added" : "removed");
                 if (newProfile != null) {
                     changedProperties.addAll(diffProperties(null, newProfile.getProperties()));
-                    changedManagedDeps.addAll(diffDependencies(
-                            Collections.<Dependency>emptyList(), getProfileManagedDependencies(newProfile)));
-                    changedManagedPlugins.addAll(
-                            diffPlugins(Collections.<Plugin>emptyList(), getProfileManagedPlugins(newProfile)));
+                    changedManagedDeps.addAll(diffDependencies(List.of(), getProfileManagedDependencies(newProfile)));
+                    changedManagedPlugins.addAll(diffPlugins(List.of(), getProfileManagedPlugins(newProfile)));
                     if (!newProfile.getDependencies().isEmpty()
                             || !getProfilePlugins(newProfile).isEmpty()) {
                         selfAffected = true;
                     }
                 } else {
                     changedProperties.addAll(diffProperties(oldProfile.getProperties(), null));
-                    changedManagedDeps.addAll(diffDependencies(
-                            getProfileManagedDependencies(oldProfile), Collections.<Dependency>emptyList()));
-                    changedManagedPlugins.addAll(
-                            diffPlugins(getProfileManagedPlugins(oldProfile), Collections.<Plugin>emptyList()));
+                    changedManagedDeps.addAll(diffDependencies(getProfileManagedDependencies(oldProfile), List.of()));
+                    changedManagedPlugins.addAll(diffPlugins(getProfileManagedPlugins(oldProfile), List.of()));
                     if (!oldProfile.getDependencies().isEmpty()
                             || !getProfilePlugins(oldProfile).isEmpty()) {
                         selfAffected = true;
@@ -775,14 +769,14 @@ class PomChangeAnalyzer {
         if (model.getBuild() != null && model.getBuild().getResources() != null) {
             return model.getBuild().getResources();
         }
-        return Collections.<Resource>emptyList();
+        return List.of();
     }
 
     private List<Resource> getTestResourcesList(Model model) {
         if (model.getBuild() != null && model.getBuild().getTestResources() != null) {
             return model.getBuild().getTestResources();
         }
-        return Collections.<Resource>emptyList();
+        return List.of();
     }
 
     private boolean equalResourceLists(List<Resource> a, List<Resource> b) {
@@ -857,12 +851,12 @@ class PomChangeAnalyzer {
 
     private List<Repository> safeRepositories(Model model) {
         List<Repository> repos = model.getRepositories();
-        return repos != null ? repos : Collections.<Repository>emptyList();
+        return repos != null ? repos : List.of();
     }
 
     private List<Repository> safePluginRepositories(Model model) {
         List<Repository> repos = model.getPluginRepositories();
-        return repos != null ? repos : Collections.<Repository>emptyList();
+        return repos != null ? repos : List.of();
     }
 
     private List<Plugin> getPlugins(Model model) {
@@ -891,7 +885,7 @@ class PomChangeAnalyzer {
 
     private List<Profile> safeProfiles(Model model) {
         List<Profile> profiles = model.getProfiles();
-        return profiles != null ? profiles : Collections.<Profile>emptyList();
+        return profiles != null ? profiles : List.of();
     }
 
     private List<Dependency> getProfileManagedDependencies(Profile profile) {
@@ -899,7 +893,7 @@ class PomChangeAnalyzer {
                 && profile.getDependencyManagement().getDependencies() != null) {
             return profile.getDependencyManagement().getDependencies();
         }
-        return Collections.<Dependency>emptyList();
+        return List.of();
     }
 
     private List<Plugin> getProfileManagedPlugins(Profile profile) {
@@ -908,14 +902,14 @@ class PomChangeAnalyzer {
                 && profile.getBuild().getPluginManagement().getPlugins() != null) {
             return profile.getBuild().getPluginManagement().getPlugins();
         }
-        return Collections.<Plugin>emptyList();
+        return List.of();
     }
 
     private List<Plugin> getProfilePlugins(Profile profile) {
         if (profile.getBuild() != null && profile.getBuild().getPlugins() != null) {
             return profile.getBuild().getPlugins();
         }
-        return Collections.<Plugin>emptyList();
+        return List.of();
     }
 
     private void augmentWithPropertyReferences(
@@ -1124,7 +1118,7 @@ class PomChangeAnalyzer {
             if (dir == null) {
                 continue;
             }
-            Path resourceDir = Paths.get(dir);
+            Path resourceDir = Path.of(dir);
             if (!resourceDir.isAbsolute()) {
                 resourceDir = project.getBasedir().toPath().resolve(resourceDir);
             }

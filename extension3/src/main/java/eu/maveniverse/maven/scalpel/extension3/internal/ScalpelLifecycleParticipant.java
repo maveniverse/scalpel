@@ -23,9 +23,7 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
-import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -421,7 +419,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         for (String pattern : config.getDisableTriggers()) {
             PathMatcher matcher = FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + normalizeGlobPattern(pattern));
             for (String changedFile : changedFiles) {
-                if (matcher.matches(Paths.get(changedFile))) {
+                if (matcher.matches(Path.of(changedFile))) {
                     logger.info(
                             "Scalpel: Disabled due to change in {} (matches disable trigger {})", changedFile, pattern);
                     return true;
@@ -433,7 +431,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private static List<PathMatcher> compileGlobMatchers(List<String> patterns) {
         if (patterns.isEmpty()) {
-            return Collections.emptyList();
+            return List.of();
         }
         List<PathMatcher> matchers = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
@@ -468,7 +466,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         for (String file : changedFiles) {
             boolean excluded = false;
             for (PathMatcher matcher : excludeMatchers) {
-                if (matcher.matches(Paths.get(file))) {
+                if (matcher.matches(Path.of(file))) {
                     excluded = true;
                     break;
                 }
@@ -486,7 +484,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private boolean matchesIncludePaths(MavenProject project, List<PathMatcher> matchers, Path reactorRoot) {
         String relPath = relativePath(reactorRoot, project);
-        Path modulePath = Paths.get(relPath);
+        Path modulePath = Path.of(relPath);
         for (PathMatcher matcher : matchers) {
             // Match the module path directly (e.g., "module-a" matches pattern "module-a")
             // or match a file within the module (e.g., "module-a/pom.xml" matches pattern "module-a/**")
@@ -501,7 +499,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         for (String pattern : config.getFullBuildTriggers()) {
             PathMatcher matcher = FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + normalizeGlobPattern(pattern));
             for (String changedFile : changedFiles) {
-                if (matcher.matches(Paths.get(changedFile))) {
+                if (matcher.matches(Path.of(changedFile))) {
                     logger.info("Scalpel: Full build triggered by change to {} (matches {})", changedFile, pattern);
                     return changedFile;
                 }
@@ -1072,7 +1070,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     logger.debug("Report: {} -> category=DOWNSTREAM, reason={}", key(project), reason);
                 }
                 builder.addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
-                                project.getGroupId(), project.getArtifactId(), path, Collections.singletonList(reason))
+                                project.getGroupId(), project.getArtifactId(), path, List.of(reason))
                         .category(ScalpelReport.CATEGORY_DOWNSTREAM)
                         .testsSkippedReason(testsSkippedReason)
                         .build());

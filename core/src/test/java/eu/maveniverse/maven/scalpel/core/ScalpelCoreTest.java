@@ -17,7 +17,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.Properties;
 import java.util.Set;
 import org.eclipse.jgit.api.Git;
@@ -162,7 +161,7 @@ class ScalpelCoreTest {
     void detectChanges_notAGitRepo_returnsNull() throws Exception {
         // Create a temp directory outside the project tree to avoid JGit walking up
         // and discovering the project's own .git (java.io.tmpdir may be inside the repo)
-        Path nonGitDir = Files.createTempDirectory(Paths.get("/tmp"), "scalpel-test-no-git");
+        Path nonGitDir = Files.createTempDirectory(Path.of("/tmp"), "scalpel-test-no-git");
         try {
             ScalpelCore core = new ScalpelCore(new GitChangeDetector());
             Properties sys = new Properties();

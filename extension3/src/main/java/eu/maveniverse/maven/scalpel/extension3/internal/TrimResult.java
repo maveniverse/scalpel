@@ -32,7 +32,7 @@ final class TrimResult {
             Set<MavenProject> directlyAffected,
             Set<MavenProject> upstreamOnly,
             Set<MavenProject> downstreamOnly) {
-        this(buildSet, directlyAffected, upstreamOnly, downstreamOnly, Collections.<MavenProject>emptySet());
+        this(buildSet, directlyAffected, upstreamOnly, downstreamOnly, Set.of());
     }
 
     TrimResult(
