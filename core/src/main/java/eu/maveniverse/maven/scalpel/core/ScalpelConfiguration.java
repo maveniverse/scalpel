@@ -300,7 +300,7 @@ public final class ScalpelConfiguration {
         Set<String> seen = new HashSet<>();
         collectUnknownScalpelKeys(system, seen, warnings);
         collectUnknownScalpelKeys(user, seen, warnings);
-        return warnings.isEmpty() ? Collections.emptyList() : Collections.unmodifiableList(warnings);
+        return warnings.isEmpty() ? List.of() : Collections.unmodifiableList(warnings);
     }
 
     private static void collectUnknownScalpelKeys(Properties props, Set<String> seen, List<String> warnings) {
