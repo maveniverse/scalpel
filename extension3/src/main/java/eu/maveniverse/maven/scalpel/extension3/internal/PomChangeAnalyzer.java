@@ -1381,7 +1381,10 @@ class PomChangeAnalyzer {
                         }
                     });
         } catch (IOException e) {
-            // Skip unreadable directories
+            // Conservative: an unreadable directory during the walk means we cannot
+            // know whether it contains a property reference, so treat as affected
+            logger.warn("Cannot walk filtered resource directory {}: {}", dir, e.getMessage());
+            return true;
         }
         if (budgetExceeded[0]) {
             logger.warn(
