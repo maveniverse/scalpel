@@ -388,4 +388,60 @@ class ScalpelCoreTest {
                     "Should throw ScalpelException when failSafe is disabled");
         }
     }
+
+    /**
+     * Detector whose fetchBranch throws a RuntimeException, used to exercise
+     * the inner fetch-branch catch block in detectChanges (the catch around
+     * gitChangeDetector.fetchBranch()).
+     */
+    private static final GitChangeDetector FETCH_THROWING_DETECTOR = new GitChangeDetector() {
+        @Override
+        public void fetchBranch(Repository repository, String baseBranch) {
+            throw new RuntimeException("Simulated transport failure");
+        }
+    };
+
+    @Test
+    void detectChanges_fetchBranchFailure_failSafe_returnsNull() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+
+            // Use "origin/main" as baseBranch so repository.resolve() returns null,
+            // triggering the fetchBranch path. fetchBaseBranch=true enables fetching.
+            ScalpelCore core = new ScalpelCore(FETCH_THROWING_DETECTOR);
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "origin/main");
+            sys.setProperty("scalpel.fetchBaseBranch", "true");
+            sys.setProperty("scalpel.failSafe", "true");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
+
+            assertNull(result, "failSafe should return null when fetchBranch throws");
+        }
+    }
+
+    @Test
+    void detectChanges_fetchBranchFailure_failSafeDisabled_throwsScalpelException() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+
+            ScalpelCore core = new ScalpelCore(FETCH_THROWING_DETECTOR);
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "origin/main");
+            sys.setProperty("scalpel.fetchBaseBranch", "true");
+            sys.setProperty("scalpel.failSafe", "false");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            ScalpelException ex = assertThrows(
+                    ScalpelException.class,
+                    () -> core.detectChanges(tempDir, config, Set.of()),
+                    "Should throw ScalpelException when fetchBranch fails and failSafe is disabled");
+            assertTrue(ex.getMessage().contains("origin/main"), "Exception message should reference the base branch");
+        }
+    }
 }
