@@ -233,7 +233,7 @@ public final class ScalpelConfiguration {
 
     private static List<String> parseList(String value) {
         if (value == null || value.isEmpty()) {
-            return Collections.emptyList();
+            return List.of();
         }
         String[] parts = value.split(",");
         List<String> result = new ArrayList<>(parts.length);

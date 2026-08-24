@@ -193,7 +193,7 @@ public class GitChangeDetector {
     public Map<String, byte[]> readPomFilesAtCommit(Repository repository, ObjectId commitId, Set<String> paths)
             throws IOException {
         if (paths.isEmpty()) {
-            return Collections.emptyMap();
+            return Map.of();
         }
         // PathFilterGroup requires a non-empty collection of path strings
         List<String> pathList = new ArrayList<>(paths);

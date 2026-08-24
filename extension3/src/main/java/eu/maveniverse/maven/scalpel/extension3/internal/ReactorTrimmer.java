@@ -11,7 +11,6 @@ import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -31,7 +30,7 @@ class ReactorTrimmer {
 
     public TrimResult computeBuildSet(
             Set<MavenProject> directlyAffected, ProjectDependencyGraph graph, ScalpelConfiguration config) {
-        return computeBuildSet(directlyAffected, Collections.<MavenProject>emptySet(), graph, config);
+        return computeBuildSet(directlyAffected, Set.of(), graph, config);
     }
 
     public TrimResult computeBuildSet(
