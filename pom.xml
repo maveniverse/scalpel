@@ -70,7 +70,7 @@
     <maven3ResolverVersion>1.9.27</maven3ResolverVersion>
 
     <version.slf4j>1.7.36</version.slf4j>
-    <version.jacoco>0.8.13</version.jacoco>
+    <version.jacoco>0.8.15</version.jacoco>
   </properties>
 
   <dependencyManagement>
