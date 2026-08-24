@@ -213,20 +213,22 @@ class GitChangeDetectorTest {
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("initial").call();
 
-            git.branchCreate().setName("main").call();
+            // Whatever initial branch git chose is the base; advance a separate branch
+            Repository repo = git.getRepository();
+            String baseBranch = repo.getBranch();
+            git.branchCreate().setName("feature").call();
+            git.checkout().setName("feature").call();
 
-            // Advance current branch
             Files.write(tempDir.resolve("b.txt"), "branch".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("b.txt").call();
             git.commit().setMessage("branch commit").call();
 
-            Repository repo = git.getRepository();
-            ObjectId mergeBase = detector.findMergeBase(repo, "main", "HEAD");
+            ObjectId mergeBase = detector.findMergeBase(repo, baseBranch, "feature");
 
             assertNotNull(mergeBase, "Merge base should be found");
-            // The merge base is the "initial" commit, which is what 'main' points at
-            ObjectId mainId = repo.resolve("main");
-            assertEquals(mainId, mergeBase, "Merge base should be the 'main' branch tip");
+            // The merge base is the "initial" commit, which is what the base branch points at
+            ObjectId baseId = repo.resolve(baseBranch);
+            assertEquals(baseId, mergeBase, "Merge base should be the base branch tip");
         }
     }
 
@@ -249,9 +251,10 @@ class GitChangeDetectorTest {
             Files.write(tempDir.resolve("file.txt"), "init".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("initial").call();
-            git.branchCreate().setName("main").call();
 
-            ObjectId result = detector.findMergeBase(git.getRepository(), "main", "nonexistent");
+            // Base is the repository's real initial branch (no default-branch assumption)
+            String baseBranch = git.getRepository().getBranch();
+            ObjectId result = detector.findMergeBase(git.getRepository(), baseBranch, "nonexistent");
 
             assertNull(result, "Should return null when head cannot be resolved");
         }
@@ -317,10 +320,11 @@ class GitChangeDetectorTest {
             Files.write(workDir.resolve("file.txt"), "content".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("initial").call();
+            String pushedBranch = git.getRepository().getBranch();
             git.push().setRemote("origin").call();
 
-            // Fetch should succeed without error
-            detector.fetchBranch(git.getRepository(), "origin/master");
+            // Fetch the branch that was actually pushed, whatever its name
+            detector.fetchBranch(git.getRepository(), "origin/" + pushedBranch);
         }
     }
 
