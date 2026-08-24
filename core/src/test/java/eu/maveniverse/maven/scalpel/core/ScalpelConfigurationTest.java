@@ -327,6 +327,18 @@ class ScalpelConfigurationTest {
     }
 
     @Test
+    void emptyUserPropertyWinsOverSystemProperty() {
+        // An explicit but empty -D value is present, not absent: it wins over the
+        // system property, matching how Maven treats `-Dkey=`
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.disableOnBranch", "main");
+        Properties user = new Properties();
+        user.setProperty("scalpel.disableOnBranch", "");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, user);
+        assertEquals(List.of(), config.getDisableOnBranch());
+    }
+
+    @Test
     void userProperty_usedWhenSystemPropertyAbsent() {
         Properties user = new Properties();
         user.setProperty("scalpel.fetchBaseBranch", "true");
