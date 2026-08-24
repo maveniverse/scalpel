@@ -261,11 +261,13 @@ public final class ScalpelConfiguration {
     }
 
     private static String resolve(Properties system, Properties user, String key, String defaultValue) {
-        String value = system.getProperty(key);
+        // Maven convention: user properties (CLI -D, .mvn/maven.config) take precedence
+        // over system properties (JVM properties, e.g. MAVEN_OPTS). See issue #81.
+        String value = user.getProperty(key);
         if (value != null) {
             return value.trim();
         }
-        value = user.getProperty(key);
+        value = system.getProperty(key);
         if (value != null) {
             return value.trim();
         }
