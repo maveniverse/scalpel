@@ -553,6 +553,9 @@ class ScalpelConfigurationTest {
         List<String> warnings = config.getWarnings();
         assertFalse(warnings.isEmpty());
         assertTrue(warnings.stream().anyMatch(w -> w.contains("scalpel.foobar")));
+        assertTrue(
+                warnings.stream().noneMatch(w -> w.contains("Did you mean")),
+                "completely wrong key should not produce a suggestion");
     }
 
     @Test

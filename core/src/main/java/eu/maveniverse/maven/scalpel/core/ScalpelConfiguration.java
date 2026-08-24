@@ -330,8 +330,11 @@ public final class ScalpelConfiguration {
         // (after stripping the shared "scalpel." prefix). Without this adjustment,
         // the 8-char shared prefix inflates the threshold and causes unrelated keys
         // like "scalpel.foobar" to incorrectly suggest "scalpel.head".
+        if (best == null) {
+            return null;
+        }
         int suffixLen = Math.max(unknown.length(), best.length()) - PREFIX.length();
-        if (best != null && bestDist <= suffixLen / 2) {
+        if (bestDist <= suffixLen / 2) {
             return best;
         }
         return null;
