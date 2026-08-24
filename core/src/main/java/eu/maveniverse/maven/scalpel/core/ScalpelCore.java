@@ -9,10 +9,7 @@ package eu.maveniverse.maven.scalpel.core;
 
 import static java.util.Objects.requireNonNull;
 
-import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.LinkedHashSet;
 import java.util.Map;
@@ -52,9 +49,9 @@ public class ScalpelCore {
      */
     public ChangeDetectionResult detectChanges(Path reactorRoot, ScalpelConfiguration config, Set<String> allPomPaths)
             throws ScalpelException {
-        RepositoryInfo repoInfo;
+        Repository repository;
         try {
-            repoInfo = openRepository(reactorRoot);
+            repository = openRepository(reactorRoot);
         } catch (RepositoryNotFoundException | IllegalArgumentException e) {
             logger.info("Scalpel: Not a git repository, building all modules");
             return null;
@@ -62,12 +59,10 @@ public class ScalpelCore {
             return handleError(config, "Error opening git repository", e);
         }
 
-        Repository repository = repoInfo.repository;
         try {
             // Check branch-based disable conditions
             if (!config.getDisableOnBranch().isEmpty()) {
-                String currentBranch =
-                        repoInfo.worktree ? repoInfo.currentBranch : gitChangeDetector.getCurrentBranch(repository);
+                String currentBranch = gitChangeDetector.getCurrentBranch(repository);
                 if (currentBranch != null) {
                     for (String pattern : config.getDisableOnBranch()) {
                         if (matchesSafely(currentBranch, pattern, "disableOnBranch")) {
@@ -124,12 +119,7 @@ public class ScalpelCore {
                 }
             }
 
-            // For worktrees, replace HEAD in revspecs with the worktree's head ref
-            // (e.g., "HEAD" -> "refs/heads/feature", "HEAD~1" -> "refs/heads/feature~1")
             String head = config.getHead();
-            if (repoInfo.headRef != null && head.startsWith("HEAD")) {
-                head = repoInfo.headRef + head.substring("HEAD".length());
-            }
 
             ObjectId mergeBase = gitChangeDetector.findMergeBase(repository, baseBranch, head);
             if (mergeBase == null) {
@@ -201,86 +191,13 @@ public class ScalpelCore {
         }
     }
 
-    private static class RepositoryInfo {
-        final Repository repository;
-        final boolean worktree;
-        final String currentBranch;
-        final String headRef;
-
-        RepositoryInfo(Repository repository, boolean worktree, String currentBranch, String headRef) {
-            this.repository = repository;
-            this.worktree = worktree;
-            this.currentBranch = currentBranch;
-            this.headRef = headRef;
-        }
-    }
-
-    private RepositoryInfo openRepository(Path reactorRoot) throws IOException {
+    private Repository openRepository(Path reactorRoot) throws IOException {
         FileRepositoryBuilder builder =
                 new FileRepositoryBuilder().readEnvironment().findGitDir(reactorRoot.toFile());
-
-        File gitDir = builder.getGitDir();
-        if (gitDir == null) {
+        if (builder.getGitDir() == null) {
             throw new RepositoryNotFoundException(reactorRoot.toFile());
         }
-
-        // JGit 5.x findGitDir() correctly follows .git files (worktree pointers)
-        // to .git/worktrees/<name>/, but JGit 5.x lacks commondir support, so
-        // refs and objects from the common directory are invisible. To work around
-        // this, we open the repository from the common directory (the main .git/)
-        // and separately read the worktree's HEAD for branch/head resolution.
-        Path gitDirPath = gitDir.toPath();
-        Path commondirFile = gitDirPath.resolve("commondir");
-        if (Files.isRegularFile(commondirFile)) {
-            return openWorktreeRepository(gitDirPath, commondirFile);
-        }
-
-        return new RepositoryInfo(builder.setMustExist(true).build(), false, null, null);
-    }
-
-    private RepositoryInfo openWorktreeRepository(Path gitDirPath, Path commondirFile) throws IOException {
-        logger.debug("Detected git worktree, gitdir={}", gitDirPath);
-
-        String currentBranch = null;
-        String headRef = null;
-        Path worktreeHead = gitDirPath.resolve("HEAD");
-        if (Files.isRegularFile(worktreeHead)) {
-            String headContent = new String(Files.readAllBytes(worktreeHead), StandardCharsets.UTF_8).trim();
-            if (headContent.startsWith("ref: ")) {
-                headRef = headContent.substring(5);
-                if (headRef.startsWith("refs/heads/")) {
-                    currentBranch = headRef.substring("refs/heads/".length());
-                }
-            } else {
-                headRef = headContent;
-            }
-        }
-
-        File commonDirFile = resolvePathFromFile(commondirFile, gitDirPath).toFile();
-
-        Path gitdirPointer = gitDirPath.resolve("gitdir");
-        File workTree = null;
-        if (Files.isRegularFile(gitdirPointer)) {
-            workTree =
-                    resolvePathFromFile(gitdirPointer, gitDirPath).getParent().toFile();
-        }
-
-        FileRepositoryBuilder worktreeBuilder =
-                new FileRepositoryBuilder().readEnvironment().setGitDir(commonDirFile);
-        if (workTree != null) {
-            worktreeBuilder.setWorkTree(workTree);
-        }
-        Repository repository = worktreeBuilder.setMustExist(true).build();
-        return new RepositoryInfo(repository, true, currentBranch, headRef);
-    }
-
-    private static Path resolvePathFromFile(Path file, Path baseDir) throws IOException {
-        String value = new String(Files.readAllBytes(file), StandardCharsets.UTF_8).trim();
-        Path path = Path.of(value);
-        if (!path.isAbsolute()) {
-            path = baseDir.resolve(value);
-        }
-        return path.toRealPath();
+        return builder.setMustExist(true).build();
     }
 
     private ChangeDetectionResult handleError(ScalpelConfiguration config, String message, Exception e)
