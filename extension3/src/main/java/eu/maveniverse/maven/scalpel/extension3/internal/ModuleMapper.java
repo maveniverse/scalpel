@@ -60,7 +60,7 @@ class ModuleMapper {
         for (String changedFile : changedFiles) {
             for (MavenProject project : sortedProjects) {
                 String projectPath = getRelativePath(project, reactorRoot);
-                if (projectPath.isEmpty() || changedFile.startsWith(projectPath + "/")) {
+                if (isFileInProjectSubtree(changedFile, projectPath)) {
                     boolean isTest = isTestPath(changedFile, projectPath);
                     Boolean existing = hasMainChange.get(project);
                     if (existing == null) {
@@ -98,6 +98,15 @@ class ModuleMapper {
             relativeToProject = changedFile.substring(projectPath.length() + 1);
         }
         return relativeToProject.startsWith("src/test/");
+    }
+
+    private static boolean isFileInProjectSubtree(String changedFile, String projectPath) {
+        if (projectPath.isEmpty()) {
+            // Root project: only match files in subdirectories (src/main/...),
+            // not bare repo-root files (README.md, .gitignore)
+            return changedFile.contains("/");
+        }
+        return changedFile.startsWith(projectPath + "/");
     }
 
     private String getRelativePath(MavenProject project, Path reactorRoot) {
