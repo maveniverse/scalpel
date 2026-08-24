@@ -71,7 +71,7 @@
     <!-- Maven 4 versions -->
     <maven4Version>4.0.0-rc-6</maven4Version>
 
-    <version.slf4j>1.7.36</version.slf4j>
+    <version.slf4j>2.0.18</version.slf4j>
     <version.jacoco>0.8.15</version.jacoco>
   </properties>
 
