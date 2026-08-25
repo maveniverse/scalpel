@@ -59,6 +59,11 @@
       "items": { "type": "string" },
       "description": "Coordinates (groupId:artifactId) of managed plugins whose version or configuration changed in the root POM."
     },
+    "unmatchedPomPaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional. Git-relative paths of changed POMs that match no reactor project (profile-gated modules or modules excluded via -pl). Their changes are ignored by Scalpel. Present only when non-empty."
+    },
     "excludedUpstreamCount": {
       "type": "integer",
       "minimum": 0,

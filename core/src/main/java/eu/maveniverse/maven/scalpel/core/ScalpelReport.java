@@ -56,6 +56,7 @@ public final class ScalpelReport {
     private final List<String> changedProperties;
     private final List<String> changedManagedDependencies;
     private final List<String> changedManagedPlugins;
+    private final List<String> unmatchedPomPaths;
     private final List<AffectedModule> affectedModules;
     private final int excludedUpstreamCount;
 
@@ -67,6 +68,7 @@ public final class ScalpelReport {
             List<String> changedProperties,
             List<String> changedManagedDependencies,
             List<String> changedManagedPlugins,
+            List<String> unmatchedPomPaths,
             List<AffectedModule> affectedModules,
             int excludedUpstreamCount) {
         this.baseBranch = baseBranch;
@@ -76,6 +78,7 @@ public final class ScalpelReport {
         this.changedProperties = changedProperties;
         this.changedManagedDependencies = changedManagedDependencies;
         this.changedManagedPlugins = changedManagedPlugins;
+        this.unmatchedPomPaths = unmatchedPomPaths;
         this.affectedModules = affectedModules;
         this.excludedUpstreamCount = excludedUpstreamCount;
     }
@@ -217,6 +220,11 @@ public final class ScalpelReport {
         sb.append("  \"changedManagedPlugins\": ")
                 .append(jsonStringArray(changedManagedPlugins))
                 .append(",\n");
+        if (unmatchedPomPaths != null && !unmatchedPomPaths.isEmpty()) {
+            sb.append("  \"unmatchedPomPaths\": ")
+                    .append(jsonStringArray(unmatchedPomPaths))
+                    .append(",\n");
+        }
         sb.append("  \"excludedUpstreamCount\": ").append(excludedUpstreamCount).append(",\n");
         sb.append("  \"affectedModules\": ");
         if (affectedModules.isEmpty()) {
@@ -328,6 +336,7 @@ public final class ScalpelReport {
         private final List<String> changedProperties = new ArrayList<>();
         private final List<String> changedManagedDependencies = new ArrayList<>();
         private final List<String> changedManagedPlugins = new ArrayList<>();
+        private final List<String> unmatchedPomPaths = new ArrayList<>();
         private final List<AffectedModule> affectedModules = new ArrayList<>();
         private int excludedUpstreamCount;
 
@@ -366,6 +375,11 @@ public final class ScalpelReport {
             return this;
         }
 
+        public Builder unmatchedPomPaths(Collection<String> paths) {
+            this.unmatchedPomPaths.addAll(paths);
+            return this;
+        }
+
         public Builder addAffectedModule(AffectedModule module) {
             this.affectedModules.add(module);
             return this;
@@ -388,6 +402,7 @@ public final class ScalpelReport {
                     changedProperties,
                     changedManagedDependencies,
                     changedManagedPlugins,
+                    unmatchedPomPaths,
                     affectedModules,
                     excludedUpstreamCount);
         }

@@ -57,16 +57,19 @@ class PomChangeAnalyzer {
         private final Set<String> changedManagedDependencyGAs;
         private final Set<String> changedManagedPluginGAs;
         private final Set<String> changedProperties;
+        private final List<String> unmatchedPomPaths;
 
         Result(
                 Set<MavenProject> affectedProjects,
                 Set<String> changedManagedDependencyGAs,
                 Set<String> changedManagedPluginGAs,
-                Set<String> changedProperties) {
+                Set<String> changedProperties,
+                List<String> unmatchedPomPaths) {
             this.affectedProjects = affectedProjects;
             this.changedManagedDependencyGAs = changedManagedDependencyGAs;
             this.changedManagedPluginGAs = changedManagedPluginGAs;
             this.changedProperties = changedProperties;
+            this.unmatchedPomPaths = unmatchedPomPaths;
         }
 
         Set<MavenProject> getAffectedProjects() {
@@ -83,6 +86,10 @@ class PomChangeAnalyzer {
 
         Set<String> getChangedProperties() {
             return changedProperties;
+        }
+
+        List<String> getUnmatchedPomPaths() {
+            return unmatchedPomPaths;
         }
     }
 
@@ -120,6 +127,7 @@ class PomChangeAnalyzer {
         Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
         Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
         Set<String> allChangedProperties = new LinkedHashSet<>();
+        List<String> unmatchedPomPaths = new ArrayList<>();
 
         // Build a map of relative POM path -> MavenProject
         Map<String, MavenProject> projectByPomPath = new LinkedHashMap<>();
@@ -138,6 +146,7 @@ class PomChangeAnalyzer {
         for (String changedPomPath : changedPomPaths) {
             MavenProject project = projectByPomPath.get(changedPomPath);
             if (project == null) {
+                unmatchedPomPaths.add(changedPomPath);
                 logger.debug("Changed POM {} does not match any reactor project, skipping", changedPomPath);
                 continue;
             }
@@ -186,13 +195,21 @@ class PomChangeAnalyzer {
             }
         }
 
+        if (!unmatchedPomPaths.isEmpty()) {
+            logger.warn(
+                    "Scalpel: {} changed POM(s) match no reactor project (profile-gated or excluded by -pl); "
+                            + "their changes are ignored: {}",
+                    unmatchedPomPaths.size(),
+                    unmatchedPomPaths);
+        }
         logger.debug(
                 "POM change analysis complete: {} affected modules, changedProperties={}, changedManagedDeps={}, changedManagedPlugins={}",
                 affected.size(),
                 allChangedProperties,
                 allChangedManagedDepGAs,
                 allChangedManagedPluginGAs);
-        return new Result(affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties);
+        return new Result(
+                affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties, unmatchedPomPaths);
     }
 
     private void analyzeParentPomChange(
