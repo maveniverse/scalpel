@@ -24,6 +24,7 @@ import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.api.errors.JGitInternalException;
 import org.eclipse.jgit.diff.DiffEntry;
 import org.eclipse.jgit.diff.DiffFormatter;
+import org.eclipse.jgit.errors.MissingObjectException;
 import org.eclipse.jgit.lib.FileMode;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
@@ -72,6 +73,19 @@ public class GitChangeDetector {
             }
             logger.debug("Merge base between {} and {}: {}", baseBranch, head, mergeBase.getName());
             return mergeBase.getId();
+        } catch (MissingObjectException e) {
+            logger.warn(
+                    "Cannot compute merge base between {} and {}: commit history is incomplete"
+                            + " (shallow clone or missing objects). {}",
+                    baseBranch,
+                    head,
+                    e.getMessage());
+            logger.debug("MissingObjectException details", e);
+            return null;
+        } catch (IOException e) {
+            logger.warn("Cannot compute merge base between {} and {}: {}", baseBranch, head, e.getMessage());
+            logger.debug("Merge base computation error details", e);
+            return null;
         }
     }
 

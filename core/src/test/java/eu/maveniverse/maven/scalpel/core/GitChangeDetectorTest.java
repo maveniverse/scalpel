@@ -22,6 +22,7 @@ import java.util.Set;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.lib.StoredConfig;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -380,6 +381,81 @@ class GitChangeDetectorTest {
     }
 
     // ---- readPomFilesAtCommit ----
+
+    @Test
+    void findMergeBase_shallowClone_returnsNullGracefully() throws Exception {
+        // Set up a bare "remote" repository with two branches diverging from a common base
+        Path bareDir = tempDir.resolve("bare.git");
+        String baseBranchName;
+        try (Git bare = Git.init().setBare(true).setDirectory(bareDir.toFile()).call()) {
+            // nothing to do
+        }
+
+        Path fullWorkDir = tempDir.resolve("full");
+        Files.createDirectories(fullWorkDir);
+        try (Git git = Git.init().setDirectory(fullWorkDir.toFile()).call()) {
+            StoredConfig cfg = git.getRepository().getConfig();
+            cfg.setString("user", null, "name", "Test");
+            cfg.setString("user", null, "email", "test@test.invalid");
+            cfg.save();
+
+            git.remoteAdd()
+                    .setName("origin")
+                    .setUri(new org.eclipse.jgit.transport.URIish(
+                            bareDir.toUri().toString()))
+                    .call();
+
+            // Initial commit (the merge-base)
+            Files.write(fullWorkDir.resolve("base.txt"), "base".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("base.txt").call();
+            git.commit().setMessage("base commit").call();
+            baseBranchName = git.getRepository().getBranch();
+            git.push().setRemote("origin").call();
+
+            // Diverge: add commits on a feature branch
+            git.branchCreate().setName("feature").call();
+            git.checkout().setName("feature").call();
+            // Add enough commits so the shallow clone boundary cuts off the merge-base
+            for (int i = 0; i < 3; i++) {
+                Files.write(fullWorkDir.resolve("f" + i + ".txt"), ("feature-" + i).getBytes(StandardCharsets.UTF_8));
+                git.add().addFilepattern("f" + i + ".txt").call();
+                git.commit().setMessage("feature commit " + i).call();
+            }
+            git.push().setRemote("origin").setForce(true).call();
+        }
+
+        // Shallow clone with depth=1: only the tip commit is available
+        Path shallowDir = tempDir.resolve("shallow");
+        Process cloneProc = new ProcessBuilder(
+                        "git",
+                        "clone",
+                        "--depth",
+                        "1",
+                        "--branch",
+                        "feature",
+                        bareDir.toString(),
+                        shallowDir.toString())
+                .redirectErrorStream(true)
+                .start();
+        cloneProc.getInputStream().readAllBytes();
+        assertEquals(0, cloneProc.waitFor(), "shallow clone should succeed");
+
+        // Fetch the base branch ref so it can be resolved, but with limited depth
+        Process fetchProc = new ProcessBuilder("git", "fetch", "--depth", "1", "origin", baseBranchName)
+                .directory(shallowDir.toFile())
+                .redirectErrorStream(true)
+                .start();
+        fetchProc.getInputStream().readAllBytes();
+        assertEquals(0, fetchProc.waitFor(), "fetch should succeed");
+
+        // Now try to find the merge base — the common ancestor is not reachable
+        try (Git git = Git.open(shallowDir.toFile())) {
+            ObjectId result = detector.findMergeBase(git.getRepository(), "origin/" + baseBranchName, "HEAD");
+
+            // Should return null gracefully instead of throwing MissingObjectException
+            assertNull(result, "findMergeBase should return null in a shallow clone without reachable merge-base");
+        }
+    }
 
     @Test
     void readPomFilesAtCommit_readsMultiplePoms() throws Exception {

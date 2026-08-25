@@ -21,6 +21,7 @@ import static org.mockito.Mockito.when;
 
 import eu.maveniverse.maven.scalpel.core.ChangeDetectionResult;
 import eu.maveniverse.maven.scalpel.core.ScalpelCore;
+import eu.maveniverse.maven.scalpel.core.ScalpelException;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -2717,6 +2718,70 @@ class ScalpelLifecycleParticipantTest {
         // failSafe=true → should not throw, just return (build all)
         Path reportFile = root.resolve("target/scalpel-report.json");
         assertFalse(Files.exists(reportFile));
+    }
+
+    @Test
+    void scalpelException_failSafeTrue_buildsAll() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        // ScalpelCore throws ScalpelException (e.g. merge-base unavailable with failSafe=false in core,
+        // but the lifecycle participant should still respect its own failSafe check)
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenThrow(new ScalpelException("Could not find merge base between origin/main and HEAD"));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "true");
+
+        // Should not throw — failSafe=true should catch ScalpelException gracefully
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertFalse(Files.exists(reportFile));
+    }
+
+    @Test
+    void scalpelException_failSafeDisabled_throws() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenThrow(new ScalpelException("Could not find merge base between origin/main and HEAD"));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "false");
+
+        // Should throw MavenExecutionException when failSafe is disabled
+        assertThrows(
+                MavenExecutionException.class,
+                () -> participant.afterProjectsRead(session),
+                "Should throw MavenExecutionException when ScalpelException occurs with failSafe disabled");
     }
 
     @Test
