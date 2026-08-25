@@ -8,6 +8,7 @@
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
 
@@ -114,6 +115,63 @@ class SymlinkResourceWalkTest {
         assertFalse(
                 affected.contains(projects.get(1)),
                 "module-b must not be affected through a symlink outside the module");
+    }
+
+    @Test
+    @Timeout(30)
+    void deeperThanMaxWalkDepthIsConservativelyAffected() throws Exception {
+        Path root = tempDir.resolve("project");
+        // >MAX_RESOURCE_WALK_DEPTH (32) levels of real directories below the resource root
+        Path deep = root.resolve("module-b/src/main/resources");
+        for (int i = 0; i < 34; i++) {
+            deep = deep.resolve("d" + i);
+        }
+        Files.createDirectories(deep);
+
+        List<MavenProject> projects = buildProjects(root);
+        Set<MavenProject> affected = analyze(root, projects);
+        assertTrue(
+                affected.contains(projects.get(1)),
+                "tree deeper than the walk depth must be conservatively marked as affected");
+    }
+
+    @Test
+    @Timeout(30)
+    void normalDepthTreeWithPropertyRefStillResolves() throws Exception {
+        Path root = tempDir.resolve("project");
+        Path resourceDir = root.resolve("module-b/src/main/resources/config/nested");
+        Files.createDirectories(resourceDir);
+        // Reference at a normal depth (< 32): must be found, not masked by depth conservatism
+        Files.write(
+                resourceDir.resolve("application.properties"),
+                "spring.version=${spring.version}\n".getBytes(StandardCharsets.UTF_8));
+
+        List<MavenProject> projects = buildProjects(root);
+        Set<MavenProject> affected = analyze(root, projects);
+        assertTrue(affected.contains(projects.get(1)), "module-b must be affected by the property reference");
+    }
+
+    @Test
+    @Timeout(30)
+    void symlinkFloodCannotBypassVisitBudget() throws Exception {
+        Path root = tempDir.resolve("project");
+        Path resourceDir = root.resolve("module-b/src/main/resources");
+        Files.createDirectories(resourceDir);
+        // Target outside the module; the walk must never read it
+        Path outside = tempDir.resolve("outside.properties");
+        Files.write(outside, "spring.version=${spring.version}\n".getBytes(StandardCharsets.UTF_8));
+        assumeTrue(createSymlink(resourceDir.resolve("probe"), outside), "symlinks not supported");
+        // 10_001 symlink entries: with symlinks uncounted this would walk past the budget
+        for (int i = 0; i < 10_001; i++) {
+            Files.createSymbolicLink(resourceDir.resolve("link" + i), outside);
+        }
+
+        List<MavenProject> projects = buildProjects(root);
+        Set<MavenProject> affected = analyze(root, projects);
+        // Overrun is treated conservatively (affected), and the walk terminates promptly
+        assertTrue(
+                affected.contains(projects.get(1)),
+                "visit budget overrun via symlinks must be conservatively marked as affected");
     }
 
     private List<MavenProject> buildProjects(Path root) throws IOException {

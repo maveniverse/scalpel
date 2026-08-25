@@ -1357,21 +1357,46 @@ class PomChangeAnalyzer {
     private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
         // Does not follow symbolic links: a symlink could loop forever or point
         // outside the module (leaking file content into the analysis)
-        int[] visitedFiles = new int[1];
+        int[] visitedEntries = new int[1];
         boolean[] budgetExceeded = new boolean[1];
+        boolean[] depthTruncated = new boolean[1];
         boolean[] foundRef = new boolean[1];
         try {
             Files.walkFileTree(
                     dir, EnumSet.noneOf(FileVisitOption.class), MAX_RESOURCE_WALK_DEPTH, new SimpleFileVisitor<>() {
                         @Override
-                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                            if (attrs.isSymbolicLink()) {
-                                return FileVisitResult.CONTINUE;
-                            }
-                            if (++visitedFiles[0] > MAX_RESOURCE_WALK_FILES) {
+                        public FileVisitResult preVisitDirectory(Path d, BasicFileAttributes attrs) {
+                            if (++visitedEntries[0] > MAX_RESOURCE_WALK_FILES) {
                                 // Conservative: treat budget overruns as potentially affected
                                 budgetExceeded[0] = true;
                                 return FileVisitResult.TERMINATE;
+                            }
+                            return FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                            // Count every entry, including symlinks and directories, so the
+                            // budget cannot be bypassed by unvisited entry kinds
+                            if (++visitedEntries[0] > MAX_RESOURCE_WALK_FILES) {
+                                // Conservative: treat budget overruns as potentially affected
+                                budgetExceeded[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            if (attrs.isDirectory()) {
+                                // Without FOLLOW_LINKS this only happens for directories at the
+                                // depth limit, which cannot be descended into: their content is
+                                // unknown, so fail toward affected
+                                logger.warn(
+                                        "Filtered resource scan of {} reached the max walk depth ({})."
+                                                + " Module will be conservatively marked as affected.",
+                                        file,
+                                        MAX_RESOURCE_WALK_DEPTH);
+                                depthTruncated[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            if (attrs.isSymbolicLink()) {
+                                return FileVisitResult.CONTINUE;
                             }
                             if (checkFileForPropertyRefs(file, refs)) {
                                 foundRef[0] = true;
@@ -1388,10 +1413,18 @@ class PomChangeAnalyzer {
         }
         if (budgetExceeded[0]) {
             logger.warn(
-                    "Filtered resource scan of {} exceeded the file visit budget ({})."
+                    "Filtered resource scan of {} exceeded the entry visit budget ({})."
                             + " Module will be conservatively marked as affected.",
                     dir,
                     MAX_RESOURCE_WALK_FILES);
+            return true;
+        }
+        if (depthTruncated[0]) {
+            logger.warn(
+                    "Filtered resource scan of {} stopped at the max walk depth ({})."
+                            + " Module will be conservatively marked as affected.",
+                    dir,
+                    MAX_RESOURCE_WALK_DEPTH);
             return true;
         }
         return foundRef[0];
