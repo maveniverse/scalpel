@@ -131,14 +131,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (result == null) {
                 if (config.isModeReport()) {
                     String skipReason = scalpelCore.getLastDetectionSkipReason();
-                    if (skipReason != null && skipReason.startsWith("disabled by")) {
+                    if (skipReason != null) {
                         writeStatusReport(config, reactorRoot, "skipped", skipReason);
                     } else {
                         writeStatusReport(
-                                config,
-                                reactorRoot,
-                                "failed",
-                                "change detection did not run (disabled or bail-out; see build log)");
+                                config, reactorRoot, "failed", "change detection did not run (see build log)");
                     }
                 }
                 return;
@@ -948,20 +945,22 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
      * continues by design).
      */
     private void writeStatusReport(ScalpelConfiguration config, Path reactorRoot, String status, String reason) {
-        ScalpelReport report = ScalpelReport.builder()
-                .baseBranch(config.getBaseBranch())
-                .status(status)
-                .reason(reason)
-                .fullBuildTriggered(true)
-                .build();
+        String baseBranch = config.getBaseBranch();
         try {
+            ScalpelReport report = ScalpelReport.builder()
+                    .baseBranch(baseBranch != null ? baseBranch : "(unconfigured)")
+                    .status(status)
+                    .reason(reason)
+                    .fullBuildTriggered(true)
+                    .build();
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.warn(
                     "Scalpel: Analysis did not complete (status={}, reason={}), report at {} overwritten",
                     status,
                     reason,
                     config.getReportFile());
-        } catch (IOException e) {
+        } catch (Exception e) {
+            // Status reports must never fail the build; that is their entire job.
             logger.warn("Scalpel: Could not overwrite report with {} status: {}", status, e.toString());
         }
     }

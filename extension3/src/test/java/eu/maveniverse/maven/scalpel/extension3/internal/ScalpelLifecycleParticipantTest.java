@@ -2750,6 +2750,84 @@ class ScalpelLifecycleParticipantTest {
         assertFalse(json.contains("\"status\": \"failed\""), "Deliberate disable must not be labelled failed");
     }
 
+    /**
+     * Review #137: baseBranch may be null (no explicit config, no CI environment) when detection
+     * bails out; the status report must still be written with a placeholder instead of crashing
+     * the build with IllegalStateException from the report builder.
+     */
+    @Test
+    void reportMode_failSafeBailout_nullBaseBranch_writesStatusReportWithPlaceholder() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.getLastDetectionSkipReason()).thenReturn("no base branch configured");
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().remove("scalpel.baseBranch");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "true");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Status report must be written even without a base branch");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Bail-out with skip reason should be reported as skipped");
+        assertTrue(
+                json.contains("no base branch configured"), "Overwritten report should carry the actual skip reason");
+        assertTrue(json.contains("(unconfigured)"), "Placeholder base branch should be recorded");
+    }
+
+    /**
+     * Review #137: "not a git repository" is a skip (detection deliberately did not run), not a
+     * failure; the status document must say skipped with that reason.
+     */
+    @Test
+    void reportMode_notAGitRepository_writesSkippedStatusWithReason() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.getLastDetectionSkipReason()).thenReturn("not a git repository");
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Status report should be written when detection skips");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Not-a-git-repo should be reported as skipped");
+        assertTrue(json.contains("not a git repository"), "Reason should name the skip condition");
+        assertFalse(json.contains("\"status\": \"failed\""), "Skip condition must not be labelled failed");
+    }
+
     @Test
     void disabled_doesNothing() throws Exception {
         Path root = tempDir.resolve("project");
