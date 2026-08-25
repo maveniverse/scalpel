@@ -408,6 +408,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
         } catch (ScalpelException e) {
+            if (config.isFailSafe()) {
+                logger.warn("Scalpel: {}, building all modules", e.getMessage());
+                logger.debug("ScalpelException details", e);
+                return;
+            }
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
         } catch (Exception e) {
             if (config.isFailSafe()) {
