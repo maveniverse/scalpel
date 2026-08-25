@@ -29,12 +29,13 @@ import org.junit.jupiter.api.io.TempDir;
  * Tests for shallow clones (e.g. actions/checkout with fetch-depth: 1), where the merge base
  * between the base branch and head cannot be resolved because the connecting history is absent.
  *
- * <p>Note: the build compiles against JGit 5.13.5 (the newest Java-8 compatible line), whose
- * CloneCommand/FetchCommand have no {@code setDepth}. A true shallow clone therefore cannot be
- * fetched with the in-use API, so the equivalent state is constructed via plumbing: two
- * disconnected roots (what a depth-limited fetch leaves behind: refs whose connecting commits
- * are missing, so the merge-base walk finds nothing) plus an explicit {@code .git/shallow}
- * marker, which is exactly what a real {@code fetch-depth: 1} checkout produces.</p>
+ * <p>The build compiles against JGit 7.7.1, whose CloneCommand supports {@code setDepth};
+ * {@code realShallowClone_isShallowAndCannotResolvePreCloneHistory} exercises a genuine
+ * depth-limited clone. The disconnected-roots fixture below is a deliberate alternative: it
+ * constructs the same observable state via plumbing (refs whose connecting commits are missing,
+ * so the merge-base walk finds nothing, plus an explicit {@code .git/shallow} marker) without
+ * depending on clone-transport depth behavior, which keeps the deterministic history shape
+ * explicit.</p>
  */
 class ShallowCloneTest {
 
@@ -74,6 +75,55 @@ class ShallowCloneTest {
     }
 
     @Test
+    void realShallowClone_isShallowAndCannotResolvePreCloneHistory() throws Exception {
+        // source repo with three commits, pushed to a local bare remote
+        Path srcDir = tempDir.resolve("src");
+        Path remoteDir = tempDir.resolve("remote.git");
+        try (Git git = Git.init()
+                .setDirectory(srcDir.toFile())
+                .setInitialBranch("main")
+                .call()) {
+            for (int i = 1; i <= 3; i++) {
+                write(srcDir, "f" + i + ".txt", "v" + i);
+                git.add().addFilepattern("f" + i + ".txt").call();
+                git.commit().setMessage("commit " + i).call();
+            }
+        }
+        try (Git remote = Git.init()
+                        .setBare(true)
+                        .setDirectory(remoteDir.toFile())
+                        .call();
+                Git src = Git.open(srcDir.toFile())) {
+            src.push()
+                    .setRemote(remoteDir.toUri().toString())
+                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec("refs/heads/main:refs/heads/main"))
+                    .call();
+        }
+
+        // real depth-limited clone over a local path URI
+        Path cloneDir = tempDir.resolve("clone");
+        try (Git clone = Git.cloneRepository()
+                        .setDepth(1)
+                        .setBranchesToClone(java.util.Collections.singletonList("refs/heads/main"))
+                        .setBranch("refs/heads/main")
+                        .setURI(remoteDir.toUri().toString())
+                        .setDirectory(cloneDir.toFile())
+                        .call();
+                Repository repository = clone.getRepository()) {
+            assertTrue(
+                    Files.exists(repository.getDirectory().toPath().resolve("shallow")),
+                    "setDepth(1) clone against a local path should produce .git/shallow");
+            assertTrue(new GitChangeDetector().isShallow(repository));
+            // the pre-clone history is genuinely absent: HEAD~1 cannot be resolved, so a
+            // merge base reaching past the shallow boundary comes back null
+            assertNull(repository.resolve("HEAD~1"), "HEAD~1 should not exist in a depth-1 clone");
+            assertNull(
+                    new GitChangeDetector().findMergeBase(repository, "HEAD~1", "HEAD"),
+                    "merge base with pre-clone history should not be resolvable on a depth-1 clone");
+        }
+    }
+
+    @Test
     void findMergeBase_returnsNullOnShallowRepoWithDisconnectedBaseBranch() throws Exception {
         Path repoDir = createShallowRepoWithDisconnectedBaseBranch();
         try (Git git = Git.open(repoDir.toFile());
@@ -99,7 +149,7 @@ class ShallowCloneTest {
             assertTrue(new GitChangeDetector().isShallow(repository));
         }
         // a plain repo with full history is not shallow
-        Path fullDir = tempDir.resolveSibling(tempDir.getFileName() + "-full");
+        Path fullDir = tempDir.resolve("full");
         try (Git git = Git.init().setDirectory(fullDir.toFile()).call()) {
             write(fullDir, "f.txt", "x");
             git.add().addFilepattern("f.txt").call();

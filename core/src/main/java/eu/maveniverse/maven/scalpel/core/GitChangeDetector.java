@@ -54,7 +54,8 @@ public class GitChangeDetector {
     /**
      * Tells whether the repository is shallow (created or fetched with a depth limit, e.g.
      * actions/checkout with {@code fetch-depth: 1}), which is recorded in {@code .git/shallow}.
-     * JGit 5.x exposes no accessor for this, so the marker file is checked directly.
+     * JGit 7.x still exposes no public accessor for this ({@link Repository} has no shallow
+     * method; only the internal DepthWalk classes track it), so the marker file is checked directly.
      */
     public boolean isShallow(Repository repository) {
         return repository.getDirectory() != null && new File(repository.getDirectory(), "shallow").isFile();
@@ -239,12 +240,12 @@ public class GitChangeDetector {
 
         logger.info("Scalpel: Fetching {} from {}", branch, remote);
         if (isShallow(repository)) {
-            // JGit 5.x (the Java-8 compatible line this build targets) has no depth controls
-            // on FetchCommand, so the fetch cannot be bounded or made deep on shallow repos.
+            // FetchCommand.setDepth is not wired here, so the fetch stays unbounded on shallow
+            // repos and may or may not restore the missing history.
             logger.warn(
-                    "Scalpel: Repository is shallow; this fetch of {} is unbounded and may not restore the"
+                    "Scalpel: Repository is shallow; fetching {} is unbounded and may not restore the"
                             + " missing history. Use fetch-depth: 0 in CI or 'git fetch --unshallow' before the build",
-                    baseBranch);
+                    branch);
         }
         try (Git git = new Git(repository)) {
             git.fetch().setRemote(remote).setRefSpecs(new RefSpec(refspec)).call();
