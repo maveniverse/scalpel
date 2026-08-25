@@ -260,6 +260,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     writeReport(
                             config,
                             reactorRoot,
+                            allProjects,
                             AnalysisContext.empty(
                                     changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs));
                 } else if (config.isModeSkipTests()) {
@@ -293,6 +294,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     writeReport(
                             config,
                             reactorRoot,
+                            allProjects,
                             AnalysisContext.empty(
                                     changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs));
                 } else if (config.isModeSkipTests()) {
@@ -331,6 +333,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         writeReport(
                                 config,
                                 reactorRoot,
+                                allProjects,
                                 AnalysisContext.empty(
                                         changedFiles,
                                         changedProperties,
@@ -360,6 +363,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 writeReport(
                         config,
                         reactorRoot,
+                        allProjects,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
                                 .directlyAffected(directlyAffected)
@@ -405,6 +409,22 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 session.setProjects(buildSet);
                 // Apply per-category args in trim mode
                 applyPerCategoryArgs(trimResult, config);
+                // Write the same JSON report as report mode, so the skipped set (allProjects
+                // minus buildSet) is reviewable alongside the green trimmed build (#91)
+                writeReport(
+                        config,
+                        reactorRoot,
+                        allProjects,
+                        AnalysisContext.builder(
+                                        changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
+                                .directlyAffected(directlyAffected)
+                                .affectedBySource(affectedBySource)
+                                .testOnlyBySource(sourceResult.getTestOnlyAffected())
+                                .affectedByPom(affectedByPom)
+                                .forceIncluded(forceIncluded)
+                                .transitivelyAffected(transitivelyAffected)
+                                .trimResult(trimResult)
+                                .build());
             }
 
         } catch (ScalpelException e) {
@@ -909,7 +929,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
     }
 
-    private void writeReport(ScalpelConfiguration config, Path reactorRoot, AnalysisContext ctx)
+    private void writeReport(
+            ScalpelConfiguration config, Path reactorRoot, List<MavenProject> allProjects, AnalysisContext ctx)
             throws MavenExecutionException {
         ScalpelReport.Builder builder = ScalpelReport.builder()
                 .baseBranch(config.getBaseBranch())
@@ -931,6 +952,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         addTransitivelyAffectedModules(builder, ctx, config, reactorRoot);
         int excludedUpstream = addTrimResultModules(builder, ctx, config, reactorRoot);
         builder.excludedUpstreamCount(excludedUpstream);
+        addSkippedModules(builder, allProjects, ctx, reactorRoot);
 
         try {
             ScalpelReport report = builder.build();
@@ -938,6 +960,28 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             logger.info("Scalpel: Report written to {}", config.getReportFile());
         } catch (IOException e) {
             throw new MavenExecutionException("Scalpel: Failed to write report", e);
+        }
+    }
+
+    /**
+     * Enumerates reactor modules that were left out of the build set, so a reviewer of a
+     * green trimmed build can see exactly what was skipped and why. A module is skipped
+     * when it is neither directly nor transitively affected, and not part of the trim
+     * build set (upstream prerequisites and downstream dependents are built, not skipped).
+     */
+    private void addSkippedModules(
+            ScalpelReport.Builder builder, List<MavenProject> allProjects, AnalysisContext ctx, Path reactorRoot) {
+        Set<MavenProject> included = new LinkedHashSet<>(ctx.directlyAffected);
+        included.addAll(ctx.transitivelyAffected.keySet());
+        if (ctx.trimResult != null) {
+            included.addAll(ctx.trimResult.getBuildSet());
+        }
+        for (MavenProject project : allProjects) {
+            if (!included.contains(project)) {
+                String path = relativePath(reactorRoot, project);
+                builder.addSkippedModule(new ScalpelReport.SkippedModule(
+                        project.getGroupId(), project.getArtifactId(), path, ScalpelReport.SKIP_REASON_NOT_AFFECTED));
+            }
         }
     }
 

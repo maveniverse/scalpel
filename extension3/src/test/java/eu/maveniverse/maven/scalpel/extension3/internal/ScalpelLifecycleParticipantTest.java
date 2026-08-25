@@ -1037,9 +1037,7 @@ class ScalpelLifecycleParticipantTest {
         if (end < 0) {
             return false;
         }
-        return skippedSection
-                .substring(idx, end)
-                .contains("\"reason\": \"" + reason + "\"");
+        return skippedSection.substring(idx, end).contains("\"reason\": \"" + reason + "\"");
     }
 
     private String extractSection(String json, String sectionName) {
@@ -2845,9 +2843,11 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        // failSafe=true → should not throw, just return (build all)
+        // failSafe=true → should not throw. The invalid old POM is handled conservatively
+        // (all dependents marked affected), so the normal trim path runs and, since #91,
+        // trim mode writes the JSON report too.
         Path reportFile = root.resolve("target/scalpel-report.json");
-        assertFalse(Files.exists(reportFile));
+        assertTrue(Files.exists(reportFile));
     }
 
     @Test
@@ -3333,21 +3333,26 @@ class ScalpelLifecycleParticipantTest {
     }
 
     private boolean modulePresent(String json, String artifactId) {
-        return json.contains("\"artifactId\": \"" + artifactId + "\"");
+        String affectedSection = extractSection(json, "affectedModules");
+        return affectedSection != null && affectedSection.contains("\"artifactId\": \"" + artifactId + "\"");
     }
 
     private String extractModuleBlock(String json, String artifactId) {
+        String affectedSection = extractSection(json, "affectedModules");
+        if (affectedSection == null) {
+            return null;
+        }
         String marker = "\"artifactId\": \"" + artifactId + "\"";
-        int idx = json.indexOf(marker);
+        int idx = affectedSection.indexOf(marker);
         if (idx < 0) {
             return null;
         }
-        int start = json.lastIndexOf("{", idx);
-        int end = json.indexOf("}", idx);
+        int start = affectedSection.lastIndexOf("{", idx);
+        int end = affectedSection.indexOf("}", idx);
         if (start < 0 || end < 0) {
             return null;
         }
-        return json.substring(start, end + 1);
+        return affectedSection.substring(start, end + 1);
     }
 
     private boolean moduleHasReason(String json, String artifactId, String reason) {

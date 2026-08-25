@@ -68,6 +68,11 @@
       "type": "array",
       "items": { "$ref": "#/$defs/affectedModule" },
       "description": "Modules affected by the changeset, with reasons and optional metadata."
+    },
+    "skippedModules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/skippedModule" },
+      "description": "Optional (added without a version bump per the optional-fields policy): reactor modules left out of the build set, each with the reason it was judged safe to skip. Present only when at least one module was skipped."
     }
   },
   "$defs": {
@@ -125,6 +130,29 @@
         "testsSkippedReason": {
           "type": "string",
           "description": "Why tests were skipped on this module (e.g. 'EXCLUDED_DOWNSTREAM' for downstream modules not in the test scope)."
+        }
+      }
+    },
+    "skippedModule": {
+      "type": "object",
+      "required": ["groupId", "artifactId", "path", "reason"],
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "Maven groupId of the skipped module."
+        },
+        "artifactId": {
+          "type": "string",
+          "description": "Maven artifactId of the skipped module."
+        },
+        "path": {
+          "type": "string",
+          "description": "Reactor-relative path of the module directory."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["NOT_AFFECTED"],
+          "description": "Why the module was left out of the build set. NOT_AFFECTED: not affected by the changeset (not direct, transitive, upstream or downstream of any change)."
         }
       }
     }
