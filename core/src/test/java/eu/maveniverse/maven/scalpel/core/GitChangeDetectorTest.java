@@ -15,7 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -455,6 +457,43 @@ class GitChangeDetectorTest {
         try (Repository repo = repoWithOriginRemote()) {
             // "release" is not a configured remote: the whole string is a local branch name
             assertDoesNotThrow(() -> detector.fetchBranch(repo, "release/1.0"));
+        }
+    }
+
+    /**
+     * Runs the callable with System.err captured (slf4j-simple writes to stderr)
+     * and returns everything that was written during its execution.
+     */
+    private String captureStderr(Runnable action) {
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        try {
+            action.run();
+        } finally {
+            System.setErr(originalErr);
+        }
+        return captured.toString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void fetchBranch_unconfiguredPrefixWithSlash_warns() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            String err = captureStderr(() -> assertDoesNotThrow(() -> detector.fetchBranch(repo, "bogus/main")));
+            assertTrue(
+                    err.contains("WARN "),
+                    "expected a WARN about the unconfigured remote prefix but stderr was: " + err);
+            assertTrue(
+                    err.contains("'bogus' is not a configured remote"),
+                    "WARN should name the unconfigured prefix 'bogus' but stderr was: " + err);
+        }
+    }
+
+    @Test
+    void fetchBranch_plainBranchNoSlash_noWarn() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            String err = captureStderr(() -> assertDoesNotThrow(() -> detector.fetchBranch(repo, "main")));
+            assertFalse(err.contains("WARN "), "no WARN expected for a plain branch name but stderr was: " + err);
         }
     }
 

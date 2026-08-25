@@ -173,7 +173,7 @@ public class GitChangeDetector {
         }
         // Reject URL-shaped values early: JGit treats unknown remote names as URLs,
         // so a typo like "git@host:evil.git/main" would otherwise attempt a network fetch
-        if (baseBranch.contains("://") || baseBranch.startsWith("git@") || baseBranch.contains(":")) {
+        if (baseBranch.contains(":")) {
             throw new IOException("Invalid scalpel.baseBranch '" + baseBranch
                     + "': URL-shaped value, expected <remote>/<branch> or <branch>");
         }
@@ -187,6 +187,12 @@ public class GitChangeDetector {
             if (repository.getRemoteNames().contains(candidate)) {
                 remote = candidate;
                 branch = baseBranch.substring(slashIndex + 1);
+            } else {
+                logger.warn(
+                        "Scalpel: baseBranch '{}' has a slash but '{}' is not a configured remote; "
+                                + "treating it as a local branch name and skipping the fetch",
+                        baseBranch,
+                        candidate);
             }
         }
         if (!Repository.isValidRefName("refs/heads/" + branch)) {
