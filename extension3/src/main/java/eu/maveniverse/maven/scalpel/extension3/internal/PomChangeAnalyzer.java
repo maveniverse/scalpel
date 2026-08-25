@@ -57,16 +57,27 @@ class PomChangeAnalyzer {
         private final Set<String> changedManagedDependencyGAs;
         private final Set<String> changedManagedPluginGAs;
         private final Set<String> changedProperties;
+        private final Map<MavenProject, Set<String>> evidence;
 
         Result(
                 Set<MavenProject> affectedProjects,
                 Set<String> changedManagedDependencyGAs,
                 Set<String> changedManagedPluginGAs,
                 Set<String> changedProperties) {
+            this(affectedProjects, changedManagedDependencyGAs, changedManagedPluginGAs, changedProperties, Map.of());
+        }
+
+        Result(
+                Set<MavenProject> affectedProjects,
+                Set<String> changedManagedDependencyGAs,
+                Set<String> changedManagedPluginGAs,
+                Set<String> changedProperties,
+                Map<MavenProject, Set<String>> evidence) {
             this.affectedProjects = affectedProjects;
             this.changedManagedDependencyGAs = changedManagedDependencyGAs;
             this.changedManagedPluginGAs = changedManagedPluginGAs;
             this.changedProperties = changedProperties;
+            this.evidence = evidence;
         }
 
         Set<MavenProject> getAffectedProjects() {
@@ -83,6 +94,14 @@ class PomChangeAnalyzer {
 
         Set<String> getChangedProperties() {
             return changedProperties;
+        }
+
+        /**
+         * Specific inputs that triggered each affected module (explain-mode evidence),
+         * e.g. "property foo.version" or "managed dep g:a".
+         */
+        Map<MavenProject, Set<String>> getEvidence() {
+            return evidence;
         }
     }
 
@@ -117,6 +136,7 @@ class PomChangeAnalyzer {
             long maxResourceFileSize) {
 
         Set<MavenProject> affected = new LinkedHashSet<>();
+        Map<MavenProject, Set<String>> evidence = new LinkedHashMap<>();
         Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
         Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
         Set<String> allChangedProperties = new LinkedHashSet<>();
@@ -149,6 +169,7 @@ class PomChangeAnalyzer {
                 // Leaf module: its own POM changed, mark it as affected
                 logger.debug("Leaf module POM changed: {}", key(project));
                 affected.add(project);
+                addEvidence(evidence, project, "own pom " + changedPomPath + " changed");
                 continue;
             }
 
@@ -161,6 +182,10 @@ class PomChangeAnalyzer {
                 }
                 affected.add(project);
                 affected.addAll(dependents);
+                addEvidence(evidence, project, "new pom " + changedPomPath);
+                for (MavenProject dependent : dependents) {
+                    addEvidence(evidence, dependent, "new pom " + changedPomPath);
+                }
                 continue;
             }
 
@@ -171,6 +196,7 @@ class PomChangeAnalyzer {
                         dependents,
                         reactorRoot,
                         affected,
+                        evidence,
                         allChangedManagedDepGAs,
                         allChangedManagedPluginGAs,
                         allChangedProperties,
@@ -183,6 +209,10 @@ class PomChangeAnalyzer {
                         e.getMessage());
                 affected.add(project);
                 affected.addAll(dependents);
+                addEvidence(evidence, project, "unparseable old pom " + changedPomPath);
+                for (MavenProject dependent : dependents) {
+                    addEvidence(evidence, dependent, "unparseable old pom " + changedPomPath);
+                }
             }
         }
 
@@ -192,7 +222,12 @@ class PomChangeAnalyzer {
                 allChangedProperties,
                 allChangedManagedDepGAs,
                 allChangedManagedPluginGAs);
-        return new Result(affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties);
+        return new Result(
+                affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties, evidence);
+    }
+
+    private static void addEvidence(Map<MavenProject, Set<String>> evidence, MavenProject project, String item) {
+        evidence.computeIfAbsent(project, k -> new LinkedHashSet<>()).add(item);
     }
 
     private void analyzeParentPomChange(
@@ -201,6 +236,7 @@ class PomChangeAnalyzer {
             List<MavenProject> dependentProjects,
             Path reactorRoot,
             Set<MavenProject> affected,
+            Map<MavenProject, Set<String>> evidence,
             Set<String> allChangedManagedDepGAs,
             Set<String> allChangedManagedPluginGAs,
             Set<String> allChangedProperties,
@@ -280,6 +316,8 @@ class PomChangeAnalyzer {
 
         if (parentSelfAffected) {
             affected.add(parentProject);
+            addEvidence(
+                    evidence, parentProject, "pom " + parentProject.getFile().getName() + " direct content changed");
         }
 
         // Resolve property indirection: if a managed dep/plugin uses a changed property
@@ -340,6 +378,7 @@ class PomChangeAnalyzer {
                     for (String prop : changedProperties) {
                         if (childPomText.contains("${" + prop + "}")) {
                             logger.debug("Child {} references changed property {}", key(child), prop);
+                            addEvidence(evidence, child, "property " + prop);
                             childAffected = true;
                             break;
                         }
@@ -354,6 +393,7 @@ class PomChangeAnalyzer {
                     String ga = dep.getGroupId() + ":" + dep.getArtifactId();
                     if (changedManagedDeps.contains(ga)) {
                         logger.debug("Child {} uses changed managed dependency {}", key(child), ga);
+                        addEvidence(evidence, child, "managed dep " + ga);
                         childAffected = true;
                         break;
                     }
@@ -367,6 +407,7 @@ class PomChangeAnalyzer {
                     String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
                     if (changedManagedPlugins.contains(ga)) {
                         logger.debug("Child {} uses changed managed plugin {}", key(child), ga);
+                        addEvidence(evidence, child, "managed plugin " + ga);
                         childAffected = true;
                         break;
                     }
@@ -378,6 +419,7 @@ class PomChangeAnalyzer {
                     && !changedProperties.isEmpty()
                     && hasFilteredResourcesWithChangedProperty(child, changedProperties, maxResourceFileSize)) {
                 logger.debug("Child {} has filtered resources referencing changed properties", key(child));
+                addEvidence(evidence, child, "filtered resources referencing changed properties");
                 childAffected = true;
             }
 

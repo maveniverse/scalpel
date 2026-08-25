@@ -88,6 +88,7 @@ public final class ScalpelReport {
         private final String category;
         private final String sourceSet;
         private final String testsSkippedReason;
+        private final List<String> evidence;
 
         public AffectedModule(String groupId, String artifactId, String path, List<String> reasons) {
             this(groupId, artifactId, path, reasons, null, null, null);
@@ -115,6 +116,18 @@ public final class ScalpelReport {
                 String category,
                 String sourceSet,
                 String testsSkippedReason) {
+            this(groupId, artifactId, path, reasons, category, sourceSet, testsSkippedReason, null);
+        }
+
+        public AffectedModule(
+                String groupId,
+                String artifactId,
+                String path,
+                List<String> reasons,
+                String category,
+                String sourceSet,
+                String testsSkippedReason,
+                List<String> evidence) {
             if (sourceSet != null && !"main".equals(sourceSet) && !"test".equals(sourceSet)) {
                 throw new IllegalArgumentException("sourceSet must be 'main', 'test', or null");
             }
@@ -125,6 +138,7 @@ public final class ScalpelReport {
             this.category = category;
             this.sourceSet = sourceSet;
             this.testsSkippedReason = testsSkippedReason;
+            this.evidence = evidence;
         }
 
         public String getGroupId() {
@@ -155,6 +169,10 @@ public final class ScalpelReport {
             return testsSkippedReason;
         }
 
+        public List<String> getEvidence() {
+            return evidence;
+        }
+
         public static ModuleBuilder moduleBuilder(
                 String groupId, String artifactId, String path, List<String> reasons) {
             return new ModuleBuilder(groupId, artifactId, path, reasons);
@@ -168,6 +186,7 @@ public final class ScalpelReport {
             private String category;
             private String sourceSet;
             private String testsSkippedReason;
+            private List<String> evidence;
 
             ModuleBuilder(String groupId, String artifactId, String path, List<String> reasons) {
                 this.groupId = groupId;
@@ -191,8 +210,14 @@ public final class ScalpelReport {
                 return this;
             }
 
+            public ModuleBuilder evidence(List<String> evidence) {
+                this.evidence = evidence;
+                return this;
+            }
+
             public AffectedModule build() {
-                return new AffectedModule(groupId, artifactId, path, reasons, category, sourceSet, testsSkippedReason);
+                return new AffectedModule(
+                        groupId, artifactId, path, reasons, category, sourceSet, testsSkippedReason, evidence);
             }
         }
     }
@@ -248,6 +273,10 @@ public final class ScalpelReport {
             sb.append(",\n");
             sb.append("      \"testsSkipped\": true");
             appendOptionalField(sb, "testsSkippedReason", m.testsSkippedReason);
+        }
+        if (m.evidence != null) {
+            sb.append(",\n");
+            sb.append("      \"evidence\": ").append(jsonStringArray(m.evidence));
         }
         sb.append("\n");
         sb.append("    }");

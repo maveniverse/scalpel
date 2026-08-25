@@ -11,8 +11,10 @@ import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -43,6 +45,7 @@ class ReactorTrimmer {
         Set<MavenProject> downstreamOnly = new LinkedHashSet<>();
         Set<MavenProject> downstreamTestOnly = new LinkedHashSet<>();
         Set<MavenProject> upstreamOnly = new LinkedHashSet<>();
+        Map<MavenProject, List<String>> buildReasons = new LinkedHashMap<>();
 
         if (config.isAlsoMakeDependents()) {
             for (MavenProject project : new ArrayList<>(directlyAffected)) {
@@ -62,6 +65,7 @@ class ReactorTrimmer {
                             continue;
                         }
                         if (buildSet.add(ds)) {
+                            addReason(buildReasons, ds, "downstream of " + key(project));
                             // Check if downstream depends on the changed module via test scope only
                             String scope = getDependencyScope(ds, project);
                             if ("test".equals(scope)) {
@@ -88,6 +92,7 @@ class ReactorTrimmer {
                                 && !downstreamTestOnly.contains(us)
                                 && buildSet.add(us)) {
                             upstreamOnly.add(us);
+                            addReason(buildReasons, us, "upstream of " + key(project));
                             newUpstream++;
                         }
                     }
@@ -119,7 +124,11 @@ class ReactorTrimmer {
             }
         }
 
-        return new TrimResult(result, directlyAffected, upstreamOnly, downstreamOnly, downstreamTestOnly);
+        return new TrimResult(result, directlyAffected, upstreamOnly, downstreamOnly, downstreamTestOnly, buildReasons);
+    }
+
+    private static void addReason(Map<MavenProject, List<String>> reasons, MavenProject project, String reason) {
+        reasons.computeIfAbsent(project, k -> new ArrayList<>()).add(reason);
     }
 
     /**

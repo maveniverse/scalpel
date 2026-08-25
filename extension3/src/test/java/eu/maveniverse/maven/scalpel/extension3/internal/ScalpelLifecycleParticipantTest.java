@@ -3125,7 +3125,8 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(Files.exists(reportFile));
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         String block = extractModuleBlock(json, "module-a");
-        assertTrue(block != null && block.contains("\"module-a/src/main/java/Foo.java\""),
+        assertTrue(
+                block != null && block.contains("\"module-a/src/main/java/Foo.java\""),
                 "module-a evidence must name the triggering changed file");
     }
 
@@ -3190,7 +3191,8 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(Files.exists(reportFile));
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         String block = extractModuleBlock(json, "module-x");
-        assertTrue(block != null && block.contains("property foo.version"),
+        assertTrue(
+                block != null && block.contains("property foo.version"),
                 "module-x evidence must name the changed property, block was: " + block);
         assertFalse(modulePresent(json, "module-y"), "module-y does not reference the property, must not be affected");
     }

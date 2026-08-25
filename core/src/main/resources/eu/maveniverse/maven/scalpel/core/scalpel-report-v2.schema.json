@@ -125,6 +125,11 @@
         "testsSkippedReason": {
           "type": "string",
           "description": "Why tests were skipped on this module (e.g. 'EXCLUDED_DOWNSTREAM' for downstream modules not in the test scope)."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Specific inputs behind this module's decision, emitted only with -Dscalpel.explain=true (e.g. a changed file path, 'property <name>', 'managed dep <groupId:artifactId>', 'managed plugin <groupId:artifactId>', 'downstream of <groupId:artifactId>')."
         }
       }
     }

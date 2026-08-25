@@ -194,6 +194,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedDepGAs = new LinkedHashSet<>();
             Set<String> changedManagedPluginGAs = new LinkedHashSet<>();
             Set<String> changedProperties = new LinkedHashSet<>();
+            Map<MavenProject, Set<String>> pomEvidence = Map.of();
             if (!pomChanges.isEmpty()) {
                 logger.debug("POM changes detected: {}", pomChanges);
                 try {
@@ -207,6 +208,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     changedManagedDepGAs = pomResult.getChangedManagedDependencyGAs();
                     changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
                     changedProperties = pomResult.getChangedProperties();
+                    pomEvidence = pomResult.getEvidence();
                 } catch (Exception e) {
                     if (config.isFailSafe()) {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
@@ -239,14 +241,17 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Force-include modules matching forceBuildModules patterns
             Set<MavenProject> forceIncluded = new LinkedHashSet<>();
+            Map<MavenProject, String> forceBuildPatterns = new LinkedHashMap<>();
             if (!config.getForceBuildModules().isEmpty()) {
                 for (MavenProject project : allProjects) {
                     if (directlyAffected.contains(project)) {
                         continue;
                     }
-                    if (matchesForceBuild(project, config.getForceBuildModules())) {
+                    String pattern = matchesForceBuild(project, config.getForceBuildModules());
+                    if (pattern != null) {
                         directlyAffected.add(project);
                         forceIncluded.add(project);
+                        forceBuildPatterns.put(project, pattern);
                     }
                 }
             }
@@ -279,13 +284,25 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Map<MavenProject, DependencyResolutionResult> collectCache = new LinkedHashMap<>();
 
             // Compute transitively affected modules (via changed managed deps/plugins)
+            Map<MavenProject, List<String>> transitiveEvidence = new LinkedHashMap<>();
             Map<MavenProject, List<String>> transitivelyAffected = computeTransitivelyAffected(
                     allProjects,
                     directlyAffected,
                     changedManagedDepGAs,
                     changedManagedPluginGAs,
                     session,
-                    collectCache);
+                    collectCache,
+                    transitiveEvidence);
+
+            // Explain-mode evidence: which specific input triggered each module
+            Map<MavenProject, List<String>> evidence = config.isExplain()
+                    ? buildEvidence(
+                            sourceResult.getTriggeringFiles(),
+                            pomEvidence,
+                            transitiveEvidence,
+                            forceIncluded,
+                            forceBuildPatterns)
+                    : Map.of();
 
             if (directlyAffected.isEmpty() && transitivelyAffected.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
@@ -356,6 +373,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         ? null
                         : reactorTrimmer.computeBuildSet(
                                 directlyAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+                if (trimResult != null && config.isExplain()) {
+                    mergeTrimReasons(evidence, trimResult);
+                }
 
                 writeReport(
                         config,
@@ -368,14 +388,26 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .affectedByPom(affectedByPom)
                                 .forceIncluded(forceIncluded)
                                 .transitivelyAffected(transitivelyAffected)
+                                .evidence(evidence)
                                 .trimResult(trimResult)
                                 .build());
+                if (config.isExplain()) {
+                    Set<MavenProject> reportedModules = new LinkedHashSet<>(allAffected);
+                    if (trimResult != null) {
+                        reportedModules.addAll(trimResult.getDownstreamOnly());
+                        reportedModules.addAll(trimResult.getDownstreamTestOnly());
+                    }
+                    logExplainDecisions(allProjects, reportedModules, evidence);
+                }
                 return;
             }
 
             // Compute full build set with upstream/downstream
             TrimResult trimResult = reactorTrimmer.computeBuildSet(
                     allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+            if (config.isExplain()) {
+                mergeTrimReasons(evidence, trimResult);
+            }
 
             if (config.isModeSkipTests()) {
                 applySkipTests(
@@ -388,6 +420,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         includeMatchers,
                         reactorRoot,
                         collectCache);
+                if (config.isExplain()) {
+                    logExplainDecisions(allProjects, new LinkedHashSet<>(trimResult.getBuildSet()), evidence);
+                }
             } else {
                 // trim mode: remove unaffected projects from reactor
                 List<MavenProject> buildSet = trimResult.getBuildSet();
@@ -405,6 +440,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 session.setProjects(buildSet);
                 // Apply per-category args in trim mode
                 applyPerCategoryArgs(trimResult, config);
+                if (config.isExplain()) {
+                    logExplainDecisions(allProjects, new LinkedHashSet<>(buildSet), evidence);
+                }
             }
 
         } catch (ScalpelException e) {
@@ -518,8 +556,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
             MavenSession session,
-            Map<MavenProject, DependencyResolutionResult> collectCache) {
+            Map<MavenProject, DependencyResolutionResult> collectCache,
+            Map<MavenProject, List<String>> returnEvidence) {
         Map<MavenProject, List<String>> transitivelyAffected = new LinkedHashMap<>();
+        Map<MavenProject, List<String>> transitiveEvidence = new LinkedHashMap<>();
         if (changedManagedDepGAs.isEmpty() && changedManagedPluginGAs.isEmpty()) {
             logger.debug("Skipping transitive analysis: no changed managed dependencies or plugins to check against");
             return transitivelyAffected;
@@ -533,10 +573,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (directlyAffected.contains(project)) {
                 continue;
             }
-            List<String> reasons = computeTransitiveReasons(
+            TransitiveMatch match = computeTransitiveMatch(
                     project, changedManagedDepGAs, changedManagedPluginGAs, session, collectCache);
-            if (!reasons.isEmpty()) {
-                transitivelyAffected.put(project, reasons);
+            if (!match.reasons.isEmpty()) {
+                transitivelyAffected.put(project, match.reasons);
+                transitiveEvidence.put(project, match.evidence);
             }
         }
         if (!transitivelyAffected.isEmpty()) {
@@ -545,30 +586,48 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     transitivelyAffected.size(),
                     keys(transitivelyAffected.keySet()));
         }
+        returnEvidence.putAll(transitiveEvidence);
         return transitivelyAffected;
     }
 
-    private List<String> computeTransitiveReasons(
+    private static final class TransitiveMatch {
+        final List<String> reasons;
+        final List<String> evidence;
+
+        TransitiveMatch(List<String> reasons, List<String> evidence) {
+            this.reasons = reasons;
+            this.evidence = evidence;
+        }
+    }
+
+    private TransitiveMatch computeTransitiveMatch(
             MavenProject project,
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache) {
         List<String> reasons = new ArrayList<>();
-        if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
-            reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
+        List<String> evidence = new ArrayList<>();
+        if (!changedManagedPluginGAs.isEmpty()) {
+            String changedPlugin = findChangedPlugin(project, changedManagedPluginGAs);
+            if (changedPlugin != null) {
+                reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
+                evidence.add("managed plugin " + changedPlugin);
+            }
         }
         if (!changedManagedDepGAs.isEmpty()) {
-            String depScope = getChangedTransitiveDependencyScope(project, session, changedManagedDepGAs, collectCache);
-            if (depScope != null) {
-                if ("test".equals(depScope)) {
+            ChangedDependencyMatch match =
+                    getChangedTransitiveDependencyMatch(project, session, changedManagedDepGAs, collectCache);
+            if (match != null) {
+                if ("test".equals(match.scope)) {
                     reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
                 } else {
                     reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
                 }
+                evidence.add("managed dep " + match.ga);
             }
         }
-        return reasons;
+        return new TransitiveMatch(reasons, evidence);
     }
 
     private void applySkipTests(
@@ -718,14 +777,21 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     }
 
     private boolean usesChangedPlugin(MavenProject project, Set<String> changedPluginGAs) {
+        return findChangedPlugin(project, changedPluginGAs) != null;
+    }
+
+    /**
+     * Returns the first changed managed plugin GA used by the project, or null.
+     */
+    private String findChangedPlugin(MavenProject project, Set<String> changedPluginGAs) {
         for (Plugin plugin : project.getBuildPlugins()) {
             String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
             if (changedPluginGAs.contains(ga)) {
                 logger.debug("Module {} uses changed managed plugin {}", key(project), ga);
-                return true;
+                return ga;
             }
         }
-        return false;
+        return null;
     }
 
     private boolean matchesDownstreamExclusion(MavenProject project, List<String> patterns) {
@@ -774,7 +840,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenSession session,
             Set<String> changedGAs,
             Map<MavenProject, DependencyResolutionResult> collectCache) {
-        return getChangedTransitiveDependencyScope(project, session, changedGAs, collectCache) != null;
+        return getChangedTransitiveDependencyMatch(project, session, changedGAs, collectCache) != null;
     }
 
     /**
@@ -796,7 +862,17 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
      * Uses a reject-all DependencyFilter so that only the dependency graph is collected
      * without downloading any artifact files — we only need GA coordinates and scopes.
      */
-    private String getChangedTransitiveDependencyScope(
+    private static final class ChangedDependencyMatch {
+        final String ga;
+        final String scope;
+
+        ChangedDependencyMatch(String ga, String scope) {
+            this.ga = ga;
+            this.scope = scope;
+        }
+    }
+
+    private ChangedDependencyMatch getChangedTransitiveDependencyMatch(
             MavenProject project,
             MavenSession session,
             Set<String> changedGAs,
@@ -833,15 +909,17 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         if (root == null) {
             return null;
         }
-        return findChangedDependencyScope(root, changedGAs, project);
+        return findChangedDependency(root, changedGAs, project);
     }
 
     /**
      * Walks the dependency graph tree to find any dependency matching the changed GAs,
-     * returning the narrowest non-test scope found (or "test" if only test-scoped matches).
+     * returning the match with the narrowest non-test scope (or "test" if only test-scoped matches).
      */
-    private String findChangedDependencyScope(DependencyNode root, Set<String> changedGAs, MavenProject project) {
+    private ChangedDependencyMatch findChangedDependency(
+            DependencyNode root, Set<String> changedGAs, MavenProject project) {
         String narrowestScope = null;
+        String narrowestGa = null;
         Set<String> visited = new HashSet<>();
         List<DependencyNode> stack = new ArrayList<>();
         stack.addAll(root.getChildren());
@@ -863,13 +941,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         ga,
                         scope);
                 if (scope == null || !"test".equals(scope)) {
-                    return scope != null ? scope : "compile";
+                    return new ChangedDependencyMatch(ga, scope != null ? scope : "compile");
                 }
-                narrowestScope = "test";
+                if (narrowestScope == null) {
+                    narrowestScope = "test";
+                    narrowestGa = ga;
+                }
             }
             stack.addAll(node.getChildren());
         }
-        return narrowestScope;
+        return narrowestScope != null ? new ChangedDependencyMatch(narrowestGa, narrowestScope) : null;
     }
 
     private void writeImpactedLog(ScalpelConfiguration config, Path reactorRoot, Set<MavenProject> affectedModules)
@@ -968,6 +1049,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             project.getGroupId(), project.getArtifactId(), path, reasons)
                     .category(ScalpelReport.CATEGORY_DIRECT)
                     .sourceSet(sourceSet)
+                    .evidence(ctx.evidence.get(project))
                     .build());
         }
     }
@@ -998,6 +1080,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             project.getGroupId(), project.getArtifactId(), path, entry.getValue())
                     .category(category)
                     .testsSkippedReason(testsSkippedReason)
+                    .evidence(ctx.evidence.get(project))
                     .build());
         }
     }
@@ -1077,6 +1160,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 project.getGroupId(), project.getArtifactId(), path, List.of(reason))
                         .category(ScalpelReport.CATEGORY_DOWNSTREAM)
                         .testsSkippedReason(testsSkippedReason)
+                        .evidence(ctx.evidence.get(project))
                         .build());
             }
         }
@@ -1117,18 +1201,72 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
     }
 
-    private boolean matchesForceBuild(MavenProject project, List<String> patterns) {
+    private String matchesForceBuild(MavenProject project, List<String> patterns) {
         for (String pattern : patterns) {
             try {
                 if (project.getArtifactId().matches(pattern)) {
                     logger.debug("Scalpel: Force-including module {} (matches {})", key(project), pattern);
-                    return true;
+                    return pattern;
                 }
             } catch (PatternSyntaxException e) {
                 logger.warn("Scalpel: Invalid regex pattern '{}' in forceBuildModules: {}", pattern, e.getMessage());
             }
         }
-        return false;
+        return null;
+    }
+
+    /**
+     * Assembles explain-mode evidence per module: the specific input (changed file, property,
+     * managed dep/plugin GA, force pattern, upstream/downstream relationship) that put each
+     * module into the affected/build set.
+     */
+    private static Map<MavenProject, List<String>> buildEvidence(
+            Map<MavenProject, Set<String>> triggeringFiles,
+            Map<MavenProject, Set<String>> pomEvidence,
+            Map<MavenProject, List<String>> transitiveEvidence,
+            Set<MavenProject> forceIncluded,
+            Map<MavenProject, String> forceBuildPatterns) {
+        Map<MavenProject, List<String>> evidence = new LinkedHashMap<>();
+        for (Map.Entry<MavenProject, Set<String>> entry : triggeringFiles.entrySet()) {
+            evidence.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).addAll(entry.getValue());
+        }
+        for (Map.Entry<MavenProject, Set<String>> entry : pomEvidence.entrySet()) {
+            evidence.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).addAll(entry.getValue());
+        }
+        for (Map.Entry<MavenProject, List<String>> entry : transitiveEvidence.entrySet()) {
+            evidence.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).addAll(entry.getValue());
+        }
+        for (MavenProject project : forceIncluded) {
+            String pattern = forceBuildPatterns.get(project);
+            evidence.computeIfAbsent(project, k -> new ArrayList<>())
+                    .add("forced by forceBuildModules pattern " + pattern);
+        }
+        return evidence;
+    }
+
+    private void mergeTrimReasons(Map<MavenProject, List<String>> evidence, TrimResult trimResult) {
+        for (Map.Entry<MavenProject, List<String>> entry :
+                trimResult.getBuildReasons().entrySet()) {
+            evidence.computeIfAbsent(entry.getKey(), k -> new ArrayList<>()).addAll(entry.getValue());
+        }
+    }
+
+    /**
+     * Logs a per-module BUILD/SKIP decision with the specific evidence (explain mode).
+     */
+    private void logExplainDecisions(
+            List<MavenProject> allProjects, Set<MavenProject> buildSet, Map<MavenProject, List<String>> evidence) {
+        for (MavenProject project : allProjects) {
+            if (buildSet.contains(project)) {
+                List<String> items = evidence.get(project);
+                String because = items == null || items.isEmpty()
+                        ? "affected (no specific input recorded)"
+                        : String.join("; ", items);
+                logger.info("Scalpel explain: BUILD {} because: {}", key(project), because);
+            } else {
+                logger.info("Scalpel explain: SKIP {} (not affected by changeset)", key(project));
+            }
+        }
     }
 
     private void skipTestsOnAll(List<MavenProject> projects) {

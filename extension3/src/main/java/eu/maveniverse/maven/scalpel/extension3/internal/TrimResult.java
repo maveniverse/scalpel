@@ -9,8 +9,10 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.apache.maven.project.MavenProject;
 
@@ -26,6 +28,7 @@ final class TrimResult {
     private final Set<MavenProject> upstreamOnly;
     private final Set<MavenProject> downstreamOnly;
     private final Set<MavenProject> downstreamTestOnly;
+    private final Map<MavenProject, java.util.List<String>> buildReasons;
 
     TrimResult(
             List<MavenProject> buildSet,
@@ -41,11 +44,22 @@ final class TrimResult {
             Set<MavenProject> upstreamOnly,
             Set<MavenProject> downstreamOnly,
             Set<MavenProject> downstreamTestOnly) {
+        this(buildSet, directlyAffected, upstreamOnly, downstreamOnly, downstreamTestOnly, Map.of());
+    }
+
+    TrimResult(
+            List<MavenProject> buildSet,
+            Set<MavenProject> directlyAffected,
+            Set<MavenProject> upstreamOnly,
+            Set<MavenProject> downstreamOnly,
+            Set<MavenProject> downstreamTestOnly,
+            Map<MavenProject, java.util.List<String>> buildReasons) {
         this.buildSet = Collections.unmodifiableList(new ArrayList<>(buildSet));
         this.directlyAffected = Collections.unmodifiableSet(new LinkedHashSet<>(directlyAffected));
         this.upstreamOnly = Collections.unmodifiableSet(new LinkedHashSet<>(upstreamOnly));
         this.downstreamOnly = Collections.unmodifiableSet(new LinkedHashSet<>(downstreamOnly));
         this.downstreamTestOnly = Collections.unmodifiableSet(new LinkedHashSet<>(downstreamTestOnly));
+        this.buildReasons = Collections.unmodifiableMap(new LinkedHashMap<>(buildReasons));
     }
 
     List<MavenProject> getBuildSet() {
@@ -66,5 +80,13 @@ final class TrimResult {
 
     Set<MavenProject> getDownstreamTestOnly() {
         return downstreamTestOnly;
+    }
+
+    /**
+     * Why each non-direct module is in the build set (explain-mode evidence),
+     * e.g. "downstream of g:a" or "upstream of g:a".
+     */
+    Map<MavenProject, java.util.List<String>> getBuildReasons() {
+        return buildReasons;
     }
 }
