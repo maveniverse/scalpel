@@ -3087,6 +3087,172 @@ class ScalpelLifecycleParticipantTest {
                 "Report should show 1 excluded upstream module (module-a)");
     }
 
+    // ---------------------------------------------------------------
+    // Explain mode (#93): per-module decision evidence
+    // ---------------------------------------------------------------
+
+    @Test
+    void explainMode_directlyAffectedModuleCarriesTriggeringFile() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        writePom(root, "module-b/pom.xml", simpleChildPom("module-b"));
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB =
+                createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", simpleChildPom("module-b"));
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.explain", "true");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        String block = extractModuleBlock(json, "module-a");
+        assertTrue(block != null && block.contains("\"module-a/src/main/java/Foo.java\""),
+                "module-a evidence must name the triggering changed file");
+    }
+
+    @Test
+    void explainMode_pomPropertyChildCarriesPropertyEvidence() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-x</module><module>module-y</module></modules>
+                  <properties>
+                    <foo.version>1.0</foo.version>
+                  </properties>
+                </project>
+                """;
+        String newParentPom = oldParentPom.replace("<foo.version>1.0</foo.version>", "<foo.version>2.0</foo.version>");
+        writePom(root, "pom.xml", newParentPom);
+
+        String moduleXPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-x</artifactId>
+                  <dependencies>
+                    <dependency><groupId>org.example</groupId><artifactId>lib</artifactId><version>${foo.version}</version></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "module-x/pom.xml", moduleXPom);
+        String moduleYPom = simpleChildPom("module-y");
+        writePom(root, "module-y/pom.xml", moduleYPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleX = createProject("com.example", "module-x", "1.0", root, "module-x/pom.xml", moduleXPom);
+        moduleX.setParent(parentProject);
+        MavenProject moduleY = createProject("com.example", "module-y", "1.0", root, "module-y/pom.xml", moduleYPom);
+        moduleY.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleX, moduleY);
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.explain", "true");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        String block = extractModuleBlock(json, "module-x");
+        assertTrue(block != null && block.contains("property foo.version"),
+                "module-x evidence must name the changed property, block was: " + block);
+        assertFalse(modulePresent(json, "module-y"), "module-y does not reference the property, must not be affected");
+    }
+
+    @Test
+    void explainDisabled_reportHasNoEvidenceField() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-x</module></modules>
+                  <properties>
+                    <foo.version>1.0</foo.version>
+                  </properties>
+                </project>
+                """;
+        String newParentPom = oldParentPom.replace("<foo.version>1.0</foo.version>", "<foo.version>2.0</foo.version>");
+        writePom(root, "pom.xml", newParentPom);
+
+        String moduleXPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-x</artifactId>
+                  <dependencies>
+                    <dependency><groupId>org.example</groupId><artifactId>lib</artifactId><version>${foo.version}</version></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "module-x/pom.xml", moduleXPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleX = createProject("com.example", "module-x", "1.0", root, "module-x/pom.xml", moduleXPom);
+        moduleX.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleX);
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertFalse(json.contains("evidence"), "report must be unchanged (no evidence field) when explain=false");
+    }
+
     // --- Helper methods ---
 
     private void setupEmptyDependencyResolution() throws Exception {
