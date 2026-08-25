@@ -424,6 +424,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .forceIncluded(forceIncluded)
                                 .transitivelyAffected(transitivelyAffected)
                                 .trimResult(trimResult)
+                                .filteredBuildSet(buildSet)
                                 .build());
             }
 
@@ -974,7 +975,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         Set<MavenProject> included = new LinkedHashSet<>(ctx.directlyAffected);
         included.addAll(ctx.transitivelyAffected.keySet());
         if (ctx.trimResult != null) {
-            included.addAll(ctx.trimResult.getBuildSet());
+            // Use the filtered build set when available (trim mode with includePaths),
+            // so modules removed by the includePaths scope check appear in skippedModules.
+            if (ctx.filteredBuildSet != null) {
+                included.addAll(ctx.filteredBuildSet);
+            } else {
+                included.addAll(ctx.trimResult.getBuildSet());
+            }
         }
         for (MavenProject project : allProjects) {
             if (!included.contains(project)) {

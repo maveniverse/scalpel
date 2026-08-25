@@ -28,6 +28,11 @@ final class AnalysisContext {
     final Set<MavenProject> forceIncluded;
     final Map<MavenProject, List<String>> transitivelyAffected;
     final TrimResult trimResult;
+    /**
+     * The final build set actually passed to {@code session.setProjects()}, after
+     * includePaths filtering. Null when not in trim mode or when includePaths is empty.
+     */
+    final List<MavenProject> filteredBuildSet;
 
     private AnalysisContext(Builder builder) {
         this.changedFiles = builder.changedFiles;
@@ -41,6 +46,7 @@ final class AnalysisContext {
         this.forceIncluded = builder.forceIncluded;
         this.transitivelyAffected = builder.transitivelyAffected;
         this.trimResult = builder.trimResult;
+        this.filteredBuildSet = builder.filteredBuildSet;
     }
 
     static Builder builder(
@@ -77,6 +83,7 @@ final class AnalysisContext {
         private Set<MavenProject> forceIncluded = Set.of();
         private Map<MavenProject, List<String>> transitivelyAffected = Map.of();
         private TrimResult trimResult;
+        private List<MavenProject> filteredBuildSet;
 
         private Builder() {}
 
@@ -112,6 +119,11 @@ final class AnalysisContext {
 
         Builder trimResult(TrimResult trimResult) {
             this.trimResult = trimResult;
+            return this;
+        }
+
+        Builder filteredBuildSet(List<MavenProject> filteredBuildSet) {
+            this.filteredBuildSet = filteredBuildSet;
             return this;
         }
 

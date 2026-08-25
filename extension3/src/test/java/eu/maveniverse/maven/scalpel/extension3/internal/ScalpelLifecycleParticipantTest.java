@@ -2534,6 +2534,63 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void trimMode_includePathsScopeExcludedModuleAppearsInSkippedModules() throws Exception {
+        // module-a has source changes and matches includePaths.
+        // module-b depends on module-a (downstream) but is outside includePaths.
+        // module-b must appear in skippedModules (NOT_AFFECTED) and NOT in affectedModules.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        // Set up dependency graph: module-b is downstream of module-a
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        ProjectDependencyGraph graph = session.getProjectDependencyGraph();
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        session.getSystemProperties().setProperty("scalpel.includePaths", "module-a/**");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "trim mode should write the JSON report");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-b was removed from the trimmed reactor by includePaths:
+        // it must appear in skippedModules with NOT_AFFECTED
+        assertTrue(
+                skippedModuleHasReason(json, "module-b", "NOT_AFFECTED"),
+                "module-b should be in skippedModules with NOT_AFFECTED (downstream but outside includePaths)");
+        // module-a should NOT be in skippedModules (it is in the build set)
+        assertFalse(
+                skippedModulePresent(json, "module-a"),
+                "module-a should NOT be in skippedModules (it is in the filtered build set)");
+        // module-b should NOT be in affectedModules (filtered by report-side includePaths)
+        assertFalse(
+                modulePresent(json, "module-b"), "module-b should NOT be in affectedModules (outside includePaths)");
+    }
+
+    @Test
     void reportMode_includePathsExcludesDownstreamOutsideScope() throws Exception {
         // module-a has source changes and matches includePaths.
         // module-b depends on module-a (downstream) but is outside includePaths.
