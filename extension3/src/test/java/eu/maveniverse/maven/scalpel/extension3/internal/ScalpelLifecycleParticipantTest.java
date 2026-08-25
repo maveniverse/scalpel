@@ -936,6 +936,137 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void trimMode_reportListsSkippedModulesWithNotAffectedReason() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "trim mode should write the JSON report");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-b was trimmed out of the build: it must be enumerated with a reason
+        assertTrue(json.contains("\"skippedModules\""), "report must contain skippedModules array");
+        assertTrue(
+                skippedModuleHasReason(json, "module-b", "NOT_AFFECTED"),
+                "module-b should be in skippedModules with NOT_AFFECTED");
+        // the affected module must not appear in the skipped set
+        assertFalse(
+                skippedModulePresent(json, "module-a"),
+                "module-a should NOT be in skippedModules (it is in the build set)");
+    }
+
+    @Test
+    void trimMode_reportOmitsSkippedModulesWhenNothingSkipped() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        // module-a is directly affected; the parent is force-included so nothing is skipped
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.forceBuildModules", "parent");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "trim mode should write the JSON report");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertFalse(json.contains("\"skippedModules\""), "skippedModules must be omitted when nothing is skipped");
+    }
+
+    private boolean skippedModulePresent(String json, String artifactId) {
+        String skippedSection = extractSection(json, "skippedModules");
+        return skippedSection != null && skippedSection.contains("\"artifactId\": \"" + artifactId + "\"");
+    }
+
+    private boolean skippedModuleHasReason(String json, String artifactId, String reason) {
+        String skippedSection = extractSection(json, "skippedModules");
+        if (skippedSection == null) {
+            return false;
+        }
+        String marker = "\"artifactId\": \"" + artifactId + "\"";
+        int idx = skippedSection.indexOf(marker);
+        if (idx < 0) {
+            return false;
+        }
+        int end = skippedSection.indexOf("}", idx);
+        if (end < 0) {
+            return false;
+        }
+        return skippedSection
+                .substring(idx, end)
+                .contains("\"reason\": \"" + reason + "\"");
+    }
+
+    private String extractSection(String json, String sectionName) {
+        int start = json.indexOf("\"" + sectionName + "\":");
+        if (start < 0) {
+            return null;
+        }
+        int bracketStart = json.indexOf("[", start);
+        if (bracketStart < 0) {
+            return null;
+        }
+        int depth = 0;
+        for (int i = bracketStart; i < json.length(); i++) {
+            if (json.charAt(i) == '[') {
+                depth++;
+            }
+            if (json.charAt(i) == ']') {
+                depth--;
+            }
+            if (depth == 0) {
+                return json.substring(bracketStart, i + 1);
+            }
+        }
+        return null;
+    }
+
+    @Test
     void skipTestsMode_skipsUnaffectedModules() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
