@@ -16,9 +16,15 @@ on:
     tags:
       - '[0-9]*.[0-9]*.[0-9]*'
 
+permissions:
+  contents: read
+
 jobs:
   release:
     name: Release to Maven Central
+    permissions:
+      contents: write
+      issues: write
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
@@ -106,5 +112,5 @@ jobs:
             gh release edit $version --draft=false --verify-tag --title "$name $version"
           else
             echo "Creating release \"$name $version\" from tag"
-            gh release create $version --verify-tag --notes-from-tag --title "$name $version" || echo "Release already exists, skipping creation"
+            gh release create $version --verify-tag --notes-from-tag --title "$name $version"
           fi

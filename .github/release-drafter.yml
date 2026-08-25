@@ -17,6 +17,29 @@ categories:
       - 'github_actions'
       - 'java'
 
+autolabeler:
+  - label: 'bug'
+    branch:
+      - '/fix\/.+/'
+    title:
+      - '/fix/i'
+  - label: 'enhancement'
+    branch:
+      - '/feature\/.+/'
+  - label: 'documentation'
+    files:
+      - '*.md'
+      - 'docs/**'
+  - label: 'github_actions'
+    files:
+      - '.github/workflows/**'
+      - '.github/**/*.yml'
+  - label: 'java'
+    files:
+      - '**/*.java'
+      - 'pom.xml'
+      - '**/pom.xml'
+
 exclude-labels:
   - 'duplicate'
   - 'invalid'
