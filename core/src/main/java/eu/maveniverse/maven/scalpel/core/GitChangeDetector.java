@@ -167,14 +167,36 @@ public class GitChangeDetector {
     }
 
     public void fetchBranch(Repository repository, String baseBranch) throws IOException {
-        // Parse "origin/main" → remote="origin", branch="main"
-        int slashIndex = baseBranch.indexOf('/');
-        if (slashIndex < 0) {
-            logger.debug("Cannot parse remote from baseBranch '{}', skipping fetch", baseBranch);
+        if (baseBranch == null || baseBranch.isEmpty()) {
+            logger.debug("Empty baseBranch, skipping fetch");
             return;
         }
-        String remote = baseBranch.substring(0, slashIndex);
-        String branch = baseBranch.substring(slashIndex + 1);
+        // Reject URL-shaped values early: JGit treats unknown remote names as URLs,
+        // so a typo like "git@host:evil.git/main" would otherwise attempt a network fetch
+        if (baseBranch.contains("://") || baseBranch.startsWith("git@") || baseBranch.contains(":")) {
+            throw new IOException("Invalid scalpel.baseBranch '" + baseBranch
+                    + "': URL-shaped value, expected <remote>/<branch> or <branch>");
+        }
+        // Only treat the prefix before the first slash as a remote if it is a configured remote;
+        // otherwise the whole string is a (possibly slash-containing) local branch name
+        String remote = null;
+        String branch = baseBranch;
+        int slashIndex = baseBranch.indexOf('/');
+        if (slashIndex > 0) {
+            String candidate = baseBranch.substring(0, slashIndex);
+            if (repository.getRemoteNames().contains(candidate)) {
+                remote = candidate;
+                branch = baseBranch.substring(slashIndex + 1);
+            }
+        }
+        if (!Repository.isValidRefName("refs/heads/" + branch)) {
+            throw new IOException("Invalid scalpel.baseBranch '" + baseBranch + "': not a valid branch name"
+                    + (branch.contains("*") ? " (wildcards are not allowed)" : ""));
+        }
+        if (remote == null) {
+            logger.debug("No configured remote prefix in baseBranch '{}', skipping fetch", baseBranch);
+            return;
+        }
         String refspec = "+refs/heads/" + branch + ":refs/remotes/" + remote + "/" + branch;
 
         logger.info("Scalpel: Fetching {} from {}", branch, remote);
