@@ -197,8 +197,8 @@ class PomChangeAnalyzer {
 
         if (!unmatchedPomPaths.isEmpty()) {
             logger.warn(
-                    "Scalpel: {} changed POM(s) match no reactor project (profile-gated or excluded by -pl); "
-                            + "their changes are ignored: {}",
+                    "Scalpel: {} changed POM(s) match no reactor project (profile-gated, excluded by -pl, "
+                            + "or module removed); their changes are ignored: {}",
                     unmatchedPomPaths.size(),
                     unmatchedPomPaths);
         }
