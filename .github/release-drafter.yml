@@ -13,6 +13,7 @@ categories:
       - 'documentation'
   - title: '🧰 Maintenance'
     labels:
+      - 'maintenance'
       - 'dependencies'
       - 'github_actions'
       - 'java'
@@ -30,6 +31,12 @@ autolabeler:
     files:
       - '*.md'
       - 'docs/**'
+  - label: 'maintenance'
+    branch:
+      - '/chore\/.+/'
+      - '/quick-fix\/.+/'
+    title:
+      - '/chore/i'
   - label: 'github_actions'
     files:
       - '.github/workflows/**'
@@ -60,6 +67,7 @@ version-resolver:
   patch:
     labels:
       - 'bug'
+      - 'maintenance'
       - 'dependencies'
       - 'github_actions'
       - 'java'
