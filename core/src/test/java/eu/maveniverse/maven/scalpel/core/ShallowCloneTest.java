@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -87,6 +88,23 @@ class ShallowCloneTest {
             assertNull(
                     detector.findMergeBase(repository, "main", "HEAD"),
                     "merge base should not be resolvable on a shallow repo with disconnected refs");
+        }
+    }
+
+    @Test
+    void isShallow_detectsShallowMarker() throws Exception {
+        Path repoDir = createShallowRepoWithDisconnectedBaseBranch();
+        try (Git git = Git.open(repoDir.toFile());
+                Repository repository = git.getRepository()) {
+            assertTrue(new GitChangeDetector().isShallow(repository));
+        }
+        // a plain repo with full history is not shallow
+        Path fullDir = tempDir.resolveSibling(tempDir.getFileName() + "-full");
+        try (Git git = Git.init().setDirectory(fullDir.toFile()).call()) {
+            write(fullDir, "f.txt", "x");
+            git.add().addFilepattern("f.txt").call();
+            git.commit().setMessage("c").call();
+            assertFalse(new GitChangeDetector().isShallow(git.getRepository()));
         }
     }
 

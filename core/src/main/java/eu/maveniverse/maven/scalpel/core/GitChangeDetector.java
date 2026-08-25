@@ -8,6 +8,7 @@
 package eu.maveniverse.maven.scalpel.core;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -50,6 +51,15 @@ public class GitChangeDetector {
         return repository.getBranch();
     }
 
+    /**
+     * Tells whether the repository is shallow (created or fetched with a depth limit, e.g.
+     * actions/checkout with {@code fetch-depth: 1}), which is recorded in {@code .git/shallow}.
+     * JGit 5.x exposes no accessor for this, so the marker file is checked directly.
+     */
+    public boolean isShallow(Repository repository) {
+        return repository.getDirectory() != null && new File(repository.getDirectory(), "shallow").isFile();
+    }
+
     public ObjectId findMergeBase(Repository repository, String baseBranch, String head) throws IOException {
         ObjectId baseId = repository.resolve(baseBranch);
         if (baseId == null) {
@@ -69,6 +79,14 @@ public class GitChangeDetector {
             RevCommit mergeBase = revWalk.next();
             if (mergeBase == null) {
                 logger.warn("No merge base found between {} and {}", baseBranch, head);
+                if (isShallow(repository)) {
+                    logger.warn(
+                            "Repository is shallow (depth-limited clone/fetch, e.g. actions/checkout with fetch-depth: 1);"
+                                    + " the connecting history between {} and {} may be missing. Fix: use fetch-depth: 0"
+                                    + " in CI, or run 'git fetch --unshallow' before the build",
+                            baseBranch,
+                            head);
+                }
                 return null;
             }
             logger.debug("Merge base between {} and {}: {}", baseBranch, head, mergeBase.getName());
@@ -220,6 +238,14 @@ public class GitChangeDetector {
         String refspec = "+refs/heads/" + branch + ":refs/remotes/" + remote + "/" + branch;
 
         logger.info("Scalpel: Fetching {} from {}", branch, remote);
+        if (isShallow(repository)) {
+            // JGit 5.x (the Java-8 compatible line this build targets) has no depth controls
+            // on FetchCommand, so the fetch cannot be bounded or made deep on shallow repos.
+            logger.warn(
+                    "Scalpel: Repository is shallow; this fetch of {} is unbounded and may not restore the"
+                            + " missing history. Use fetch-depth: 0 in CI or 'git fetch --unshallow' before the build",
+                    baseBranch);
+        }
         try (Git git = new Git(repository)) {
             git.fetch().setRemote(remote).setRefSpecs(new RefSpec(refspec)).call();
         } catch (GitAPIException | JGitInternalException e) {
