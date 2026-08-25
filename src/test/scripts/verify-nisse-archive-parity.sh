@@ -15,10 +15,22 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-# Resolve project.version from Maven via help:evaluate
+# Resolve project.version from Maven via help:evaluate.
+# Stderr is captured and printed on failure so Maven errors are not silently lost.
 resolve_version() {
     local dir="$1"
-    (cd "$dir" && ./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout -B 2>/dev/null)
+    local stderr_file
+    stderr_file="$(mktemp)"
+    local version
+    if version="$(cd "$dir" && ./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout -B 2>"$stderr_file")"; then
+        rm -f "$stderr_file"
+        printf '%s' "$version"
+    else
+        printf 'Maven evaluation failed in %s:\n' "$dir" >&2
+        cat "$stderr_file" >&2
+        rm -f "$stderr_file"
+        return 1
+    fi
 }
 
 printf '=== Test 1: git checkout build ===\n'
@@ -80,7 +92,7 @@ printf '\n=== Test 4: no-reachable-tag guard ===\n'
 ORPHAN_DIR="$WORK_DIR/orphan-repo"
 mkdir -p "$ORPHAN_DIR"
 git -C "$ORPHAN_DIR" init -q
-git -C "$ORPHAN_DIR" commit --allow-empty -m "orphan" -q
+git -c user.name=test -c user.email=test@test -C "$ORPHAN_DIR" commit --allow-empty -m "orphan" -q
 ORPHAN_DESCRIBE="$(git -C "$ORPHAN_DIR" log -1 --format='%(describe:tags=true)')"
 if [ -z "$ORPHAN_DESCRIBE" ]; then
     printf 'PASS: confirmed %%(describe:tags=true) is empty when no tag is reachable\n'
