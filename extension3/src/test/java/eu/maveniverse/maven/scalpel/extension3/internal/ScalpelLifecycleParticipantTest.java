@@ -2628,6 +2628,128 @@ class ScalpelLifecycleParticipantTest {
         assertFalse(modulePresent(json, "module-a"), "No module analysis should be present");
     }
 
+    /**
+     * Issue #89: with no changes detected, the stale report from a previous run must be
+     * overwritten with a skipped-status document, not left in place for CI.
+     */
+    @Test
+    void reportMode_noChanges_overwritesStaleReportWithSkippedStatus() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        Files.createDirectories(reportFile.getParent());
+        Files.write(reportFile, "STALE-REPORT".getBytes(StandardCharsets.UTF_8));
+
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(new LinkedHashSet<>(), new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        assertTrue(Files.exists(reportFile), "Report file should still exist (overwritten, not deleted)");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Overwritten report should carry skipped status");
+        assertTrue(json.contains("no changes detected"), "Overwritten report should carry accurate reason");
+        assertFalse(json.contains("STALE-REPORT"), "Stale content must not survive the bail-out");
+    }
+
+    /**
+     * Issue #89: when every changed file is excluded by path filters, the stale report from a
+     * previous run must be overwritten with a skipped-status document, not left in place for CI.
+     */
+    @Test
+    void reportMode_allPathsExcluded_overwritesStaleReportWithSkippedStatus() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        Files.createDirectories(reportFile.getParent());
+        Files.write(reportFile, "STALE-REPORT".getBytes(StandardCharsets.UTF_8));
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("docs/guide.md");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.excludePaths", "docs/**");
+
+        participant.afterProjectsRead(session);
+
+        assertTrue(Files.exists(reportFile), "Report file should still exist (overwritten, not deleted)");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Overwritten report should carry skipped status");
+        assertTrue(
+                json.contains("all changed files excluded by path filters"),
+                "Overwritten report should carry accurate reason");
+        assertFalse(json.contains("STALE-REPORT"), "Stale content must not survive the bail-out");
+    }
+
+    /**
+     * Issue #89: when detection was deliberately disabled (disableOnBranch/disableOnBaseBranch),
+     * the status document must say skipped with that reason, not failed.
+     */
+    @Test
+    void reportMode_disabledByBranch_writesSkippedStatus() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.getLastDetectionSkipReason()).thenReturn("disabled by disableOnBranch");
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Status report should be written when detection is disabled");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Deliberate disable should be reported as skipped");
+        assertTrue(json.contains("disabled by disableOnBranch"), "Reason should name the disabling config");
+        assertFalse(json.contains("\"status\": \"failed\""), "Deliberate disable must not be labelled failed");
+    }
+
     @Test
     void disabled_doesNothing() throws Exception {
         Path root = tempDir.resolve("project");

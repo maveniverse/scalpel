@@ -32,9 +32,21 @@ public class ScalpelCore {
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final GitChangeDetector gitChangeDetector;
 
+    /**
+     * Human-readable reason when the last {@link #detectChanges} invocation deliberately skipped
+     * change detection (returned null for a non-error condition such as a disableOnBranch match),
+     * or null if the last invocation did not skip or skipped due to a failSafe bail-out.
+     * Set on each call; advisory only, so a stale value from a concurrent build is harmless.
+     */
+    private volatile String lastDetectionSkipReason;
+
     @Inject
     public ScalpelCore(GitChangeDetector gitChangeDetector) {
         this.gitChangeDetector = requireNonNull(gitChangeDetector, "gitChangeDetector");
+    }
+
+    public String getLastDetectionSkipReason() {
+        return lastDetectionSkipReason;
     }
 
     /**
@@ -48,11 +60,13 @@ public class ScalpelCore {
      */
     public ChangeDetectionResult detectChanges(Path reactorRoot, ScalpelConfiguration config, Set<String> allPomPaths)
             throws ScalpelException {
+        lastDetectionSkipReason = null;
         Repository repository;
         try {
             repository = openRepository(reactorRoot);
         } catch (RepositoryNotFoundException | IllegalArgumentException e) {
             logger.info("Scalpel: Not a git repository, building all modules");
+            lastDetectionSkipReason = "not a git repository";
             return null;
         } catch (IOException e) {
             return handleError(config, "Error opening git repository", e);
@@ -69,6 +83,7 @@ public class ScalpelCore {
                                     "Scalpel: Disabled because current branch '{}' matches pattern '{}'",
                                     currentBranch,
                                     pattern);
+                            lastDetectionSkipReason = "disabled by disableOnBranch";
                             return null;
                         }
                     }
@@ -88,6 +103,7 @@ public class ScalpelCore {
                     if (matchesSafely(baseBranchName, pattern, "disableOnBaseBranch")) {
                         logger.info(
                                 "Scalpel: Disabled because base branch '{}' matches pattern '{}'", baseBranch, pattern);
+                        lastDetectionSkipReason = "disabled by disableOnBaseBranch";
                         return null;
                     }
                 }
@@ -95,6 +111,7 @@ public class ScalpelCore {
 
             if (baseBranch == null) {
                 logger.info("Scalpel: No base branch configured or detected, building all modules");
+                lastDetectionSkipReason = "no base branch configured";
                 return null;
             }
 

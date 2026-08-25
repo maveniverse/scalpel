@@ -157,6 +157,14 @@ is published alongside the code. The current version is **2**.
 }
 ```
 
+**Status-only reports:** when analysis does not complete (failSafe bail-out, unexpected
+error) or is deliberately skipped (no changes detected, disabled by
+`disableOnBranch`/`disableOnBaseBranch`/`disableTriggers`, or all changed files excluded
+by path filters), Scalpel overwrites the report file with a minimal status document so a
+previous run's report cannot be mistaken for current results. It carries two optional
+fields: `status` (`"failed"` or `"skipped"`) and `reason` (human-readable explanation,
+e.g. `"no changes detected"`). Both fields are absent from normal full reports.
+
 **Schema version history:**
 
 | Version | Changes |

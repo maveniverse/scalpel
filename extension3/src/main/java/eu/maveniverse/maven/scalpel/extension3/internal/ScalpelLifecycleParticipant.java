@@ -130,7 +130,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             ChangeDetectionResult result = scalpelCore.detectChanges(reactorRoot, config, allPomPaths);
             if (result == null) {
                 if (config.isModeReport()) {
-                    writeFailedStatusReport(config, reactorRoot, "change detection unavailable (failSafe bail-out)");
+                    String skipReason = scalpelCore.getLastDetectionSkipReason();
+                    if (skipReason != null && skipReason.startsWith("disabled by")) {
+                        writeStatusReport(config, reactorRoot, "skipped", skipReason);
+                    } else {
+                        writeStatusReport(
+                                config,
+                                reactorRoot,
+                                "failed",
+                                "change detection did not run (disabled or bail-out; see build log)");
+                    }
                 }
                 return;
             }
@@ -140,6 +149,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 if (config.isBuildAllIfNoChanges()) {
                     logger.info("Scalpel: No changes detected, building all modules (buildAllIfNoChanges=true)");
                 }
+                if (config.isModeReport()) {
+                    writeStatusReport(config, reactorRoot, "skipped", "no changes detected");
+                }
                 return;
             }
 
@@ -147,6 +159,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Check disable triggers (bail out entirely if any changed file matches)
             if (matchesDisableTrigger(changedFiles, config)) {
+                if (config.isModeReport()) {
+                    writeStatusReport(config, reactorRoot, "skipped", "disabled by disableTriggers match");
+                }
                 return;
             }
 
@@ -154,6 +169,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             changedFiles = filterExcludedPaths(changedFiles, config);
             if (changedFiles.isEmpty()) {
                 logger.info("Scalpel: All changed files excluded by path filters, building all modules");
+                if (config.isModeReport()) {
+                    writeStatusReport(config, reactorRoot, "skipped", "all changed files excluded by path filters");
+                }
                 return;
             }
 
@@ -419,6 +437,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (config.isFailSafe()) {
                 logger.warn("Scalpel: Unexpected error, building all modules: {}", e.getMessage());
                 logger.debug("Unexpected error details", e);
+                if (config.isModeReport()) {
+                    writeFailedStatusReport(config, reactorRoot, "unexpected error: " + e.getMessage());
+                }
                 return;
             }
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
@@ -917,18 +938,31 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
      * paths; write failures here are logged and swallowed (the build continues by design).
      */
     private void writeFailedStatusReport(ScalpelConfiguration config, Path reactorRoot, String reason) {
+        writeStatusReport(config, reactorRoot, "failed", reason);
+    }
+
+    /**
+     * Overwrites the configured reportFile with a minimal status-only document ("failed" for
+     * bail-outs, "skipped" for deliberate non-analysis paths) so a previous run's report cannot
+     * be mistaken for current results by CI. Write failures are logged and swallowed (the build
+     * continues by design).
+     */
+    private void writeStatusReport(ScalpelConfiguration config, Path reactorRoot, String status, String reason) {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch(config.getBaseBranch())
-                .status("failed")
+                .status(status)
                 .reason(reason)
                 .fullBuildTriggered(true)
                 .build();
         try {
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.warn(
-                    "Scalpel: Analysis failed, report at {} overwritten with failed status", config.getReportFile());
+                    "Scalpel: Analysis did not complete (status={}, reason={}), report at {} overwritten",
+                    status,
+                    reason,
+                    config.getReportFile());
         } catch (IOException e) {
-            logger.warn("Scalpel: Could not overwrite report with failed status: {}", e.toString());
+            logger.warn("Scalpel: Could not overwrite report with {} status: {}", status, e.toString());
         }
     }
 
