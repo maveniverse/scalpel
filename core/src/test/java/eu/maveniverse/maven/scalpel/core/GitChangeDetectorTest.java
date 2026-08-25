@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -401,6 +402,82 @@ class GitChangeDetectorTest {
             assertFalse(result.containsKey("missing/pom.xml"), "Missing pom should not be in the map");
             assertEquals("<project/>", new String(result.get("pom.xml"), StandardCharsets.UTF_8));
             assertEquals("<module/>", new String(result.get("sub/pom.xml"), StandardCharsets.UTF_8));
+        }
+    }
+
+    // ---- fetchBranch validation (#85) ----
+
+    /**
+     * Creates a work repo with a commit on branch main, plus a bare remote named "origin"
+     * that has main pushed to it, and configures the remote on the work repo.
+     */
+    private Repository repoWithOriginRemote() throws Exception {
+        Path remoteDir = tempDir.resolve("remote.git");
+        Path workDir = tempDir.resolve("work");
+        Files.createDirectories(workDir);
+
+        try (Git remoteGit = Git.init().setDirectory(remoteDir.toFile()).setBare(true).call()) {
+            try (Git git = Git.init().setDirectory(workDir.toFile()).call()) {
+                git.getRepository().getConfig().setString("user", null, "name", "Scalpel Test");
+                git.getRepository().getConfig().setString("user", null, "email", "scalpel@test.invalid");
+
+                Files.write(workDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+                git.add().addFilepattern("file.txt").call();
+                git.commit().setMessage("initial").call();
+                git.branchCreate().setName("main").call();
+                git.push().setRemote(remoteDir.toUri().toString()).add("main").call();
+                git.remoteAdd()
+                        .setName("origin")
+                        .setUri(new org.eclipse.jgit.transport.URIish(remoteDir.toUri().toString()))
+                        .call();
+                return git.getRepository();
+            }
+        }
+    }
+
+    @Test
+    void fetchBranch_urlShapedBaseBranch_rejectedNotFetched() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            IOException e = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "git@host:evil.git/main"));
+            assertTrue(
+                    e.getMessage().contains("URL"), "expected URL-shaped rejection message but was: " + e.getMessage());
+            IOException e2 = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "https://evil.git/main"));
+            assertTrue(
+                    e2.getMessage().contains("URL"),
+                    "expected URL-shaped rejection message but was: " + e2.getMessage());
+        }
+    }
+
+    @Test
+    void fetchBranch_slashContainingLocalBranch_skipsFetchInsteadOfBogusRemote() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            // "release" is not a configured remote: the whole string is a local branch name
+            assertDoesNotThrow(() -> detector.fetchBranch(repo, "release/1.0"));
+        }
+    }
+
+    @Test
+    void fetchBranch_wildcardBranch_rejected() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            IOException e = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "feat*"));
+            assertTrue(
+                    e.getMessage().contains("Invalid"),
+                    "expected invalid-branch rejection message but was: " + e.getMessage());
+            IOException e2 = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "origin/ma*n"));
+            assertTrue(
+                    e2.getMessage().contains("Invalid"),
+                    "expected invalid-branch rejection message but was: " + e2.getMessage());
+        }
+    }
+
+    @Test
+    void fetchBranch_typoBranchOnValidRemote_failsLoudly() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            // Valid remote, typo'd branch: the fetch must surface the failure, not swallow it
+            IOException e = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "origin/typo"));
+            assertTrue(
+                    e.getMessage().contains("origin/typo"),
+                    "expected failure naming the branch but was: " + e.getMessage());
         }
     }
 }
