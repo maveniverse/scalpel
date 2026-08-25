@@ -99,5 +99,12 @@ jobs:
           fi
 
           name="Scalpel"
-          echo "Creating release \"$name $version\" from tag"
-          gh release create $version --verify-tag --notes-from-tag --title "$name $version" || echo "Release already exists, skipping creation"
+          # If release-drafter already created a draft, publish it with the tag;
+          # otherwise fall back to creating a new release from the tag annotation.
+          if gh release view $version > /dev/null 2>&1; then
+            echo "Publishing existing draft release \"$name $version\""
+            gh release edit $version --draft=false --verify-tag --title "$name $version"
+          else
+            echo "Creating release \"$name $version\" from tag"
+            gh release create $version --verify-tag --notes-from-tag --title "$name $version" || echo "Release already exists, skipping creation"
+          fi

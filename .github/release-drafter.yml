@@ -1,0 +1,51 @@
+name-template: 'Scalpel $RESOLVED_VERSION'
+tag-template: '$RESOLVED_VERSION'
+
+categories:
+  - title: '🐛 Bug Fixes'
+    labels:
+      - 'bug'
+  - title: '🚀 Enhancements'
+    labels:
+      - 'enhancement'
+  - title: '📖 Documentation'
+    labels:
+      - 'documentation'
+  - title: '🧰 Maintenance'
+    labels:
+      - 'dependencies'
+      - 'github_actions'
+      - 'java'
+
+exclude-labels:
+  - 'duplicate'
+  - 'invalid'
+  - 'wontfix'
+  - 'question'
+
+change-template: '- $TITLE (#$NUMBER) @$AUTHOR'
+change-title-escapes: '\<*_&'
+
+version-resolver:
+  major:
+    labels:
+      - 'major'
+  minor:
+    labels:
+      - 'minor'
+      - 'enhancement'
+  patch:
+    labels:
+      - 'bug'
+      - 'dependencies'
+      - 'github_actions'
+      - 'java'
+      - 'documentation'
+  default: patch
+
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...$RESOLVED_VERSION
