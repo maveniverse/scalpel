@@ -349,34 +349,34 @@ class GitChangeDetectorTest {
     }
 
     @Test
-    void fetchBranch_nonexistentRemote_throwsIOException() throws Exception {
+    void fetchBranch_unconfiguredRemotePrefix_treatedAsLocalBranchAndSkipped() throws Exception {
         try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
             Files.write(tempDir.resolve("file.txt"), "x".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("initial").call();
 
-            // "bogus/main" parses but there is no remote called "bogus"
-            assertThrows(
-                    IOException.class,
-                    () -> detector.fetchBranch(git.getRepository(), "bogus/main"),
-                    "Fetching from a nonexistent remote should throw IOException");
+            // "bogus" is not a configured remote: per #85 the whole string is a
+            // local branch name and the fetch is skipped, not attempted against
+            // a URL parsed from the prefix
+            assertDoesNotThrow(() -> detector.fetchBranch(git.getRepository(), "bogus/main"));
         }
     }
 
     @Test
-    void fetchBranch_malformedRefspec_throwsIllegalArgumentException() throws Exception {
+    void fetchBranch_urlShapedRefspec_rejectedAsUrl() throws Exception {
         try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
             Files.write(tempDir.resolve("file.txt"), "x".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("initial").call();
 
-            // ":/nope" parses as remote=":", branch="nope" which produces an
-            // invalid RefSpec.  The current code does not catch
-            // IllegalArgumentException, so the raw exception escapes.
-            assertThrows(
-                    IllegalArgumentException.class,
+            // ":/nope" contains a colon and is URL-shaped: rejected up front with
+            // an IOException naming the configuration problem (#85), instead of
+            // escaping as a raw IllegalArgumentException from RefSpec parsing
+            IOException e = assertThrows(
+                    IOException.class,
                     () -> detector.fetchBranch(git.getRepository(), ":/nope"),
-                    "A malformed refspec should throw IllegalArgumentException");
+                    "A URL-shaped baseBranch should be rejected with IOException");
+            assertTrue(e.getMessage().contains("URL"), "message should name the URL shape: " + e.getMessage());
         }
     }
 
@@ -416,7 +416,8 @@ class GitChangeDetectorTest {
         Path workDir = tempDir.resolve("work");
         Files.createDirectories(workDir);
 
-        try (Git remoteGit = Git.init().setDirectory(remoteDir.toFile()).setBare(true).call()) {
+        try (Git remoteGit =
+                Git.init().setDirectory(remoteDir.toFile()).setBare(true).call()) {
             try (Git git = Git.init().setDirectory(workDir.toFile()).call()) {
                 git.getRepository().getConfig().setString("user", null, "name", "Scalpel Test");
                 git.getRepository().getConfig().setString("user", null, "email", "scalpel@test.invalid");
@@ -428,7 +429,8 @@ class GitChangeDetectorTest {
                 git.push().setRemote(remoteDir.toUri().toString()).add("main").call();
                 git.remoteAdd()
                         .setName("origin")
-                        .setUri(new org.eclipse.jgit.transport.URIish(remoteDir.toUri().toString()))
+                        .setUri(new org.eclipse.jgit.transport.URIish(
+                                remoteDir.toUri().toString()))
                         .call();
                 return git.getRepository();
             }
