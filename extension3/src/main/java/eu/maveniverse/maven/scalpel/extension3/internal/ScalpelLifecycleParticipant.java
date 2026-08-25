@@ -129,6 +129,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // Detect changes
             ChangeDetectionResult result = scalpelCore.detectChanges(reactorRoot, config, allPomPaths);
             if (result == null) {
+                if (config.isModeReport()) {
+                    writeFailedStatusReport(config, reactorRoot, "change detection unavailable (failSafe bail-out)");
+                }
                 return;
             }
 
@@ -211,6 +214,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     if (config.isFailSafe()) {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
                         logger.debug("POM analysis error details", e);
+                        if (config.isModeReport()) {
+                            writeFailedStatusReport(config, reactorRoot, "error analyzing POM changes");
+                        }
                         return;
                     } else {
                         throw new MavenExecutionException("Scalpel: Error analyzing POM changes", e);
@@ -888,7 +894,41 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Files.write(logPath, lines, StandardCharsets.UTF_8);
             logger.info("Scalpel: Impacted modules written to {}", config.getImpactedLog());
         } catch (IOException e) {
-            throw new MavenExecutionException("Scalpel: Failed to write impacted log", e);
+            handleWriteFailure(config, "Failed to write impacted log", e);
+        }
+    }
+
+    /**
+     * Honours failSafe on report/log write failures: with failSafe=true the build continues with a
+     * warning, otherwise the write failure fails the build as before.
+     */
+    private void handleWriteFailure(ScalpelConfiguration config, String message, IOException e)
+            throws MavenExecutionException {
+        if (config.isFailSafe()) {
+            logger.warn("Scalpel: {} (failSafe=true, continuing build): {}", message, e.toString());
+        } else {
+            throw new MavenExecutionException("Scalpel: " + message, e);
+        }
+    }
+
+    /**
+     * Overwrites the configured reportFile with a minimal failed-status document so a previous
+     * run's report cannot be mistaken for current results by CI. Only called on failSafe bail-out
+     * paths; write failures here are logged and swallowed (the build continues by design).
+     */
+    private void writeFailedStatusReport(ScalpelConfiguration config, Path reactorRoot, String reason) {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch(config.getBaseBranch())
+                .status("failed")
+                .reason(reason)
+                .fullBuildTriggered(true)
+                .build();
+        try {
+            report.writeToFile(reactorRoot, config.getReportFile());
+            logger.warn(
+                    "Scalpel: Analysis failed, report at {} overwritten with failed status", config.getReportFile());
+        } catch (IOException e) {
+            logger.warn("Scalpel: Could not overwrite report with failed status: {}", e.toString());
         }
     }
 
@@ -905,7 +945,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.info("Scalpel: Report written to {}", config.getReportFile());
         } catch (IOException e) {
-            throw new MavenExecutionException("Scalpel: Failed to write report", e);
+            handleWriteFailure(config, "Failed to write report", e);
         }
     }
 
@@ -937,7 +977,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.info("Scalpel: Report written to {}", config.getReportFile());
         } catch (IOException e) {
-            throw new MavenExecutionException("Scalpel: Failed to write report", e);
+            handleWriteFailure(config, "Failed to write report", e);
         }
     }
 

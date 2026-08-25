@@ -2620,9 +2620,12 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        // No report should be written when detection returns null
+        // Analysis bailed out: a failed-status report must be written so no stale data survives
         Path reportFile = root.resolve("target/scalpel-report.json");
-        assertFalse(Files.exists(reportFile), "Report file should not be created when detection returns null");
+        assertTrue(Files.exists(reportFile), "Failed-status report should be written when detection returns null");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"failed\""), "Report should carry failed status");
+        assertFalse(modulePresent(json, "module-a"), "No module analysis should be present");
     }
 
     @Test
