@@ -181,7 +181,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Map source changes to modules (classifying test-only vs main changes)
             ModuleMapper.Result sourceResult =
-                    moduleMapper.mapToProjectsClassified(sourceChanges, allProjects, reactorRoot);
+                    moduleMapper.mapToProjectsClassified(sourceChanges, allProjects, reactorRoot, config.isExplain());
             Set<MavenProject> affectedBySource = sourceResult.getAllAffected();
             logger.debug("Modules affected by source changes: {}", keys(affectedBySource));
             if (!sourceResult.getTestOnlyAffected().isEmpty()) {
@@ -203,7 +203,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             result.getOldPomContents(),
                             allProjects,
                             reactorRoot,
-                            config.getMaxResourceFileSize());
+                            config.getMaxResourceFileSize(),
+                            config.isExplain());
                     affectedByPom = pomResult.getAffectedProjects();
                     changedManagedDepGAs = pomResult.getChangedManagedDependencyGAs();
                     changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
@@ -292,6 +293,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     changedManagedPluginGAs,
                     session,
                     collectCache,
+                    config.isExplain(),
                     transitiveEvidence);
 
             // Explain-mode evidence: which specific input triggered each module
@@ -557,6 +559,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedPluginGAs,
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache,
+            boolean explain,
             Map<MavenProject, List<String>> returnEvidence) {
         Map<MavenProject, List<String>> transitivelyAffected = new LinkedHashMap<>();
         Map<MavenProject, List<String>> transitiveEvidence = new LinkedHashMap<>();
@@ -574,10 +577,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 continue;
             }
             TransitiveMatch match = computeTransitiveMatch(
-                    project, changedManagedDepGAs, changedManagedPluginGAs, session, collectCache);
+                    project, changedManagedDepGAs, changedManagedPluginGAs, session, collectCache, explain);
             if (!match.reasons.isEmpty()) {
                 transitivelyAffected.put(project, match.reasons);
-                transitiveEvidence.put(project, match.evidence);
+                if (explain) {
+                    transitiveEvidence.put(project, match.evidence);
+                }
             }
         }
         if (!transitivelyAffected.isEmpty()) {
@@ -605,14 +610,17 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
             MavenSession session,
-            Map<MavenProject, DependencyResolutionResult> collectCache) {
+            Map<MavenProject, DependencyResolutionResult> collectCache,
+            boolean explain) {
         List<String> reasons = new ArrayList<>();
-        List<String> evidence = new ArrayList<>();
+        List<String> evidence = explain ? new ArrayList<>() : List.of();
         if (!changedManagedPluginGAs.isEmpty()) {
             String changedPlugin = findChangedPlugin(project, changedManagedPluginGAs);
             if (changedPlugin != null) {
                 reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
-                evidence.add("managed plugin " + changedPlugin);
+                if (explain) {
+                    evidence.add("managed plugin " + changedPlugin);
+                }
             }
         }
         if (!changedManagedDepGAs.isEmpty()) {
@@ -624,7 +632,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 } else {
                     reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
                 }
-                evidence.add("managed dep " + match.ga);
+                if (explain) {
+                    evidence.add("managed dep " + match.ga);
+                }
             }
         }
         return new TransitiveMatch(reasons, evidence);

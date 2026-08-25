@@ -60,6 +60,11 @@ class ModuleMapper {
     }
 
     public Result mapToProjectsClassified(Set<String> changedFiles, List<MavenProject> projects, Path reactorRoot) {
+        return mapToProjectsClassified(changedFiles, projects, reactorRoot, true);
+    }
+
+    public Result mapToProjectsClassified(
+            Set<String> changedFiles, List<MavenProject> projects, Path reactorRoot, boolean explain) {
         // Track for each project whether it has any main (non-test) source changes
         Map<MavenProject, Boolean> hasMainChange = new LinkedHashMap<>();
         // Track which changed file triggered each project (explain-mode evidence)
@@ -82,9 +87,11 @@ class ModuleMapper {
                     } else if (!isTest) {
                         hasMainChange.put(project, Boolean.TRUE);
                     }
-                    triggeringFiles
-                            .computeIfAbsent(project, k -> new LinkedHashSet<>())
-                            .add(changedFile);
+                    if (explain) {
+                        triggeringFiles
+                                .computeIfAbsent(project, k -> new LinkedHashSet<>())
+                                .add(changedFile);
+                    }
                     break;
                 }
             }

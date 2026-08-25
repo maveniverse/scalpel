@@ -65,7 +65,9 @@ class ReactorTrimmer {
                             continue;
                         }
                         if (buildSet.add(ds)) {
-                            addReason(buildReasons, ds, "downstream of " + key(project));
+                            if (config.isExplain()) {
+                                addReason(buildReasons, ds, "downstream of " + key(project));
+                            }
                             // Check if downstream depends on the changed module via test scope only
                             String scope = getDependencyScope(ds, project);
                             if ("test".equals(scope)) {
@@ -92,7 +94,9 @@ class ReactorTrimmer {
                                 && !downstreamTestOnly.contains(us)
                                 && buildSet.add(us)) {
                             upstreamOnly.add(us);
-                            addReason(buildReasons, us, "upstream of " + key(project));
+                            if (config.isExplain()) {
+                                addReason(buildReasons, us, "upstream of " + key(project));
+                            }
                             newUpstream++;
                         }
                     }
