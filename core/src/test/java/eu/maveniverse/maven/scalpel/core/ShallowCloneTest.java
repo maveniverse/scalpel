@@ -104,7 +104,7 @@ class ShallowCloneTest {
         Path cloneDir = tempDir.resolve("clone");
         try (Git clone = Git.cloneRepository()
                         .setDepth(1)
-                        .setBranchesToClone(java.util.Collections.singletonList("refs/heads/main"))
+                        .setBranchesToClone(java.util.List.of("refs/heads/main"))
                         .setBranch("refs/heads/main")
                         .setURI(remoteDir.toUri().toString())
                         .setDirectory(cloneDir.toFile())
@@ -115,7 +115,9 @@ class ShallowCloneTest {
                     "setDepth(1) clone against a local path should produce .git/shallow");
             assertTrue(new GitChangeDetector().isShallow(repository));
             // the pre-clone history is genuinely absent: HEAD~1 cannot be resolved, so a
-            // merge base reaching past the shallow boundary comes back null
+            // merge base reaching past the shallow boundary comes back null. Note the second
+            // assertion below exercises the unresolvable-base guard in findMergeBase (the
+            // baseId == null early return), not isShallow itself.
             assertNull(repository.resolve("HEAD~1"), "HEAD~1 should not exist in a depth-1 clone");
             assertNull(
                     new GitChangeDetector().findMergeBase(repository, "HEAD~1", "HEAD"),
@@ -193,6 +195,11 @@ class ShallowCloneTest {
         void run() throws Exception;
     }
 
+    /**
+     * Runs {@code action} capturing everything written to {@link System#err} and returns it.
+     * This relies on the test classpath using slf4j-simple, whose default output target is
+     * System.err; the GitChangeDetector warnings are therefore observable through this stream.
+     */
     private static String captureErr(ThrowingRunnable action) throws Exception {
         PrintStream originalErr = System.err;
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();

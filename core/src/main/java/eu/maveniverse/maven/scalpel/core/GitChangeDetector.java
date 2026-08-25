@@ -8,8 +8,8 @@
 package eu.maveniverse.maven.scalpel.core;
 
 import java.io.ByteArrayOutputStream;
-import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -58,7 +58,8 @@ public class GitChangeDetector {
      * method; only the internal DepthWalk classes track it), so the marker file is checked directly.
      */
     public boolean isShallow(Repository repository) {
-        return repository.getDirectory() != null && new File(repository.getDirectory(), "shallow").isFile();
+        return repository.getDirectory() != null
+                && Files.isRegularFile(repository.getDirectory().toPath().resolve("shallow"));
     }
 
     public ObjectId findMergeBase(Repository repository, String baseBranch, String head) throws IOException {
