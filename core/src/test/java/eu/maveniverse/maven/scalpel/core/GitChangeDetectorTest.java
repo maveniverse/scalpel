@@ -23,6 +23,7 @@ import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
+import org.eclipse.jgit.revwalk.RevCommit;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -433,27 +434,87 @@ class GitChangeDetectorTest {
                         "1",
                         "--branch",
                         "feature",
-                        bareDir.toString(),
+                        bareDir.toUri().toString(),
                         shallowDir.toString())
                 .redirectErrorStream(true)
                 .start();
         cloneProc.getInputStream().readAllBytes();
         assertEquals(0, cloneProc.waitFor(), "shallow clone should succeed");
 
-        // Fetch the base branch ref so it can be resolved, but with limited depth
-        Process fetchProc = new ProcessBuilder("git", "fetch", "--depth", "1", "origin", baseBranchName)
+        // Fetch the base branch with an explicit refspec so origin/<baseBranch> is created
+        Process fetchProc = new ProcessBuilder(
+                        "git",
+                        "fetch",
+                        "--depth",
+                        "1",
+                        "origin",
+                        "+refs/heads/" + baseBranchName + ":refs/remotes/origin/" + baseBranchName)
                 .directory(shallowDir.toFile())
                 .redirectErrorStream(true)
                 .start();
         fetchProc.getInputStream().readAllBytes();
         assertEquals(0, fetchProc.waitFor(), "fetch should succeed");
 
-        // Now try to find the merge base — the common ancestor is not reachable
+        // Remove .git/shallow so JGit does not treat the shallow boundary as a root.
+        // Without this file JGit will attempt to walk parent commits that were not fetched,
+        // triggering MissingObjectException instead of silently stopping at the boundary.
+        Path shallowFile = shallowDir.resolve(".git/shallow");
+        assertTrue(Files.exists(shallowFile), ".git/shallow should exist after a shallow clone");
+        Files.delete(shallowFile);
+
+        // Now try to find the merge base — both refs resolve, but parent objects are missing
         try (Git git = Git.open(shallowDir.toFile())) {
+            ObjectId baseRef = git.getRepository().resolve("origin/" + baseBranchName);
+            assertNotNull(baseRef, "origin/" + baseBranchName + " should be resolvable after fetch");
+
             ObjectId result = detector.findMergeBase(git.getRepository(), "origin/" + baseBranchName, "HEAD");
 
             // Should return null gracefully instead of throwing MissingObjectException
             assertNull(result, "findMergeBase should return null in a shallow clone without reachable merge-base");
+        }
+    }
+
+    @Test
+    void findMergeBase_corruptedObject_returnsNullGracefully() throws Exception {
+        Path repoDir = tempDir.resolve("corrupt-repo");
+        Files.createDirectories(repoDir);
+        try (Git git = Git.init().setDirectory(repoDir.toFile()).call()) {
+            StoredConfig cfg = git.getRepository().getConfig();
+            cfg.setString("user", null, "name", "Test");
+            cfg.setString("user", null, "email", "test@test.invalid");
+            cfg.save();
+
+            // Create a base commit (this will be the merge-base ancestor)
+            Files.write(repoDir.resolve("base.txt"), "base".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("base.txt").call();
+            RevCommit baseCommit = git.commit().setMessage("base").call();
+            String baseSha = baseCommit.getName();
+
+            // Create branch A from base
+            git.checkout().setCreateBranch(true).setName("branchA").call();
+            Files.write(repoDir.resolve("a.txt"), "a".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("a.txt").call();
+            git.commit().setMessage("commit on A").call();
+
+            // Create branch B from base
+            git.checkout().setName(baseSha).call();
+            git.checkout().setCreateBranch(true).setName("branchB").call();
+            Files.write(repoDir.resolve("b.txt"), "b".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("b.txt").call();
+            git.commit().setMessage("commit on B").call();
+
+            // Corrupt the base commit's loose object file (CorruptObjectException extends IOException,
+            // not MissingObjectException, so this exercises the generic IOException catch)
+            Path objectFile = repoDir.resolve(".git/objects/" + baseSha.substring(0, 2) + "/" + baseSha.substring(2));
+            assertTrue(Files.exists(objectFile), "Loose object file should exist before corruption");
+            objectFile.toFile().setWritable(true);
+            Files.write(objectFile, "CORRUPT".getBytes(StandardCharsets.UTF_8));
+        }
+
+        // Reopen the repository to clear any cached objects
+        try (Git git = Git.open(repoDir.toFile())) {
+            ObjectId result = detector.findMergeBase(git.getRepository(), "branchA", "branchB");
+            assertNull(result, "findMergeBase should return null when git objects are corrupted");
         }
     }
 
