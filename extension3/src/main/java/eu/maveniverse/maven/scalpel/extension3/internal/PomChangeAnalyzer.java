@@ -223,20 +223,14 @@ class PomChangeAnalyzer {
         // Build map of reactor modules imported as BOMs by other reactor modules
         Map<MavenProject, List<MavenProject>> bomImporters = findBomImporters(allProjects);
 
-        // Build effective models for the entire reactor.
+        // Build effective models for the entire reactor using the same ModelBuilder
+        // for both old and new states.  This symmetric approach ensures identical
+        // lifecycle default plugin versions on both sides, preventing false positives.
         // Old state: changed POMs use their old bytes from git; unchanged POMs use current content.
-        // New state: Maven has already built effective models for the current reactor — use them directly.
-        // The effective models handle property interpolation, parent inheritance, and
-        // profile activation — eliminating manual property-to-managed-dep chasing.
+        // New state: built from current POM files on disk.
         Map<String, Model> oldEffectiveModels =
                 buildEffectiveModels(oldPomContents, allProjects, reactorRoot, resolutionCtx);
-        Path absRoot = reactorRoot.toAbsolutePath().normalize();
-        Map<String, Model> newEffectiveModels = new LinkedHashMap<>();
-        for (MavenProject project : allProjects) {
-            Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
-            String relPath = absRoot.relativize(pomPath).toString().replace('\\', '/');
-            newEffectiveModels.put(relPath, project.getModel());
-        }
+        Map<String, Model> newEffectiveModels = buildCurrentEffectiveModels(allProjects, reactorRoot, resolutionCtx);
 
         AnalysisContext ctx = new AnalysisContext();
         ctx.projectByPomPath = projectByPomPath;
@@ -433,8 +427,14 @@ class PomChangeAnalyzer {
         // Only report modifications/removals, not brand-new entries (issue #131).
         // Note: child-level impact uses effective dependency comparison (hasEffectiveChanges)
         // rather than GA matching against these sets — see the child analysis loop below.
+        //
+        // Managed deps: compare effective models (profile activation and parent inheritance
+        // produce the correct merged dependency list).
         Set<String> changedManagedDeps =
                 diffDependencies(getManagedDependencies(oldEffectiveModel), getManagedDependencies(newEffectiveModel));
+        // Managed plugins: compare effective models directly.  Both old and new are
+        // built by the same ModelBuilder so lifecycle defaults are identical on both
+        // sides — no filtering against raw-model GAs is needed.
         Set<String> changedManagedPlugins =
                 diffManagedPluginVersions(getManagedPlugins(oldEffectiveModel), getManagedPlugins(newEffectiveModel));
 
@@ -587,7 +587,8 @@ class PomChangeAnalyzer {
             ctx.allChangedManagedDepGAs.addAll(childChangedManagedDeps);
         }
 
-        // Managed plugins: propagate changed GAs
+        // Managed plugins: propagate changed GAs directly.  Both old and new models
+        // are built by the same ModelBuilder so no lifecycle-default filtering is needed.
         Set<String> childChangedManagedPlugins =
                 diffManagedPluginVersions(getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective));
         if (!childChangedManagedPlugins.isEmpty()) {
@@ -600,14 +601,13 @@ class PomChangeAnalyzer {
 
     /**
      * Check if a child's effective dependencies or plugins changed between old and new models.
-     * Compares the resolved dependency tree (effective dependencies) and the merged plugin
-     * list rather than managed declarations — a module is only affected if its actual build
-     * inputs change, not merely because an unused managed dependency was added (issue #131).
+     * Compares the resolved dependency tree (effective dependencies) and effective plugin
+     * list — a module is only affected if its actual build inputs change, not merely
+     * because an unused managed dependency was added (issue #131).
      * <p>
-     * Both old and new effective models are built with {@code processPlugins=true} using the
-     * container-injected {@code ModelBuilder}, so lifecycle defaults and pluginManagement
-     * merging are applied identically to both — making the comparison symmetric for
-     * dependencies and plugins alike.
+     * Both old and new effective models are built by the same {@link org.apache.maven.model.building.ModelBuilder}
+     * so lifecycle default plugin versions are identical on both sides, making direct
+     * comparison safe without GA filtering.
      */
     private boolean hasEffectiveChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
         Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
@@ -637,9 +637,8 @@ class PomChangeAnalyzer {
             changed = true;
         }
 
-        // Compare effective plugins — with processPlugins=true and the injected
-        // ModelBuilder, both old and new models have lifecycle defaults injected and
-        // pluginManagement merged, so the comparison is symmetric.
+        // Compare effective plugins directly.  Both old and new models are built by
+        // the same ModelBuilder so lifecycle defaults are identical — no GA filtering needed.
         Set<String> changedPlugins =
                 diffEffectivePlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
         if (!changedPlugins.isEmpty()) {
@@ -1201,6 +1200,10 @@ class PomChangeAnalyzer {
             return Map.of();
         }
 
+        // Collect ALL active profile IDs across the entire reactor so parent-level
+        // profiles propagate correctly to child modules during standalone model building.
+        List<String> allActiveProfileIds = collectAllActiveProfileIds(allProjects);
+
         Path tempDir = null;
         try {
             tempDir = createSecureTempDirectory("scalpel-old-poms-");
@@ -1210,15 +1213,7 @@ class PomChangeAnalyzer {
             // unchanged POMs get their current content.
             reconstructPomHierarchy(tempDir, absRoot, allProjects, oldPomContents);
 
-            // Build effective models for all reactor POMs from the temp directory.
-            // Uses the container-injected ModelBuilder — the same instance Maven uses for the
-            // reactor build — so lifecycle bindings contributed by extensions are visible and
-            // the old/new effective models are fully comparable.
-
             // Build a GAV→file map for resolving reactor-local parents and BOM imports.
-            // This ensures import-scope BOMs and parents from non-standard relative paths
-            // resolve from the temp dir (with old POM content), not from the local repo
-            // (which has current content).
             Map<String, java.io.File> reactorPomsByGAV = new LinkedHashMap<>();
             for (MavenProject project : allProjects) {
                 Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
@@ -1237,7 +1232,7 @@ class PomChangeAnalyzer {
                 Path tempPomFile = tempDir.resolve(relativePom);
 
                 Model model = buildSingleEffectiveModel(
-                        this.modelBuilder, tempPomFile, relPath, project, resolutionCtx, reactorPomsByGAV);
+                        this.modelBuilder, tempPomFile, relPath, allActiveProfileIds, resolutionCtx, reactorPomsByGAV);
                 if (model != null) {
                     result.put(relPath, model);
                 }
@@ -1252,6 +1247,57 @@ class PomChangeAnalyzer {
                 deleteRecursive(tempDir);
             }
         }
+    }
+
+    /**
+     * Build effective models from the current (new) POM files on disk using the same
+     * standalone ModelBuilder used for old models.  This ensures symmetric comparison:
+     * both sides use identical lifecycle default plugin versions, so diffing effective
+     * models produces no false positives from model-builder asymmetry.
+     */
+    Map<String, Model> buildCurrentEffectiveModels(
+            List<MavenProject> allProjects, Path reactorRoot, ModelResolutionContext resolutionCtx) {
+        List<String> allActiveProfileIds = collectAllActiveProfileIds(allProjects);
+        Path absRoot = reactorRoot.toAbsolutePath().normalize();
+
+        // Build a GAV→file map pointing to the actual (current) POM files.
+        Map<String, java.io.File> reactorPomsByGAV = new LinkedHashMap<>();
+        for (MavenProject project : allProjects) {
+            String gav = project.getGroupId() + ":" + project.getArtifactId() + ":" + project.getVersion();
+            reactorPomsByGAV.put(gav, project.getFile());
+        }
+
+        Map<String, Model> result = new LinkedHashMap<>();
+        for (MavenProject project : allProjects) {
+            Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
+            String relPath = absRoot.relativize(pomPath).toString().replace('\\', '/');
+
+            Model model = buildSingleEffectiveModel(
+                    this.modelBuilder, pomPath, relPath, allActiveProfileIds, resolutionCtx, reactorPomsByGAV);
+            if (model != null) {
+                result.put(relPath, model);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Collect all active profile IDs from every project in the reactor.
+     * Passing the full set to each ModelBuilder request ensures that parent-level
+     * profiles (e.g. a profile in the root POM that adds managed dependencies)
+     * are activated when building child effective models — the ModelBuilder
+     * silently ignores IDs that don't match any profile in the current POM.
+     */
+    private static List<String> collectAllActiveProfileIds(List<MavenProject> allProjects) {
+        Set<String> ids = new LinkedHashSet<>();
+        for (MavenProject project : allProjects) {
+            if (project.getActiveProfiles() != null) {
+                for (Profile profile : project.getActiveProfiles()) {
+                    ids.add(profile.getId());
+                }
+            }
+        }
+        return new ArrayList<>(ids);
     }
 
     private void reconstructPomHierarchy(
@@ -1274,36 +1320,27 @@ class PomChangeAnalyzer {
 
     private Model buildSingleEffectiveModel(
             org.apache.maven.model.building.ModelBuilder modelBuilder,
-            Path tempPomFile,
+            Path pomFile,
             String relPath,
-            MavenProject project,
+            List<String> activeProfileIds,
             ModelResolutionContext resolutionCtx,
             Map<String, java.io.File> reactorPomsByGAV) {
         try {
             DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
-            request.setPomFile(tempPomFile.toFile());
+            request.setPomFile(pomFile.toFile());
             request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
 
-            // Resolve parents and BOM imports. The ReactorFirstModelResolver checks the
-            // reactor's temp dir first (with old POM content) before falling back to the
-            // ProjectModelResolver (local repo / remote repos). This ensures import-scope
-            // BOMs and parents at non-standard relative paths resolve from the correct
-            // (old) POM content, not from the current reactor.
-            // processPlugins=true so lifecycle defaults and pluginManagement-to-plugins
-            // merging produce a model comparable to the live reactor's project.getModel().
             ProjectModelResolver repoResolver = new ProjectModelResolver(
                     resolutionCtx.repoSession(),
-                    null, // no request trace needed
+                    null,
                     repositorySystem,
                     remoteRepositoryManager,
                     resolutionCtx.remoteRepositories() != null ? resolutionCtx.remoteRepositories() : List.of(),
                     ProjectBuildingRequest.RepositoryMerging.POM_DOMINANT,
-                    null); // no reactor model pool — we use temp dir files
+                    null);
             request.setModelResolver(new ReactorFirstModelResolver(reactorPomsByGAV, repoResolver));
             request.setProcessPlugins(true);
 
-            // Pass system and user properties so interpolation and
-            // property-activated profiles work correctly
             if (resolutionCtx.systemProperties() != null) {
                 request.setSystemProperties(resolutionCtx.systemProperties());
             }
@@ -1311,13 +1348,6 @@ class PomChangeAnalyzer {
                 request.setUserProperties(resolutionCtx.userProperties());
             }
 
-            // Activate the same profiles as the current build
-            List<String> activeProfileIds = new ArrayList<>();
-            if (project.getActiveProfiles() != null) {
-                for (Profile profile : project.getActiveProfiles()) {
-                    activeProfileIds.add(profile.getId());
-                }
-            }
             if (!activeProfileIds.isEmpty()) {
                 request.setActiveProfileIds(activeProfileIds);
             }
@@ -1325,7 +1355,6 @@ class PomChangeAnalyzer {
             ModelBuildingResult buildResult = modelBuilder.build(request);
             return buildResult.getEffectiveModel();
         } catch (ModelBuildingException e) {
-            // Resolution may still fail for some artifacts; try to use partial result
             if (e.getResult() != null && e.getResult().getEffectiveModel() != null) {
                 logger.debug("Partial effective model for old {}: {}", relPath, e.getMessage());
                 return e.getResult().getEffectiveModel();
@@ -1333,7 +1362,6 @@ class PomChangeAnalyzer {
             logger.debug("Cannot build effective model for old {}: {}", relPath, e.getMessage());
             return null;
         } catch (Exception e) {
-            // Catch resolver errors (NPE from corrupt repos, connectivity issues, etc.)
             logger.debug("Cannot build effective model for old {}: {}", relPath, e.getMessage());
             return null;
         }
