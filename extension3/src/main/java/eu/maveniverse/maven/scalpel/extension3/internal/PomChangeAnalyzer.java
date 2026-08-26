@@ -65,7 +65,13 @@ class PomChangeAnalyzer {
                 Set<String> changedManagedDependencyGAs,
                 Set<String> changedManagedPluginGAs,
                 Set<String> changedProperties) {
-            this(affectedProjects, changedManagedDependencyGAs, changedManagedPluginGAs, changedProperties, Map.of(), List.of());
+            this(
+                    affectedProjects,
+                    changedManagedDependencyGAs,
+                    changedManagedPluginGAs,
+                    changedProperties,
+                    Map.of(),
+                    List.of());
         }
 
         Result(
@@ -256,7 +262,12 @@ class PomChangeAnalyzer {
                 allChangedManagedDepGAs,
                 allChangedManagedPluginGAs);
         return new Result(
-                affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties, evidence, unmatchedPomPaths);
+                affected,
+                allChangedManagedDepGAs,
+                allChangedManagedPluginGAs,
+                allChangedProperties,
+                evidence,
+                unmatchedPomPaths);
     }
 
     private static void addEvidence(Map<MavenProject, Set<String>> evidence, MavenProject project, String item) {
