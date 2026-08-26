@@ -2324,9 +2324,9 @@ class PomChangeAnalyzerTest {
         MavenProject bom = createProject(
                 "com.example", "bom", "1.0", root.resolve("bom/pom.xml").toFile());
         bom.setOriginalModel(parseModel(bomPomXml));
-        setEffectiveModel(bom, bomPomXml);
         bom.getModel().setPackaging("pom");
         bom.setParent(parent);
+        setEffectiveModel(bom, bomPomXml);
 
         MavenProject moduleA = createProject(
                 "com.example",
@@ -2334,8 +2334,8 @@ class PomChangeAnalyzerTest {
                 "1.0",
                 root.resolve("module-a/pom.xml").toFile());
         moduleA.setOriginalModel(parseModel(moduleAPomXml));
-        setEffectiveModel(moduleA, moduleAPomXml);
         moduleA.setParent(parent);
+        setEffectiveModel(moduleA, moduleAPomXml);
 
         MavenProject moduleB = createProject(
                 "com.example",
@@ -2343,8 +2343,8 @@ class PomChangeAnalyzerTest {
                 "1.0",
                 root.resolve("module-b/pom.xml").toFile());
         moduleB.setOriginalModel(parseModel(moduleBPomXml));
-        setEffectiveModel(moduleB, moduleBPomXml);
         moduleB.setParent(parent);
+        setEffectiveModel(moduleB, moduleBPomXml);
 
         List<MavenProject> projects = new ArrayList<>();
         projects.add(parent);
@@ -2441,9 +2441,9 @@ class PomChangeAnalyzerTest {
         MavenProject bom = createProject(
                 "com.example", "bom", "1.0", root.resolve("bom/pom.xml").toFile());
         bom.setOriginalModel(parseModel(bomPomXml));
-        setEffectiveModel(bom, bomPomXml);
         bom.getModel().setPackaging("pom");
         bom.setParent(parent);
+        setEffectiveModel(bom, bomPomXml);
 
         MavenProject moduleA = createProject(
                 "com.example",
@@ -2451,8 +2451,8 @@ class PomChangeAnalyzerTest {
                 "1.0",
                 root.resolve("module-a/pom.xml").toFile());
         moduleA.setOriginalModel(parseModel(moduleAPomXml));
-        setEffectiveModel(moduleA, moduleAPomXml);
         moduleA.setParent(parent);
+        setEffectiveModel(moduleA, moduleAPomXml);
 
         List<MavenProject> projects = List.of(parent, bom, moduleA);
 
@@ -2754,9 +2754,9 @@ class PomChangeAnalyzerTest {
         MavenProject bom = createProject(
                 "com.example", "bom", "1.0", root.resolve("bom/pom.xml").toFile());
         bom.setOriginalModel(parseModel(bomPomXml));
-        setEffectiveModel(bom, bomPomXml);
         bom.getModel().setPackaging("pom");
         bom.setParent(parent);
+        setEffectiveModel(bom, bomPomXml);
 
         MavenProject moduleA = createProject(
                 "com.example",
@@ -2764,8 +2764,8 @@ class PomChangeAnalyzerTest {
                 "1.0",
                 root.resolve("module-a/pom.xml").toFile());
         moduleA.setOriginalModel(parseModel(moduleAPomXml));
-        setEffectiveModel(moduleA, moduleAPomXml);
         moduleA.setParent(parent);
+        setEffectiveModel(moduleA, moduleAPomXml);
 
         MavenProject moduleB = createProject(
                 "com.example",
@@ -2773,8 +2773,8 @@ class PomChangeAnalyzerTest {
                 "1.0",
                 root.resolve("module-b/pom.xml").toFile());
         moduleB.setOriginalModel(parseModel(moduleBPomXml));
-        setEffectiveModel(moduleB, moduleBPomXml);
         moduleB.setParent(parent);
+        setEffectiveModel(moduleB, moduleBPomXml);
 
         List<MavenProject> projects = new ArrayList<>();
         projects.add(parent);
