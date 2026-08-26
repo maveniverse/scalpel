@@ -637,10 +637,13 @@ class PomChangeAnalyzer {
             changed = true;
         }
 
-        // Compare effective plugins directly.  Both old and new models are built by
-        // the same ModelBuilder so lifecycle defaults are identical — no GA filtering needed.
-        Set<String> changedPlugins =
-                diffEffectivePlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
+        // Compare effective plugin VERSIONS only (not configuration/executions).
+        // Configuration may differ due to inherited property interpolation changes, but
+        // plugin configuration changes are already covered by the POM diff (the parent
+        // POM is in the changeset).  Only version changes from managed plugin updates
+        // indicate a real build-input change for the child.
+        Set<String> changedPlugins = diffManagedPluginVersions(
+                getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
         if (!changedPlugins.isEmpty()) {
             if (logger.isDebugEnabled()) {
                 logger.debug("Child {} has changed effective plugins: {}", key(child), changedPlugins);
@@ -795,37 +798,6 @@ class PomChangeAnalyzer {
         for (Map.Entry<String, Dependency> e : newMap.entrySet()) {
             if (!oldMap.containsKey(e.getKey())) {
                 changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
-            }
-        }
-        return changed;
-    }
-
-    /**
-     * Diff two plugin lists reporting all changes (additions, modifications, removals).
-     * Appropriate for comparing effective plugin lists where any change indicates a build impact.
-     */
-    private Set<String> diffEffectivePlugins(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
-        Set<String> changed = new LinkedHashSet<>();
-        Map<String, Plugin> oldMap = new LinkedHashMap<>();
-        for (Plugin p : oldPlugins) {
-            oldMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
-        }
-        Map<String, Plugin> newMap = new LinkedHashMap<>();
-        for (Plugin p : newPlugins) {
-            newMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
-        }
-
-        // Modifications and removals
-        for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
-            Plugin newPlugin = newMap.get(e.getKey());
-            if (newPlugin == null || !equalPlugin(e.getValue(), newPlugin)) {
-                changed.add(e.getKey());
-            }
-        }
-        // Additions
-        for (Map.Entry<String, Plugin> e : newMap.entrySet()) {
-            if (!oldMap.containsKey(e.getKey())) {
-                changed.add(e.getKey());
             }
         }
         return changed;
