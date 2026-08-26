@@ -12,6 +12,7 @@ import static java.util.Objects.requireNonNull;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.io.ByteArrayInputStream;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -46,6 +47,7 @@ import org.apache.maven.model.RepositoryPolicy;
 import org.apache.maven.model.Resource;
 import org.apache.maven.model.building.DefaultModelBuildingRequest;
 import org.apache.maven.model.building.FileModelSource;
+import org.apache.maven.model.building.ModelBuilder;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingResult;
@@ -73,13 +75,13 @@ class PomChangeAnalyzer {
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final RepositorySystem repositorySystem;
     private final RemoteRepositoryManager remoteRepositoryManager;
-    private final org.apache.maven.model.building.ModelBuilder modelBuilder;
+    private final ModelBuilder modelBuilder;
 
     @Inject
     PomChangeAnalyzer(
             RepositorySystem repositorySystem,
             RemoteRepositoryManager remoteRepositoryManager,
-            org.apache.maven.model.building.ModelBuilder modelBuilder) {
+            ModelBuilder modelBuilder) {
         this.repositorySystem = requireNonNull(repositorySystem, "repositorySystem");
         this.remoteRepositoryManager = requireNonNull(remoteRepositoryManager, "remoteRepositoryManager");
         this.modelBuilder = requireNonNull(modelBuilder, "modelBuilder");
@@ -605,7 +607,7 @@ class PomChangeAnalyzer {
      * list — a module is only affected if its actual build inputs change, not merely
      * because an unused managed dependency was added (issue #131).
      * <p>
-     * Both old and new effective models are built by the same {@link org.apache.maven.model.building.ModelBuilder}
+     * Both old and new effective models are built by the same {@link ModelBuilder}
      * so lifecycle default plugin versions are identical on both sides, making direct
      * comparison safe without GA filtering.
      */
@@ -1189,7 +1191,7 @@ class PomChangeAnalyzer {
             reconstructPomHierarchy(tempDir, absRoot, allProjects, oldPomContents);
 
             // Build a GAV→file map for resolving reactor-local parents and BOM imports.
-            Map<String, java.io.File> reactorPomsByGAV = new LinkedHashMap<>();
+            Map<String, File> reactorPomsByGAV = new LinkedHashMap<>();
             for (MavenProject project : allProjects) {
                 Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
                 Path relativePom = absRoot.relativize(pomPath);
@@ -1236,7 +1238,7 @@ class PomChangeAnalyzer {
         Path absRoot = reactorRoot.toAbsolutePath().normalize();
 
         // Build a GAV→file map pointing to the actual (current) POM files.
-        Map<String, java.io.File> reactorPomsByGAV = new LinkedHashMap<>();
+        Map<String, File> reactorPomsByGAV = new LinkedHashMap<>();
         for (MavenProject project : allProjects) {
             String gav = project.getGroupId() + ":" + project.getArtifactId() + ":" + project.getVersion();
             reactorPomsByGAV.put(gav, project.getFile());
@@ -1294,12 +1296,12 @@ class PomChangeAnalyzer {
     }
 
     private Model buildSingleEffectiveModel(
-            org.apache.maven.model.building.ModelBuilder modelBuilder,
+            ModelBuilder modelBuilder,
             Path pomFile,
             String relPath,
             List<String> activeProfileIds,
             ModelResolutionContext resolutionCtx,
-            Map<String, java.io.File> reactorPomsByGAV) {
+            Map<String, File> reactorPomsByGAV) {
         try {
             DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
             request.setPomFile(pomFile.toFile());
@@ -1646,10 +1648,10 @@ class PomChangeAnalyzer {
      * the current local repository.
      */
     static class ReactorFirstModelResolver implements ModelResolver {
-        private final Map<String, java.io.File> reactorPomsByGAV;
+        private final Map<String, File> reactorPomsByGAV;
         private final ModelResolver delegate;
 
-        ReactorFirstModelResolver(Map<String, java.io.File> reactorPomsByGAV, ModelResolver delegate) {
+        ReactorFirstModelResolver(Map<String, File> reactorPomsByGAV, ModelResolver delegate) {
             this.reactorPomsByGAV = reactorPomsByGAV;
             this.delegate = delegate;
         }
@@ -1657,7 +1659,7 @@ class PomChangeAnalyzer {
         @Override
         public ModelSource resolveModel(String groupId, String artifactId, String version)
                 throws UnresolvableModelException {
-            java.io.File f = reactorPomsByGAV.get(groupId + ":" + artifactId + ":" + version);
+            File f = reactorPomsByGAV.get(groupId + ":" + artifactId + ":" + version);
             if (f != null && f.exists()) {
                 return new FileModelSource(f);
             }
