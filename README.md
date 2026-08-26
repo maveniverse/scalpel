@@ -110,6 +110,26 @@ module-b/sub-module
 This works in all modes (trim, skip-tests, report) and is written alongside the JSON report,
 not as a replacement. It contains only directly affected modules (not upstream/downstream).
 
+**Safety.** Module directory names are chosen by whoever authors the repository (or pull request),
+so the log is written defensively: a path is only written when it consists solely of letters,
+digits, `-`, `_`, `.` and `/`, and does not start with `-`. A path containing anything else
+(spaces, quotes, `$`, backticks, `;`, `|`, glob characters, backslashes, newlines, control
+characters) is skipped with a WARN instead of written. Even so, consume the file defensively:
+unquoted expansion word-splits and glob-expands file contents.
+
+```bash
+# Safe: quoted read loop, one module per line
+while IFS= read -r module; do
+  build_module "$module"
+done < target/scalpel-impacted.log
+
+# Safe (GNU xargs): explicit newline delimiter, no word splitting
+xargs -d '\n' build_module < target/scalpel-impacted.log
+
+# Unsafe: unquoted command substitution word-splits and glob-expands the contents
+build_all $(cat target/scalpel-impacted.log)
+```
+
 #### Report Format
 
 The report follows a versioned JSON schema. A [JSON Schema](core/src/main/resources/eu/maveniverse/maven/scalpel/core/scalpel-report-v2.schema.json)
@@ -155,6 +175,18 @@ is published alongside the code. The current version is **2**.
     }
   ]
 }
+```
+
+**Consuming `path` values in scripts:** like the impacted log, the `path` fields of
+`affectedModules` entries carry module directory names chosen by the repository (or pull request)
+author. The values are JSON-encoded, so newlines and quotes cannot corrupt the document, but they
+are not restricted to a safe character set. Keep them quoted end-to-end when feeding them to shell
+commands:
+
+```bash
+# Safe: jq emits one path per line; consume it with a quoted read loop
+jq -r '.affectedModules[].path' target/scalpel-report.json |
+  while IFS= read -r module; do build_module "$module"; done
 ```
 
 **Status-only reports:** when analysis does not complete (failSafe bail-out, unexpected
@@ -268,7 +300,7 @@ Note that properties defined in a project POM's `<properties>` are deliberately 
 | `scalpel.includePaths` | *(none)* | Comma-separated glob patterns; narrows the affected set to matching modules rather than filtering changed files |
 | `scalpel.disableTriggers` | *(none)* | Comma-separated glob patterns; if any changed file matches, Scalpel is disabled entirely |
 | `scalpel.reportFile` | `target/scalpel-report.json` | Path for the JSON report (report mode), relative to reactor root |
-| `scalpel.impactedLog` | *(none)* | Write impacted module paths to this file (one per line) |
+| `scalpel.impactedLog` | *(none)* | Write impacted module paths to this file (one per line; paths outside the safe character set are skipped with a WARN) |
 | `scalpel.forceBuildModules` | *(none)* | Comma-separated regex patterns; always include modules whose artifactId matches |
 | `scalpel.buildAllIfNoChanges` | `false` | Build everything when no changes are detected (useful for cron builds) |
 | `scalpel.disableOnBranch` | *(none)* | Comma-separated regex patterns; disable if current branch matches |

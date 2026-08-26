@@ -3615,6 +3615,39 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void impactedLogPathValidation_acceptsSafePaths() {
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module-a"), "simple name");
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module-a/sub-module"), "nested path");
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("Module_1.v2/dir"), "mixed charset");
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("m"), "single character");
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("a-b_c.d/e"), "all safe separators");
+    }
+
+    @Test
+    void impactedLogPathValidation_rejectsUnsafePaths() {
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath(null), "null path");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath(""), "empty path");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("-module"), "leading dash (option injection)");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module;rm"), "semicolon");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module$(id)"), "command substitution");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module rm"), "space");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module`id`"), "backtick");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo'dule"), "single quote");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo\"dule"), "double quote");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo\\dule"), "backslash");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module*"), "glob star");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo?dule"), "glob question mark");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo[du]le"), "glob brackets");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module|rm"), "pipe");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module&rm"), "ampersand");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\nforge"), "newline forges entries");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\rforge"), "carriage return");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\tforge"), "tab");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\0forge"), "NUL byte");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\u007Fforge"), "delete character");
+    }
+
+    @Test
     void skipTestsMode_skipTestsForUpstream_skipsUpstreamTests() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
