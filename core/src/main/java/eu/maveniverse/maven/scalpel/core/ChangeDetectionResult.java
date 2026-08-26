@@ -14,10 +14,12 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * The outcome of a change-detection run: the changed files and the base-commit contents of changed
- * POMs. The POM contents let later analysis decide whether a changed POM is materially different
- * (dependencies, plugins, properties) rather than treating every POM touch as a change. Both
- * collections are unmodifiable.
+ * The outcome of a change-detection run: the changed file paths (from the diff between the base
+ * and head commits, plus uncommitted and untracked files when enabled) and the base-commit contents
+ * of changed POMs. The POM contents let later analysis decide whether a changed POM is materially
+ * different (dependencies, plugins, properties) rather than treating every POM touch as a change.
+ * Both collections are unmodifiable; the {@code byte[]} values inside the POM map are not
+ * defensively copied and should be treated as read-only.
  */
 public final class ChangeDetectionResult {
 

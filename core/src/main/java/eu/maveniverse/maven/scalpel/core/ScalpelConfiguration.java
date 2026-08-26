@@ -19,8 +19,10 @@ import java.util.Set;
  * Immutable, resolved configuration for the Scalpel change-detection extension.
  *
  * <p>Every setting is a {@code -D} system property (or an entry in {@code .mvn/maven.config}) with
- * the {@code scalpel.} prefix. During resolution system properties take precedence over user
- * properties, which take precedence over the built-in default. Instances are created only through
+ * the {@code scalpel.} prefix. During resolution user properties (explicit {@code -D} on the
+ * command line, including {@code .mvn/maven.config} entries) take precedence over system
+ * properties (JVM properties, e.g. anything in {@code MAVEN_OPTS}), which take precedence over
+ * the built-in default: the standard Maven convention. Instances are created only through
  * {@link #fromProperties(Properties, Properties)}; collection-valued getters return unmodifiable
  * lists.
  */
@@ -70,6 +72,7 @@ public final class ScalpelConfiguration {
      */
     public static final String MODE = PREFIX + "mode";
 
+    /** System property {@code scalpel.explain}: emit per-module decision evidence. Default: {@code false}. */
     public static final String EXPLAIN = PREFIX + "explain";
 
     /**
@@ -315,11 +318,15 @@ public final class ScalpelConfiguration {
     /**
      * Resolves a configuration from system and user properties.
      *
-     * @param system system properties (take precedence)
-     * @param user user properties (e.g. from {@code .mvn/maven.config})
+     * @param system system properties (JVM properties, e.g. from {@code MAVEN_OPTS})
+     * @param user user properties (explicit {@code -D} on the command line, including
+     *     {@code .mvn/maven.config} entries); take precedence over system properties per the
+     *     Maven convention
      * @return the resolved configuration
      * @throws IllegalArgumentException if {@link #MODE} or {@link #MAX_RESOURCE_FILE_SIZE} has an
-     *     invalid value
+     *     invalid value, or if any boolean property is set to a value other than
+     *     {@code true}/{@code false} (case-insensitive; anything else is rejected, not
+     *     silently coerced)
      */
     public static ScalpelConfiguration fromProperties(Properties system, Properties user) {
         boolean enabled = parseStrictBoolean(ENABLED, resolve(system, user, ENABLED, "true"));
