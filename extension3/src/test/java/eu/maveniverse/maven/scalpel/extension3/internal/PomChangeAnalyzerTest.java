@@ -146,6 +146,38 @@ class PomChangeAnalyzerTest {
                 defaultResolutionCtx);
     }
 
+    /**
+     * Derive changed managed dependency GAs from result's effective models.
+     * Mirrors ScalpelLifecycleParticipant.deriveChangedManagedDeps for test assertions.
+     */
+    private Set<String> deriveChangedManagedDeps(PomChangeAnalyzer.Result result) {
+        Set<String> changed = new LinkedHashSet<>();
+        for (Map.Entry<String, Model> entry : result.getOldEffectiveModels().entrySet()) {
+            Model newModel = result.getNewEffectiveModels().get(entry.getKey());
+            if (newModel != null) {
+                changed.addAll(analyzer.diffDependencies(
+                        analyzer.getManagedDependencies(entry.getValue()), analyzer.getManagedDependencies(newModel)));
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Derive changed managed plugin GAs from result's effective models.
+     * Mirrors ScalpelLifecycleParticipant.deriveChangedManagedPlugins for test assertions.
+     */
+    private Set<String> deriveChangedManagedPlugins(PomChangeAnalyzer.Result result) {
+        Set<String> changed = new LinkedHashSet<>();
+        for (Map.Entry<String, Model> entry : result.getOldEffectiveModels().entrySet()) {
+            Model newModel = result.getNewEffectiveModels().get(entry.getKey());
+            if (newModel != null) {
+                changed.addAll(analyzer.diffManagedPluginVersions(
+                        analyzer.getManagedPlugins(entry.getValue()), analyzer.getManagedPlugins(newModel)));
+            }
+        }
+        return changed;
+    }
+
     // --- diffProperties tests ---
 
     @Test
@@ -400,7 +432,7 @@ class PomChangeAnalyzerTest {
         PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("org.springframework:spring-core"),
+                deriveChangedManagedDeps(result).contains("org.springframework:spring-core"),
                 "Changed managed dep GAs should include spring-core (via property indirection)");
     }
 
@@ -749,7 +781,7 @@ class PomChangeAnalyzerTest {
                 result.getAffectedProjects().contains(projects.get(2)),
                 "module-b uses managed dep lib-x from active profile and should be affected");
         assertFalse(result.getAffectedProjects().contains(projects.get(1)), "module-a does NOT use lib-x");
-        assertTrue(result.getChangedManagedDependencyGAs().contains("com.example:lib-x"));
+        assertTrue(deriveChangedManagedDeps(result).contains("com.example:lib-x"));
     }
 
     // --- Source directory, resource, and repository comparison tests (parameterized) ---
@@ -1514,10 +1546,10 @@ class PomChangeAnalyzerTest {
                 result.getAffectedProjects().contains(moduleB),
                 "module-b does not use lib-x or lib-new, should NOT be affected");
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
                 "lib-x version was bumped (modified), should be in changedManagedDependencyGAs");
         assertFalse(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-new"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-new"),
                 "lib-new is brand new (not a modification), should NOT be in changedManagedDependencyGAs");
     }
 
@@ -1683,7 +1715,7 @@ class PomChangeAnalyzerTest {
         PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
                 "Modified (version-bumped) managed dep must always be in changedManagedDependencyGAs, even if unused");
     }
 
@@ -1775,7 +1807,7 @@ class PomChangeAnalyzerTest {
                 result.getAffectedProjects().contains(moduleB),
                 "module-b does not use any new managed dep, should NOT be affected");
         assertTrue(
-                result.getChangedManagedDependencyGAs().isEmpty(),
+                deriveChangedManagedDeps(result).isEmpty(),
                 "All managed deps are brand new (not modifications), changedManagedDependencyGAs should be empty");
     }
 
@@ -2210,7 +2242,7 @@ class PomChangeAnalyzerTest {
         assertFalse(
                 result.getAffectedProjects().contains(moduleB), "module-b does not import BOM, should NOT be affected");
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
                 "Changed managed dep GAs should include lib-x");
     }
 
@@ -2291,7 +2323,7 @@ class PomChangeAnalyzerTest {
                 result.getAffectedProjects().contains(moduleA),
                 "module-a uses managed dep lib-x whose version comes from changed property in BOM");
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
                 "Changed managed dep GAs should include lib-x (via property indirection in BOM)");
     }
 
@@ -2434,7 +2466,7 @@ class PomChangeAnalyzerTest {
         // computeTransitivelyAffected (in ScalpelLifecycleParticipant) to subsequently find
         // consumers of lib-x (like module-a) via Maven dependency resolution.
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
                 "Changed managed dep GAs should include lib-x (property defined in root, consumed in BOM managed dep)");
 
         assertTrue(
@@ -2524,7 +2556,7 @@ class PomChangeAnalyzerTest {
                 result.getAffectedProjects().contains(bom),
                 "BOM references ${compiler.version} in managed plugin and should be affected");
         assertTrue(
-                result.getChangedManagedPluginGAs().contains("org.apache.maven.plugins:maven-compiler-plugin"),
+                deriveChangedManagedPlugins(result).contains("org.apache.maven.plugins:maven-compiler-plugin"),
                 "Changed managed plugin GAs should include maven-compiler-plugin"
                         + " (property in root, consumed in BOM managed plugin)");
     }

@@ -29,6 +29,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.PatternSyntaxException;
 import javax.inject.Inject;
@@ -37,7 +38,7 @@ import javax.inject.Singleton;
 import org.apache.maven.AbstractMavenLifecycleParticipant;
 import org.apache.maven.MavenExecutionException;
 import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Plugin;
+import org.apache.maven.model.Model;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
 import org.apache.maven.project.DependencyResolutionException;
 import org.apache.maven.project.DependencyResolutionResult;
@@ -209,8 +210,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Analyze POM changes directly (no model building needed)
             Set<MavenProject> affectedByPom = new LinkedHashSet<>();
-            Set<String> changedManagedDepGAs = new LinkedHashSet<>();
-            Set<String> changedManagedPluginGAs = new LinkedHashSet<>();
+            Map<String, Model> oldEffectiveModels = Map.of();
+            Map<String, Model> newEffectiveModels = Map.of();
             Set<String> changedProperties = new LinkedHashSet<>();
             Map<MavenProject, Set<String>> pomEvidence = Map.of();
             Set<String> unmatchedPomPaths = new LinkedHashSet<>();
@@ -230,8 +231,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                     session.getRepositorySession(),
                                     allProjects.get(0).getRemoteProjectRepositories()));
                     affectedByPom = pomResult.getAffectedProjects();
-                    changedManagedDepGAs = pomResult.getChangedManagedDependencyGAs();
-                    changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
+                    oldEffectiveModels = pomResult.getOldEffectiveModels();
+                    newEffectiveModels = pomResult.getNewEffectiveModels();
                     changedProperties = pomResult.getChangedProperties();
                     pomEvidence = pomResult.getEvidence();
                     unmatchedPomPaths.addAll(pomResult.getUnmatchedPomPaths());
@@ -248,13 +249,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                 }
                 logger.debug("Modules affected by POM changes: {}", keys(affectedByPom));
-                if (!changedManagedDepGAs.isEmpty()) {
-                    logger.debug("Changed managed dependency GAs: {}", changedManagedDepGAs);
-                }
-                if (!changedManagedPluginGAs.isEmpty()) {
-                    logger.debug("Changed managed plugin GAs: {}", changedManagedPluginGAs);
-                }
             }
+
+            // Derive changed managed dep/plugin GAs from effective models (for report only)
+            Set<String> changedManagedDepGAs = deriveChangedManagedDeps(oldEffectiveModels, newEffectiveModels);
+            Set<String> changedManagedPluginGAs = deriveChangedManagedPlugins(oldEffectiveModels, newEffectiveModels);
 
             // Combine
             Set<MavenProject> directlyAffected = new LinkedHashSet<>();
@@ -288,7 +287,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // Force-included modules are not test-only
             testOnlyModules.removeAll(forceIncluded);
 
-            if (directlyAffected.isEmpty() && changedManagedDepGAs.isEmpty() && changedManagedPluginGAs.isEmpty()) {
+            if (directlyAffected.isEmpty() && oldEffectiveModels.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
                 if (config.isModeReport()) {
                     writeReport(
@@ -308,20 +307,23 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         "Scalpel: {} modules directly affected: {}", directlyAffected.size(), keys(directlyAffected));
             }
 
-            // Single shared cache for dependency collection results — used by both
+            // Shared caches for dependency collection results — used by both
             // computeTransitivelyAffected and applySkipTests to avoid resolving the same
-            // module twice.
+            // module twice.  Separate caches for old (from effective models) and new (current).
             Map<MavenProject, DependencyResolutionResult> collectCache = new LinkedHashMap<>();
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache = new LinkedHashMap<>();
 
-            // Compute transitively affected modules (via changed managed deps/plugins)
+            // Compute transitively affected modules by comparing old vs new dependency trees
             Map<MavenProject, List<String>> transitiveEvidence = new LinkedHashMap<>();
             Map<MavenProject, List<String>> transitivelyAffected = computeTransitivelyAffected(
                     allProjects,
                     directlyAffected,
-                    changedManagedDepGAs,
-                    changedManagedPluginGAs,
+                    oldEffectiveModels,
+                    newEffectiveModels,
+                    reactorRoot,
                     session,
                     collectCache,
+                    oldCollectCache,
                     config.isExplain(),
                     transitiveEvidence);
 
@@ -450,11 +452,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         allProjects,
                         trimResult,
                         config,
-                        changedManagedDepGAs,
-                        changedManagedPluginGAs,
+                        oldEffectiveModels,
+                        newEffectiveModels,
                         includeMatchers,
                         reactorRoot,
-                        collectCache);
+                        collectCache,
+                        oldCollectCache);
                 if (config.isExplain()) {
                     logExplainDecisions(allProjects, new LinkedHashSet<>(trimResult.getBuildSet()), evidence);
                 }
@@ -613,29 +616,37 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     private Map<MavenProject, List<String>> computeTransitivelyAffected(
             List<MavenProject> allProjects,
             Set<MavenProject> directlyAffected,
-            Set<String> changedManagedDepGAs,
-            Set<String> changedManagedPluginGAs,
+            Map<String, Model> oldEffectiveModels,
+            Map<String, Model> newEffectiveModels,
+            Path reactorRoot,
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache,
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache,
             boolean explain,
             Map<MavenProject, List<String>> returnEvidence) {
         Map<MavenProject, List<String>> transitivelyAffected = new LinkedHashMap<>();
         Map<MavenProject, List<String>> transitiveEvidence = new LinkedHashMap<>();
-        if (changedManagedDepGAs.isEmpty() && changedManagedPluginGAs.isEmpty()) {
-            logger.debug("Skipping transitive analysis: no changed managed dependencies or plugins to check against");
+        if (oldEffectiveModels.isEmpty()) {
+            logger.debug("Skipping transitive analysis: no effective models available");
             return transitivelyAffected;
         }
+        Path absRoot = reactorRoot.toAbsolutePath().normalize();
         logger.debug(
-                "Computing transitively affected modules: checking {} non-direct modules against {} changed managed deps and {} changed managed plugins",
-                allProjects.size() - directlyAffected.size(),
-                changedManagedDepGAs.size(),
-                changedManagedPluginGAs.size());
+                "Computing transitively affected modules: comparing old vs new dependency trees for {} non-direct modules",
+                allProjects.size() - directlyAffected.size());
         for (MavenProject project : allProjects) {
             if (directlyAffected.contains(project)) {
                 continue;
             }
             TransitiveMatch match = computeTransitiveMatch(
-                    project, changedManagedDepGAs, changedManagedPluginGAs, session, collectCache, explain);
+                    project,
+                    oldEffectiveModels,
+                    newEffectiveModels,
+                    absRoot,
+                    session,
+                    collectCache,
+                    oldCollectCache,
+                    explain);
             if (!match.reasons.isEmpty()) {
                 transitivelyAffected.put(project, match.reasons);
                 if (explain) {
@@ -663,38 +674,57 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
     }
 
+    /**
+     * Compare old vs new effective models and dependency trees for a single module.
+     * Effective plugin comparison uses the fully-interpolated models directly.
+     * Dependency tree comparison resolves both old and new trees and diffs them.
+     */
     private TransitiveMatch computeTransitiveMatch(
             MavenProject project,
-            Set<String> changedManagedDepGAs,
-            Set<String> changedManagedPluginGAs,
+            Map<String, Model> oldEffectiveModels,
+            Map<String, Model> newEffectiveModels,
+            Path absRoot,
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache,
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache,
             boolean explain) {
         List<String> reasons = new ArrayList<>();
         List<String> evidence = explain ? new ArrayList<>() : List.of();
-        if (!changedManagedPluginGAs.isEmpty()) {
-            String changedPlugin = findChangedPlugin(project, changedManagedPluginGAs);
-            if (changedPlugin != null) {
-                reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
-                if (explain) {
-                    evidence.add("managed plugin " + changedPlugin);
-                }
+
+        String relPath = absRoot.relativize(
+                        project.getFile().toPath().toAbsolutePath().normalize())
+                .toString()
+                .replace('\\', '/');
+        Model oldModel = oldEffectiveModels.get(relPath);
+        Model newModel = newEffectiveModels.get(relPath);
+        if (oldModel == null || newModel == null) {
+            return new TransitiveMatch(reasons, evidence);
+        }
+
+        // Compare effective plugins directly from the fully-interpolated models
+        Set<String> changedPlugins = pomChangeAnalyzer.diffManagedPluginVersions(
+                pomChangeAnalyzer.getEffectivePlugins(oldModel), pomChangeAnalyzer.getEffectivePlugins(newModel));
+        if (!changedPlugins.isEmpty()) {
+            reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
+            if (explain) {
+                evidence.add("effective plugin " + changedPlugins.iterator().next());
             }
         }
-        if (!changedManagedDepGAs.isEmpty()) {
-            ChangedDependencyMatch match =
-                    getChangedTransitiveDependencyMatch(project, session, changedManagedDepGAs, collectCache);
-            if (match != null) {
-                if ("test".equals(match.scope)) {
-                    reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
-                } else {
-                    reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
-                }
-                if (explain) {
-                    evidence.add("managed dep " + match.ga);
-                }
+
+        // Compare resolved dependency trees: old effective model vs current project
+        ChangedDependencyMatch depMatch =
+                findChangedDependencyInTree(project, oldModel, session, collectCache, oldCollectCache);
+        if (depMatch != null) {
+            if ("test".equals(depMatch.scope)) {
+                reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
+            } else {
+                reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
+            }
+            if (explain) {
+                evidence.add("dependency tree diff " + depMatch.ga);
             }
         }
+
         return new TransitiveMatch(reasons, evidence);
     }
 
@@ -703,12 +733,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             List<MavenProject> allProjects,
             TrimResult trimResult,
             ScalpelConfiguration config,
-            Set<String> changedManagedDepGAs,
-            Set<String> changedManagedPluginGAs,
+            Map<String, Model> oldEffectiveModels,
+            Map<String, Model> newEffectiveModels,
             List<PathMatcher> includeMatchers,
             Path reactorRoot,
-            Map<MavenProject, DependencyResolutionResult> collectCache) {
+            Map<MavenProject, DependencyResolutionResult> collectCache,
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache) {
 
+        Path absRoot = reactorRoot.toAbsolutePath().normalize();
         Set<MavenProject> buildSetLookup = new LinkedHashSet<>(trimResult.getBuildSet());
         List<MavenProject> testProjects = new ArrayList<>();
         List<MavenProject> skippedProjects = new ArrayList<>();
@@ -726,10 +758,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     project,
                     trimResult,
                     config,
+                    oldEffectiveModels,
+                    newEffectiveModels,
+                    absRoot,
                     session,
-                    changedManagedPluginGAs,
-                    changedManagedDepGAs,
-                    collectCache)) {
+                    collectCache,
+                    oldCollectCache)) {
                 // Skip tests on excluded downstream modules (unless they also have plugin/dep changes)
                 project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
                 skippedProjects.add(project);
@@ -755,15 +789,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 continue;
             }
 
-            // Check effective build plugins against changed managed plugins
-            if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
-                testProjects.add(project);
-                continue;
-            }
-
-            // Check transitive dependencies if managed deps changed
-            if (!changedManagedDepGAs.isEmpty()
-                    && hasChangedTransitiveDependency(project, session, changedManagedDepGAs, collectCache)) {
+            // Check if this module's effective plugins or dependency tree changed
+            if (hasEffectiveModelChanges(
+                    project, oldEffectiveModels, newEffectiveModels, absRoot, session, collectCache, oldCollectCache)) {
                 testProjects.add(project);
                 continue;
             }
@@ -844,24 +872,6 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         return softenedProjects;
     }
 
-    private boolean usesChangedPlugin(MavenProject project, Set<String> changedPluginGAs) {
-        return findChangedPlugin(project, changedPluginGAs) != null;
-    }
-
-    /**
-     * Returns the first changed managed plugin GA used by the project, or null.
-     */
-    private String findChangedPlugin(MavenProject project, Set<String> changedPluginGAs) {
-        for (Plugin plugin : project.getBuildPlugins()) {
-            String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
-            if (changedPluginGAs.contains(ga)) {
-                logger.debug("Module {} uses changed managed plugin {}", key(project), ga);
-                return ga;
-            }
-        }
-        return null;
-    }
-
     private boolean matchesDownstreamExclusion(MavenProject project, List<String> patterns) {
         for (String pattern : patterns) {
             if (pattern.contains(":")) {
@@ -881,10 +891,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenProject project,
             TrimResult trimResult,
             ScalpelConfiguration config,
+            Map<String, Model> oldEffectiveModels,
+            Map<String, Model> newEffectiveModels,
+            Path absRoot,
             MavenSession session,
-            Set<String> changedManagedPluginGAs,
-            Set<String> changedManagedDepGAs,
-            Map<MavenProject, DependencyResolutionResult> collectCache) {
+            Map<MavenProject, DependencyResolutionResult> collectCache,
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache) {
         if (config.getSkipTestsForDownstreamModules().isEmpty()) {
             return false;
         }
@@ -895,20 +907,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         if (!matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
             return false;
         }
-        // Safety guard: don't skip tests if the module also has changed managed plugins or deps
-        if (!changedManagedPluginGAs.isEmpty() && usesChangedPlugin(project, changedManagedPluginGAs)) {
-            return false;
-        }
-        return changedManagedDepGAs.isEmpty()
-                || !hasChangedTransitiveDependency(project, session, changedManagedDepGAs, collectCache);
-    }
-
-    private boolean hasChangedTransitiveDependency(
-            MavenProject project,
-            MavenSession session,
-            Set<String> changedGAs,
-            Map<MavenProject, DependencyResolutionResult> collectCache) {
-        return getChangedTransitiveDependencyMatch(project, session, changedGAs, collectCache) != null;
+        // Safety guard: don't skip tests if the module has effective model changes
+        return !hasEffectiveModelChanges(
+                project, oldEffectiveModels, newEffectiveModels, absRoot, session, collectCache, oldCollectCache);
     }
 
     /**
@@ -923,13 +924,38 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     };
 
     /**
-     * Returns the effective scope of the changed transitive dependency, or null if no match.
-     * If any matching dependency has compile/runtime/provided scope, returns that scope.
-     * If all matching dependencies are test-scoped, returns "test".
-     * <p>
-     * Uses a reject-all DependencyFilter so that only the dependency graph is collected
-     * without downloading any artifact files — we only need GA coordinates and scopes.
+     * Checks whether a module's effective plugins or resolved dependency tree changed
+     * between old and new effective models.
      */
+    private boolean hasEffectiveModelChanges(
+            MavenProject project,
+            Map<String, Model> oldEffectiveModels,
+            Map<String, Model> newEffectiveModels,
+            Path absRoot,
+            MavenSession session,
+            Map<MavenProject, DependencyResolutionResult> collectCache,
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache) {
+        String relPath = absRoot.relativize(
+                        project.getFile().toPath().toAbsolutePath().normalize())
+                .toString()
+                .replace('\\', '/');
+        Model oldModel = oldEffectiveModels.get(relPath);
+        Model newModel = newEffectiveModels.get(relPath);
+        if (oldModel == null || newModel == null) {
+            return false;
+        }
+
+        // Check effective plugins
+        Set<String> changedPlugins = pomChangeAnalyzer.diffManagedPluginVersions(
+                pomChangeAnalyzer.getEffectivePlugins(oldModel), pomChangeAnalyzer.getEffectivePlugins(newModel));
+        if (!changedPlugins.isEmpty()) {
+            return true;
+        }
+
+        // Check dependency tree
+        return findChangedDependencyInTree(project, oldModel, session, collectCache, oldCollectCache) != null;
+    }
+
     private static final class ChangedDependencyMatch {
         final String ga;
         final String scope;
@@ -940,57 +966,140 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
     }
 
-    private ChangedDependencyMatch getChangedTransitiveDependencyMatch(
+    /**
+     * Resolve dependency trees from both old effective model and current project,
+     * then diff them.  Returns the first changed dependency (with scope), or null if trees match.
+     * <p>
+     * Uses a reject-all DependencyFilter so only the dependency graph is collected
+     * without downloading any artifact files — we only need GA coordinates, versions, and scopes.
+     */
+    private ChangedDependencyMatch findChangedDependencyInTree(
             MavenProject project,
+            Model oldEffectiveModel,
             MavenSession session,
-            Set<String> changedGAs,
-            Map<MavenProject, DependencyResolutionResult> collectCache) {
-        DependencyResolutionResult result = collectCache.get(project);
-        if (result == null) {
-            try {
-                DefaultDependencyResolutionRequest request =
-                        new DefaultDependencyResolutionRequest(project, session.getRepositorySession());
-                // Reject-all filter: collects the dependency graph without downloading artifacts
-                request.setResolutionFilter(COLLECT_ONLY_FILTER);
-                result = dependenciesResolver.resolve(request);
-            } catch (DependencyResolutionException e) {
-                result = e.getResult();
-                if (result == null) {
-                    logger.debug(
-                            "Cannot collect dependencies for {}, no partial results available: {}",
-                            key(project),
-                            e.getMessage());
-                    return null;
-                }
-                logger.debug(
-                        "Partial dependency collection for {}, checking available results: {}",
-                        key(project),
-                        e.getMessage());
-            }
-            collectCache.put(project, result);
-        }
+            Map<MavenProject, DependencyResolutionResult> collectCache,
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache) {
 
-        // Walk the dependency graph tree to find matching GAs and their scopes.
-        // The reject-all filter means getResolvedDependencies() is empty, but
-        // getDependencyGraph() still contains the full collected tree.
-        DependencyNode root = result.getDependencyGraph();
-        if (root == null) {
+        // Resolve new (current) dependency tree
+        DependencyResolutionResult newResult = resolveProjectDependencies(project, session, collectCache);
+        if (newResult == null || newResult.getDependencyGraph() == null) {
             return null;
         }
-        return findChangedDependency(root, changedGAs, project);
+
+        // Resolve old dependency tree from old effective model
+        DependencyResolutionResult oldResult =
+                resolveModelDependencies(oldEffectiveModel, project, session, oldCollectCache);
+        if (oldResult == null || oldResult.getDependencyGraph() == null) {
+            return null;
+        }
+
+        // Collect (GA → version) from both trees and diff
+        Map<String, String> oldVersions = collectDependencyVersions(oldResult.getDependencyGraph());
+        Map<String, String> newVersions = collectDependencyVersions(newResult.getDependencyGraph());
+
+        // Find changed GAs and determine scope from the new tree
+        Map<String, String> newScopes = collectDependencyScopes(newResult.getDependencyGraph());
+
+        String narrowestGa = null;
+        String narrowestScope = null;
+
+        for (Map.Entry<String, String> e : oldVersions.entrySet()) {
+            if (!Objects.equals(e.getValue(), newVersions.get(e.getKey()))) {
+                String ga = e.getKey();
+                String scope = newScopes.getOrDefault(ga, "compile");
+                logger.debug("Module {} has changed dependency {} (scope={})", key(project), ga, scope);
+                if (!"test".equals(scope)) {
+                    return new ChangedDependencyMatch(ga, scope);
+                }
+                if (narrowestScope == null) {
+                    narrowestScope = "test";
+                    narrowestGa = ga;
+                }
+            }
+        }
+        // Check for newly added dependencies
+        for (String ga : newVersions.keySet()) {
+            if (!oldVersions.containsKey(ga)) {
+                String scope = newScopes.getOrDefault(ga, "compile");
+                logger.debug("Module {} has new dependency {} (scope={})", key(project), ga, scope);
+                if (!"test".equals(scope)) {
+                    return new ChangedDependencyMatch(ga, scope);
+                }
+                if (narrowestScope == null) {
+                    narrowestScope = "test";
+                    narrowestGa = ga;
+                }
+            }
+        }
+
+        return narrowestScope != null ? new ChangedDependencyMatch(narrowestGa, narrowestScope) : null;
     }
 
     /**
-     * Walks the dependency graph tree to find any dependency matching the changed GAs,
-     * returning the match with the narrowest non-test scope (or "test" if only test-scoped matches).
+     * Resolve the current project's dependency tree (cached).
      */
-    private ChangedDependencyMatch findChangedDependency(
-            DependencyNode root, Set<String> changedGAs, MavenProject project) {
-        String narrowestScope = null;
-        String narrowestGa = null;
+    private DependencyResolutionResult resolveProjectDependencies(
+            MavenProject project, MavenSession session, Map<MavenProject, DependencyResolutionResult> cache) {
+        DependencyResolutionResult result = cache.get(project);
+        if (result != null) {
+            return result;
+        }
+        try {
+            DefaultDependencyResolutionRequest request =
+                    new DefaultDependencyResolutionRequest(project, session.getRepositorySession());
+            request.setResolutionFilter(COLLECT_ONLY_FILTER);
+            result = dependenciesResolver.resolve(request);
+        } catch (DependencyResolutionException e) {
+            result = e.getResult();
+            if (result == null) {
+                logger.debug("Cannot collect dependencies for {}: {}", key(project), e.getMessage());
+                return null;
+            }
+        }
+        cache.put(project, result);
+        return result;
+    }
+
+    /**
+     * Resolve the dependency tree from an old effective model.
+     * Creates a temporary MavenProject from the model and copies remote repositories
+     * from the current project so transitive resolution can reach the same repos.
+     */
+    private DependencyResolutionResult resolveModelDependencies(
+            Model oldModel,
+            MavenProject currentProject,
+            MavenSession session,
+            Map<MavenProject, DependencyResolutionResult> cache) {
+        DependencyResolutionResult result = cache.get(currentProject);
+        if (result != null) {
+            return result;
+        }
+        try {
+            MavenProject tempProject = new MavenProject(currentProject);
+            tempProject.setModel(oldModel);
+            tempProject.setDependencies(oldModel.getDependencies());
+            DefaultDependencyResolutionRequest request =
+                    new DefaultDependencyResolutionRequest(tempProject, session.getRepositorySession());
+            request.setResolutionFilter(COLLECT_ONLY_FILTER);
+            result = dependenciesResolver.resolve(request);
+        } catch (DependencyResolutionException e) {
+            result = e.getResult();
+            if (result == null) {
+                logger.debug("Cannot collect old dependencies for {}: {}", key(currentProject), e.getMessage());
+                return null;
+            }
+        }
+        cache.put(currentProject, result);
+        return result;
+    }
+
+    /**
+     * Walk the dependency graph and collect (GA → version) for all nodes.
+     */
+    private static Map<String, String> collectDependencyVersions(DependencyNode root) {
+        Map<String, String> versions = new LinkedHashMap<>();
+        List<DependencyNode> stack = new ArrayList<>(root.getChildren());
         Set<String> visited = new HashSet<>();
-        List<DependencyNode> stack = new ArrayList<>();
-        stack.addAll(root.getChildren());
         while (!stack.isEmpty()) {
             DependencyNode node = stack.remove(stack.size() - 1);
             Dependency dep = node.getDependency();
@@ -999,26 +1108,69 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
             String ga = dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
             if (!visited.add(ga)) {
-                continue; // already visited this GA
+                continue;
             }
-            if (changedGAs.contains(ga)) {
-                String scope = dep.getScope();
-                logger.debug(
-                        "Module {} has transitive dependency on changed managed dep {} (scope={})",
-                        key(project),
-                        ga,
-                        scope);
-                if (scope == null || !"test".equals(scope)) {
-                    return new ChangedDependencyMatch(ga, scope != null ? scope : "compile");
-                }
-                if (narrowestScope == null) {
-                    narrowestScope = "test";
-                    narrowestGa = ga;
-                }
-            }
+            versions.put(ga, dep.getArtifact().getVersion());
             stack.addAll(node.getChildren());
         }
-        return narrowestScope != null ? new ChangedDependencyMatch(narrowestGa, narrowestScope) : null;
+        return versions;
+    }
+
+    /**
+     * Walk the dependency graph and collect (GA → scope) for all nodes.
+     */
+    private static Map<String, String> collectDependencyScopes(DependencyNode root) {
+        Map<String, String> scopes = new LinkedHashMap<>();
+        List<DependencyNode> stack = new ArrayList<>(root.getChildren());
+        Set<String> visited = new HashSet<>();
+        while (!stack.isEmpty()) {
+            DependencyNode node = stack.remove(stack.size() - 1);
+            Dependency dep = node.getDependency();
+            if (dep == null) {
+                continue;
+            }
+            String ga = dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
+            if (!visited.add(ga)) {
+                continue;
+            }
+            scopes.put(ga, dep.getScope() != null ? dep.getScope() : "compile");
+            stack.addAll(node.getChildren());
+        }
+        return scopes;
+    }
+
+    /**
+     * Derive changed managed dependency GAs from effective models (for report purposes only).
+     */
+    private Set<String> deriveChangedManagedDeps(
+            Map<String, Model> oldEffectiveModels, Map<String, Model> newEffectiveModels) {
+        Set<String> changed = new LinkedHashSet<>();
+        for (Map.Entry<String, Model> entry : oldEffectiveModels.entrySet()) {
+            Model newModel = newEffectiveModels.get(entry.getKey());
+            if (newModel != null) {
+                changed.addAll(pomChangeAnalyzer.diffDependencies(
+                        pomChangeAnalyzer.getManagedDependencies(entry.getValue()),
+                        pomChangeAnalyzer.getManagedDependencies(newModel)));
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Derive changed managed plugin GAs from effective models (for report purposes only).
+     */
+    private Set<String> deriveChangedManagedPlugins(
+            Map<String, Model> oldEffectiveModels, Map<String, Model> newEffectiveModels) {
+        Set<String> changed = new LinkedHashSet<>();
+        for (Map.Entry<String, Model> entry : oldEffectiveModels.entrySet()) {
+            Model newModel = newEffectiveModels.get(entry.getKey());
+            if (newModel != null) {
+                changed.addAll(pomChangeAnalyzer.diffManagedPluginVersions(
+                        pomChangeAnalyzer.getManagedPlugins(entry.getValue()),
+                        pomChangeAnalyzer.getManagedPlugins(newModel)));
+            }
+        }
+        return changed;
     }
 
     private void writeImpactedLog(ScalpelConfiguration config, Path reactorRoot, Set<MavenProject> affectedModules)

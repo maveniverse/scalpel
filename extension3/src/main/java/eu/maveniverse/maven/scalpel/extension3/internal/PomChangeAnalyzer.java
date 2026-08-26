@@ -89,39 +89,36 @@ class PomChangeAnalyzer {
 
     /**
      * Result of POM change analysis.
+     * <p>
+     * Carries old and new effective models so callers can compare dependency trees
+     * directly — no intermediate "changed managed dependency GA" sets are needed.
      */
     static class Result {
         private final Set<MavenProject> affectedProjects;
-        private final Set<String> changedManagedDependencyGAs;
-        private final Set<String> changedManagedPluginGAs;
+        private final Map<String, Model> oldEffectiveModels;
+        private final Map<String, Model> newEffectiveModels;
         private final Set<String> changedProperties;
         private final Map<MavenProject, Set<String>> evidence;
         private final List<String> unmatchedPomPaths;
 
         Result(
                 Set<MavenProject> affectedProjects,
-                Set<String> changedManagedDependencyGAs,
-                Set<String> changedManagedPluginGAs,
+                Map<String, Model> oldEffectiveModels,
+                Map<String, Model> newEffectiveModels,
                 Set<String> changedProperties) {
-            this(
-                    affectedProjects,
-                    changedManagedDependencyGAs,
-                    changedManagedPluginGAs,
-                    changedProperties,
-                    Map.of(),
-                    List.of());
+            this(affectedProjects, oldEffectiveModels, newEffectiveModels, changedProperties, Map.of(), List.of());
         }
 
         Result(
                 Set<MavenProject> affectedProjects,
-                Set<String> changedManagedDependencyGAs,
-                Set<String> changedManagedPluginGAs,
+                Map<String, Model> oldEffectiveModels,
+                Map<String, Model> newEffectiveModels,
                 Set<String> changedProperties,
                 Map<MavenProject, Set<String>> evidence,
                 List<String> unmatchedPomPaths) {
             this.affectedProjects = affectedProjects;
-            this.changedManagedDependencyGAs = changedManagedDependencyGAs;
-            this.changedManagedPluginGAs = changedManagedPluginGAs;
+            this.oldEffectiveModels = oldEffectiveModels;
+            this.newEffectiveModels = newEffectiveModels;
             this.changedProperties = changedProperties;
             this.evidence = evidence;
             this.unmatchedPomPaths = unmatchedPomPaths;
@@ -131,12 +128,12 @@ class PomChangeAnalyzer {
             return affectedProjects;
         }
 
-        Set<String> getChangedManagedDependencyGAs() {
-            return changedManagedDependencyGAs;
+        Map<String, Model> getOldEffectiveModels() {
+            return oldEffectiveModels;
         }
 
-        Set<String> getChangedManagedPluginGAs() {
-            return changedManagedPluginGAs;
+        Map<String, Model> getNewEffectiveModels() {
+            return newEffectiveModels;
         }
 
         Set<String> getChangedProperties() {
@@ -176,8 +173,6 @@ class PomChangeAnalyzer {
         // Accumulators — populated during analysis
         final Set<MavenProject> affected = new LinkedHashSet<>();
         final Map<MavenProject, Set<String>> evidence = new LinkedHashMap<>();
-        final Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
-        final Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
         final Set<String> allChangedProperties = new LinkedHashSet<>();
         final List<String> unmatchedPomPaths = new ArrayList<>();
     }
@@ -193,14 +188,15 @@ class PomChangeAnalyzer {
             List<RemoteRepository> remoteRepositories) {}
 
     /**
-     * Analyze POM changes and return the set of affected projects plus changed managed GAs.
+     * Analyze POM changes and return the set of affected projects plus old/new effective models.
      * <p>
      * For child/leaf POM changes: the module itself is marked as affected.
      * For parent/aggregator POM changes: only children that actually reference
      * changed properties, managed dependencies, or managed plugins are affected.
      * <p>
-     * The changed managed dependency and plugin GAs are also returned so callers can check
-     * transitive dependency trees and effective plugins for additional affected modules.
+     * Old and new effective models are returned so callers can compare resolved dependency
+     * trees directly to detect transitively affected modules — no intermediate "changed
+     * managed dependency GA" sets are needed.
      */
     public Result analyzeChanges(
             Set<String> changedPomPaths,
@@ -258,15 +254,13 @@ class PomChangeAnalyzer {
                     ctx.unmatchedPomPaths);
         }
         logger.debug(
-                "POM change analysis complete: {} affected modules, changedProperties={}, changedManagedDeps={}, changedManagedPlugins={}",
+                "POM change analysis complete: {} affected modules, changedProperties={}",
                 ctx.affected.size(),
-                ctx.allChangedProperties,
-                ctx.allChangedManagedDepGAs,
-                ctx.allChangedManagedPluginGAs);
+                ctx.allChangedProperties);
         return new Result(
                 ctx.affected,
-                ctx.allChangedManagedDepGAs,
-                ctx.allChangedManagedPluginGAs,
+                ctx.oldEffectiveModels,
+                ctx.newEffectiveModels,
                 ctx.allChangedProperties,
                 ctx.evidence,
                 ctx.unmatchedPomPaths);
@@ -422,26 +416,13 @@ class PomChangeAnalyzer {
         Set<String> changedProperties =
                 diffProperties(oldEffectiveModel.getProperties(), newEffectiveModel.getProperties());
 
-        // Diff managed deps/plugins at parent level for transitive dependency tracking.
-        // These GAs go into changedManagedDepGAs/changedManagedPluginGAs for
-        // computeTransitivelyAffected — even if no direct child uses a managed dep,
-        // it could be pulled in transitively by an external dependency.
-        // Only report modifications/removals, not brand-new entries (issue #131).
-        // Note: child-level impact uses effective dependency comparison (hasEffectiveChanges)
-        // rather than GA matching against these sets — see the child analysis loop below.
-        //
-        // Managed deps: compare effective models (profile activation and parent inheritance
-        // produce the correct merged dependency list).
+        // Diff managed deps/plugins at parent level for logging.
+        // Transitive impact is now detected by comparing resolved dependency trees
+        // directly (old effective model vs new), not via GA sets.
         Set<String> changedManagedDeps =
                 diffDependencies(getManagedDependencies(oldEffectiveModel), getManagedDependencies(newEffectiveModel));
-        // Managed plugins: compare effective models directly.  Both old and new are
-        // built by the same ModelBuilder so lifecycle defaults are identical on both
-        // sides — no filtering against raw-model GAs is needed.
         Set<String> changedManagedPlugins =
                 diffManagedPluginVersions(getManagedPlugins(oldEffectiveModel), getManagedPlugins(newEffectiveModel));
-
-        ctx.allChangedManagedDepGAs.addAll(changedManagedDeps);
-        ctx.allChangedManagedPluginGAs.addAll(changedManagedPlugins);
 
         // Check active profile direct deps/plugins for parentSelfAffected
         Set<String> activeProfileIds = getActiveProfileIds(parentProject);
@@ -529,8 +510,6 @@ class PomChangeAnalyzer {
                     logger.debug("Child {} is DIRECTLY AFFECTED by parent {} change", key(child), key(parentProject));
                 }
                 ctx.affected.add(child);
-                // Propagate managed dep/plugin version changes through affected child BOMs
-                propagateEffectiveManagedChanges(child, absReactorRoot, ctx);
             } else {
                 if (logger.isDebugEnabled()) {
                     logger.debug("Child {} is NOT affected by parent {} change", key(child), key(parentProject));
@@ -550,54 +529,6 @@ class PomChangeAnalyzer {
                     key(parentProject),
                     affectedCount,
                     dependentProjects.size());
-        }
-    }
-
-    /**
-     * Propagate effective dependency/plugin changes through an affected child.
-     * If the child's effective deps or plugins changed (e.g. due to an inherited
-     * property change or managed version bump), the changed GAs are added to the
-     * global sets for transitive dependency/plugin checking.
-     */
-    private void propagateEffectiveManagedChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
-        Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
-        String childRelPath = absReactorRoot.relativize(childPomPath).toString().replace('\\', '/');
-        Model oldChildEffective = ctx.oldEffectiveModels.get(childRelPath);
-        Model newChildEffective = ctx.newEffectiveModels.get(childRelPath);
-        if (oldChildEffective == null || newChildEffective == null) {
-            return;
-        }
-
-        // Effective dependencies: propagate changed GAs
-        Set<String> childChangedDeps =
-                diffDependencies(oldChildEffective.getDependencies(), newChildEffective.getDependencies());
-        if (!childChangedDeps.isEmpty()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Child {} propagates changed effective deps: {}", key(child), childChangedDeps);
-            }
-            ctx.allChangedManagedDepGAs.addAll(childChangedDeps);
-        }
-
-        // Managed dependencies: propagate changed GAs (important for BOMs that provide
-        // managed deps to other modules — version changes must be tracked for transitive checking)
-        Set<String> childChangedManagedDeps =
-                diffDependencies(getManagedDependencies(oldChildEffective), getManagedDependencies(newChildEffective));
-        if (!childChangedManagedDeps.isEmpty()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Child {} propagates changed managed deps: {}", key(child), childChangedManagedDeps);
-            }
-            ctx.allChangedManagedDepGAs.addAll(childChangedManagedDeps);
-        }
-
-        // Managed plugins: propagate changed GAs directly.  Both old and new models
-        // are built by the same ModelBuilder so no lifecycle-default filtering is needed.
-        Set<String> childChangedManagedPlugins =
-                diffManagedPluginVersions(getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective));
-        if (!childChangedManagedPlugins.isEmpty()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Child {} propagates changed managed plugins: {}", key(child), childChangedManagedPlugins);
-            }
-            ctx.allChangedManagedPluginGAs.addAll(childChangedManagedPlugins);
         }
     }
 
@@ -746,7 +677,7 @@ class PomChangeAnalyzer {
         return changed;
     }
 
-    private Set<String> diffDependencies(List<Dependency> oldDeps, List<Dependency> newDeps) {
+    Set<String> diffDependencies(List<Dependency> oldDeps, List<Dependency> newDeps) {
         Set<String> changed = new LinkedHashSet<>();
         Map<String, Dependency> oldMap = new LinkedHashMap<>();
         for (Dependency d : oldDeps) {
@@ -829,7 +760,7 @@ class PomChangeAnalyzer {
      * <p>
      * Only report modifications and removals — not brand-new entries (issue #131).
      */
-    private Set<String> diffManagedPluginVersions(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
+    Set<String> diffManagedPluginVersions(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
         Set<String> changed = new LinkedHashSet<>();
         Map<String, String> oldVersions = new LinkedHashMap<>();
         for (Plugin p : oldPlugins) {
@@ -1127,11 +1058,11 @@ class PomChangeAnalyzer {
      * On effective models, getBuild().getPlugins() already contains the merged result
      * of direct plugins + pluginManagement-resolved plugins.
      */
-    private List<Plugin> getEffectivePlugins(Model model) {
+    List<Plugin> getEffectivePlugins(Model model) {
         return getPlugins(model);
     }
 
-    private List<Dependency> getManagedDependencies(Model model) {
+    List<Dependency> getManagedDependencies(Model model) {
         if (model.getDependencyManagement() != null
                 && model.getDependencyManagement().getDependencies() != null) {
             return model.getDependencyManagement().getDependencies();
@@ -1139,7 +1070,7 @@ class PomChangeAnalyzer {
         return new ArrayList<>();
     }
 
-    private List<Plugin> getManagedPlugins(Model model) {
+    List<Plugin> getManagedPlugins(Model model) {
         if (model.getBuild() != null
                 && model.getBuild().getPluginManagement() != null
                 && model.getBuild().getPluginManagement().getPlugins() != null) {
