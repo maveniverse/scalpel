@@ -44,6 +44,12 @@ public final class ScalpelReport {
     public static final String REASON_TRANSITIVE_DEPENDENCY_TEST = "TRANSITIVE_DEPENDENCY_TEST";
     public static final String REASON_EXCLUDED_DOWNSTREAM = "EXCLUDED_DOWNSTREAM";
 
+    /**
+     * Skip reason for a reactor module that was left out of the build set because it is
+     * not affected by the changeset (not direct, transitive, upstream or downstream).
+     */
+    public static final String SKIP_REASON_NOT_AFFECTED = "NOT_AFFECTED";
+
     public static final String CATEGORY_DIRECT = "DIRECT";
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";
     public static final String CATEGORY_DOWNSTREAM = "DOWNSTREAM";
@@ -60,6 +66,7 @@ public final class ScalpelReport {
     private final List<String> changedManagedPlugins;
     private final List<String> unmatchedPomPaths;
     private final List<AffectedModule> affectedModules;
+    private final List<SkippedModule> skippedModules;
     private final int excludedUpstreamCount;
 
     private ScalpelReport(
@@ -74,6 +81,7 @@ public final class ScalpelReport {
             List<String> changedManagedPlugins,
             List<String> unmatchedPomPaths,
             List<AffectedModule> affectedModules,
+            List<SkippedModule> skippedModules,
             int excludedUpstreamCount) {
         this.baseBranch = baseBranch;
         this.status = status;
@@ -86,6 +94,7 @@ public final class ScalpelReport {
         this.changedManagedPlugins = changedManagedPlugins;
         this.unmatchedPomPaths = unmatchedPomPaths;
         this.affectedModules = affectedModules;
+        this.skippedModules = skippedModules;
         this.excludedUpstreamCount = excludedUpstreamCount;
     }
 
@@ -231,6 +240,40 @@ public final class ScalpelReport {
         }
     }
 
+    /**
+     * A reactor module that was left out of the build set, with the reason it was judged
+     * safe to skip. Enumerating this set is what makes a green trimmed build reviewable.
+     */
+    public static final class SkippedModule {
+        private final String groupId;
+        private final String artifactId;
+        private final String path;
+        private final String reason;
+
+        public SkippedModule(String groupId, String artifactId, String path, String reason) {
+            this.groupId = groupId;
+            this.artifactId = artifactId;
+            this.path = path;
+            this.reason = reason;
+        }
+
+        public String getGroupId() {
+            return groupId;
+        }
+
+        public String getArtifactId() {
+            return artifactId;
+        }
+
+        public String getPath() {
+            return path;
+        }
+
+        public String getReason() {
+            return reason;
+        }
+    }
+
     public String toJson() {
         StringBuilder sb = new StringBuilder();
         sb.append("{\n");
@@ -277,8 +320,29 @@ public final class ScalpelReport {
             }
             sb.append("  ]");
         }
+        if (!skippedModules.isEmpty()) {
+            sb.append(",\n");
+            sb.append("  \"skippedModules\": [\n");
+            for (int i = 0; i < skippedModules.size(); i++) {
+                appendSkippedModuleJson(sb, skippedModules.get(i));
+                if (i < skippedModules.size() - 1) {
+                    sb.append(",");
+                }
+                sb.append("\n");
+            }
+            sb.append("  ]");
+        }
         sb.append("\n}\n");
         return sb.toString();
+    }
+
+    private static void appendSkippedModuleJson(StringBuilder sb, SkippedModule m) {
+        sb.append("    {\n");
+        sb.append("      \"groupId\": ").append(jsonString(m.groupId)).append(",\n");
+        sb.append("      \"artifactId\": ").append(jsonString(m.artifactId)).append(",\n");
+        sb.append("      \"path\": ").append(jsonString(m.path)).append(",\n");
+        sb.append("      \"reason\": ").append(jsonString(m.reason)).append("\n");
+        sb.append("    }");
     }
 
     private static void appendModuleJson(StringBuilder sb, AffectedModule m) {
@@ -381,6 +445,7 @@ public final class ScalpelReport {
         private final List<String> changedManagedPlugins = new ArrayList<>();
         private final List<String> unmatchedPomPaths = new ArrayList<>();
         private final List<AffectedModule> affectedModules = new ArrayList<>();
+        private final List<SkippedModule> skippedModules = new ArrayList<>();
         private int excludedUpstreamCount;
 
         public Builder baseBranch(String baseBranch) {
@@ -438,6 +503,11 @@ public final class ScalpelReport {
             return this;
         }
 
+        public Builder addSkippedModule(SkippedModule module) {
+            this.skippedModules.add(module);
+            return this;
+        }
+
         public Builder excludedUpstreamCount(int count) {
             this.excludedUpstreamCount = count;
             return this;
@@ -459,6 +529,7 @@ public final class ScalpelReport {
                     changedManagedPlugins,
                     unmatchedPomPaths,
                     affectedModules,
+                    skippedModules,
                     excludedUpstreamCount);
         }
     }
