@@ -43,7 +43,6 @@ import org.apache.maven.model.Profile;
 import org.apache.maven.model.Repository;
 import org.apache.maven.model.RepositoryPolicy;
 import org.apache.maven.model.Resource;
-import org.apache.maven.model.building.DefaultModelBuilderFactory;
 import org.apache.maven.model.building.DefaultModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
@@ -68,11 +67,16 @@ class PomChangeAnalyzer {
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final RepositorySystem repositorySystem;
     private final RemoteRepositoryManager remoteRepositoryManager;
+    private final org.apache.maven.model.building.ModelBuilder modelBuilder;
 
     @Inject
-    PomChangeAnalyzer(RepositorySystem repositorySystem, RemoteRepositoryManager remoteRepositoryManager) {
+    PomChangeAnalyzer(
+            RepositorySystem repositorySystem,
+            RemoteRepositoryManager remoteRepositoryManager,
+            org.apache.maven.model.building.ModelBuilder modelBuilder) {
         this.repositorySystem = requireNonNull(repositorySystem, "repositorySystem");
         this.remoteRepositoryManager = requireNonNull(remoteRepositoryManager, "remoteRepositoryManager");
+        this.modelBuilder = requireNonNull(modelBuilder, "modelBuilder");
     }
 
     /**
@@ -1222,8 +1226,10 @@ class PomChangeAnalyzer {
             // unchanged POMs get their current content.
             reconstructPomHierarchy(tempDir, absRoot, allProjects, oldPomContents);
 
-            // Build effective models for all reactor POMs from the temp directory
-            org.apache.maven.model.building.ModelBuilder modelBuilder = new DefaultModelBuilderFactory().newInstance();
+            // Build effective models for all reactor POMs from the temp directory.
+            // Uses the container-injected ModelBuilder — the same instance Maven uses for the
+            // reactor build — so lifecycle bindings contributed by extensions are visible and
+            // the old/new effective models are fully comparable.
             Map<String, Model> result = new LinkedHashMap<>();
 
             for (MavenProject project : allProjects) {
@@ -1232,7 +1238,8 @@ class PomChangeAnalyzer {
                 String relPath = relativePom.toString().replace('\\', '/');
                 Path tempPomFile = tempDir.resolve(relativePom);
 
-                Model model = buildSingleEffectiveModel(modelBuilder, tempPomFile, relPath, project, resolutionCtx);
+                Model model =
+                        buildSingleEffectiveModel(this.modelBuilder, tempPomFile, relPath, project, resolutionCtx);
                 if (model != null) {
                     result.put(relPath, model);
                 }
@@ -1281,9 +1288,10 @@ class PomChangeAnalyzer {
             // Resolve external parents and BOM imports from the local repository cache.
             // processPlugins=true so lifecycle defaults and pluginManagement-to-plugins
             // merging produce a model comparable to the live reactor's project.getModel().
-            // Any remaining config/execution differences between standalone and reactor
-            // model builders are handled by using version-only comparison for managed plugins
-            // (see diffManagedPluginVersions).
+            // The injected ModelBuilder is the same instance Maven uses for the reactor,
+            // so extension-contributed lifecycle bindings are visible.
+            // Any remaining config/execution differences are handled by version-only
+            // comparison for managed plugins (see diffManagedPluginVersions).
             request.setModelResolver(new ProjectModelResolver(
                     resolutionCtx.repoSession(),
                     null, // no request trace needed

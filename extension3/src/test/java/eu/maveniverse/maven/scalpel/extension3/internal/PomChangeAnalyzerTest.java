@@ -57,7 +57,10 @@ class PomChangeAnalyzerTest {
 
     @BeforeEach
     void setUp() {
-        analyzer = new PomChangeAnalyzer(mock(RepositorySystem.class), mock(RemoteRepositoryManager.class));
+        analyzer = new PomChangeAnalyzer(
+                mock(RepositorySystem.class),
+                mock(RemoteRepositoryManager.class),
+                new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance());
     }
 
     /** Convenience wrapper: calls analyzeChanges with default explain=true and the default mock resolution context. */

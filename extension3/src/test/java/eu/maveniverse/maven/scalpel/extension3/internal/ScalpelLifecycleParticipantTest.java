@@ -85,7 +85,10 @@ class ScalpelLifecycleParticipantTest {
         participant = new ScalpelLifecycleParticipant(
                 scalpelCore,
                 new ModuleMapper(),
-                new PomChangeAnalyzer(mock(RepositorySystem.class), mock(RemoteRepositoryManager.class)),
+                new PomChangeAnalyzer(
+                        mock(RepositorySystem.class),
+                        mock(RemoteRepositoryManager.class),
+                        new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance()),
                 new ReactorTrimmer(),
                 dependenciesResolver);
     }
