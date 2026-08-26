@@ -827,6 +827,26 @@ class PomChangeAnalyzerTest {
                                 + "<includes><include>**/*.xml</include></includes>"
                                 + "</resource></resources></build>")),
                 Arguments.of(
+                        "resource includes changed only by duplicated entry",
+                        parentPomWith("<build><resources><resource><directory>src/main/resources</directory>"
+                                + "<includes><include>**/*.xml</include><include>**/*.xml</include>"
+                                + "<include>**/*.properties</include></includes>"
+                                + "</resource></resources></build>"),
+                        parentPomWith("<build><resources><resource><directory>src/main/resources</directory>"
+                                + "<includes><include>**/*.xml</include>"
+                                + "<include>**/*.properties</include><include>**/*.properties</include>"
+                                + "</includes></resource></resources></build>")),
+                Arguments.of(
+                        "resource excludes changed only by duplicated entry",
+                        parentPomWith("<build><resources><resource><directory>src/main/resources</directory>"
+                                + "<excludes><exclude>**/*.keystore</exclude><exclude>**/*.keystore</exclude>"
+                                + "<exclude>**/*.jks</exclude></excludes>"
+                                + "</resource></resources></build>"),
+                        parentPomWith("<build><resources><resource><directory>src/main/resources</directory>"
+                                + "<excludes><exclude>**/*.keystore</exclude>"
+                                + "<exclude>**/*.jks</exclude><exclude>**/*.jks</exclude></excludes>"
+                                + "</resource></resources></build>")),
+                Arguments.of(
                         "test resource directory changed",
                         parentPomWith("<build><testResources><testResource>"
                                 + "<directory>src/test/resources2</directory>"

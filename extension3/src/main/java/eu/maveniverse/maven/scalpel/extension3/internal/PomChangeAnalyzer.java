@@ -18,7 +18,6 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -908,7 +907,11 @@ class PomChangeAnalyzer {
         if (a.size() != b.size()) {
             return false;
         }
-        return new HashSet<>(a).equals(new HashSet<>(b));
+        List<String> sortedA = new ArrayList<>(a);
+        List<String> sortedB = new ArrayList<>(b);
+        sortedA.sort(String::compareTo);
+        sortedB.sort(String::compareTo);
+        return sortedA.equals(sortedB);
     }
 
     private boolean equalRepositoryLists(List<Repository> a, List<Repository> b) {
