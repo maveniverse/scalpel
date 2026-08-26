@@ -937,6 +937,135 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void trimMode_reportListsSkippedModulesWithNotAffectedReason() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "trim mode should write the JSON report");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-b was trimmed out of the build: it must be enumerated with a reason
+        assertTrue(json.contains("\"skippedModules\""), "report must contain skippedModules array");
+        assertTrue(
+                skippedModuleHasReason(json, "module-b", "NOT_AFFECTED"),
+                "module-b should be in skippedModules with NOT_AFFECTED");
+        // the affected module must not appear in the skipped set
+        assertFalse(
+                skippedModulePresent(json, "module-a"),
+                "module-a should NOT be in skippedModules (it is in the build set)");
+    }
+
+    @Test
+    void trimMode_reportOmitsSkippedModulesWhenNothingSkipped() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        // module-a is directly affected; the parent is force-included so nothing is skipped
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.forceBuildModules", "parent");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "trim mode should write the JSON report");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertFalse(json.contains("\"skippedModules\""), "skippedModules must be omitted when nothing is skipped");
+    }
+
+    private boolean skippedModulePresent(String json, String artifactId) {
+        String skippedSection = extractSection(json, "skippedModules");
+        return skippedSection != null && skippedSection.contains("\"artifactId\": \"" + artifactId + "\"");
+    }
+
+    private boolean skippedModuleHasReason(String json, String artifactId, String reason) {
+        String skippedSection = extractSection(json, "skippedModules");
+        if (skippedSection == null) {
+            return false;
+        }
+        String marker = "\"artifactId\": \"" + artifactId + "\"";
+        int idx = skippedSection.indexOf(marker);
+        if (idx < 0) {
+            return false;
+        }
+        int end = skippedSection.indexOf("}", idx);
+        if (end < 0) {
+            return false;
+        }
+        return skippedSection.substring(idx, end).contains("\"reason\": \"" + reason + "\"");
+    }
+
+    private String extractSection(String json, String sectionName) {
+        int start = json.indexOf("\"" + sectionName + "\":");
+        if (start < 0) {
+            return null;
+        }
+        int bracketStart = json.indexOf("[", start);
+        if (bracketStart < 0) {
+            return null;
+        }
+        int depth = 0;
+        for (int i = bracketStart; i < json.length(); i++) {
+            if (json.charAt(i) == '[') {
+                depth++;
+            }
+            if (json.charAt(i) == ']') {
+                depth--;
+            }
+            if (depth == 0) {
+                return json.substring(bracketStart, i + 1);
+            }
+        }
+        return null;
+    }
+
+    @Test
     void skipTestsMode_skipsUnaffectedModules() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
@@ -2406,6 +2535,63 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void trimMode_includePathsScopeExcludedModuleAppearsInSkippedModules() throws Exception {
+        // module-a has source changes and matches includePaths.
+        // module-b depends on module-a (downstream) but is outside includePaths.
+        // module-b must appear in skippedModules (NOT_AFFECTED) and NOT in affectedModules.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        // Set up dependency graph: module-b is downstream of module-a
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        ProjectDependencyGraph graph = session.getProjectDependencyGraph();
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        session.getSystemProperties().setProperty("scalpel.includePaths", "module-a/**");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "trim mode should write the JSON report");
+
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+
+        // module-b was removed from the trimmed reactor by includePaths:
+        // it must appear in skippedModules with NOT_AFFECTED
+        assertTrue(
+                skippedModuleHasReason(json, "module-b", "NOT_AFFECTED"),
+                "module-b should be in skippedModules with NOT_AFFECTED (downstream but outside includePaths)");
+        // module-a should NOT be in skippedModules (it is in the build set)
+        assertFalse(
+                skippedModulePresent(json, "module-a"),
+                "module-a should NOT be in skippedModules (it is in the filtered build set)");
+        // module-b should NOT be in affectedModules (filtered by report-side includePaths)
+        assertFalse(
+                modulePresent(json, "module-b"), "module-b should NOT be in affectedModules (outside includePaths)");
+    }
+
+    @Test
     void reportMode_includePathsExcludesDownstreamOutsideScope() throws Exception {
         // module-a has source changes and matches includePaths.
         // module-b depends on module-a (downstream) but is outside includePaths.
@@ -3023,9 +3209,11 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        // failSafe=true → should not throw, just return (build all)
+        // failSafe=true → should not throw. The invalid old POM is handled conservatively
+        // (all dependents marked affected), so the normal trim path runs and, since #91,
+        // trim mode writes the JSON report too.
         Path reportFile = root.resolve("target/scalpel-report.json");
-        assertFalse(Files.exists(reportFile));
+        assertTrue(Files.exists(reportFile));
     }
 
     @Test
@@ -3575,21 +3763,26 @@ class ScalpelLifecycleParticipantTest {
     }
 
     private boolean modulePresent(String json, String artifactId) {
-        return json.contains("\"artifactId\": \"" + artifactId + "\"");
+        String affectedSection = extractSection(json, "affectedModules");
+        return affectedSection != null && affectedSection.contains("\"artifactId\": \"" + artifactId + "\"");
     }
 
     private String extractModuleBlock(String json, String artifactId) {
+        String affectedSection = extractSection(json, "affectedModules");
+        if (affectedSection == null) {
+            return null;
+        }
         String marker = "\"artifactId\": \"" + artifactId + "\"";
-        int idx = json.indexOf(marker);
+        int idx = affectedSection.indexOf(marker);
         if (idx < 0) {
             return null;
         }
-        int start = json.lastIndexOf("{", idx);
-        int end = json.indexOf("}", idx);
+        int start = affectedSection.lastIndexOf("{", idx);
+        int end = affectedSection.indexOf("}", idx);
         if (start < 0 || end < 0) {
             return null;
         }
-        return json.substring(start, end + 1);
+        return affectedSection.substring(start, end + 1);
     }
 
     private boolean moduleHasReason(String json, String artifactId, String reason) {

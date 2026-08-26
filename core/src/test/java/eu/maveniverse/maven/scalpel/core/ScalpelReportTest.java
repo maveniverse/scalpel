@@ -45,6 +45,38 @@ class ScalpelReportTest {
     }
 
     @Test
+    void toJson_skippedModuleListedWithReason() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE)))
+                .addSkippedModule(new ScalpelReport.SkippedModule(
+                        "com.example", "module-b", "module-b", ScalpelReport.SKIP_REASON_NOT_AFFECTED))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"skippedModules\""), "skippedModules array must be present");
+        assertTrue(json.contains("\"NOT_AFFECTED\""), "skip reason must be serialized");
+        assertTrue(json.contains("\"module-b\""), "skipped module artifactId must be serialized");
+    }
+
+    @Test
+    void toJson_skippedModulesOmittedWhenNothingSkipped() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE)))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("\"skippedModules\""), "skippedModules must be omitted when nothing is skipped");
+    }
+
+    @Test
     void toJson_transitivelyAffectedModule() {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
