@@ -410,8 +410,9 @@ class GitChangeDetectorTest {
     // ---- fetchBranch validation (#85) ----
 
     /**
-     * Creates a work repo with a commit on branch main, plus a bare remote named "origin"
-     * that has main pushed to it, and configures the remote on the work repo.
+     * Creates a work repo with a commit on its initial branch (whatever the environment
+     * defaults to), plus a bare remote named "origin" that has that branch pushed to it,
+     * and configures the remote on the work repo.
      */
     private Repository repoWithOriginRemote() throws Exception {
         Path remoteDir = tempDir.resolve("remote.git");
@@ -427,8 +428,11 @@ class GitChangeDetectorTest {
                 Files.write(workDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
                 git.add().addFilepattern("file.txt").call();
                 git.commit().setMessage("initial").call();
-                git.branchCreate().setName("main").call();
-                git.push().setRemote(remoteDir.toUri().toString()).add("main").call();
+                // The initial branch name comes from the environment (init.defaultBranch),
+                // so derive it from the repository instead of creating "main", which
+                // already exists where that is the default
+                String branch = git.getRepository().getBranch();
+                git.push().setRemote(remoteDir.toUri().toString()).add(branch).call();
                 git.remoteAdd()
                         .setName("origin")
                         .setUri(new org.eclipse.jgit.transport.URIish(
