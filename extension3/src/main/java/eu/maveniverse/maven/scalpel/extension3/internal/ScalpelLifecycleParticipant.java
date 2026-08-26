@@ -223,7 +223,6 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             result.getOldPomContents(),
                             allProjects,
                             reactorRoot,
-                            config.getMaxResourceFileSize(),
                             config.isExplain(),
                             new PomChangeAnalyzer.ModelResolutionContext(
                                     session.getSystemProperties(),

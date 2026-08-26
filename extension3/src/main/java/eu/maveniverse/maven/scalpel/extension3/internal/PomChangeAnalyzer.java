@@ -10,7 +10,6 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
 import static java.util.Objects.requireNonNull;
 
-import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
@@ -140,16 +139,22 @@ import org.slf4j.LoggerFactory;
  *             in the changeset).</li>
  *       </ul></li>
  *
- *   <li><b>Property reference fallback</b> (per dependent):
- *       If the effective model comparison didn't flag the dependent, a text search checks
- *       whether the child POM references any changed property via {@code ${prop}}.  This
- *       is a safety net for cases where the effective model couldn't be built or where
- *       property changes affect non-dependency POM elements (e.g. {@code <finalName>}).</li>
+ *   <li><b>Effective property comparison</b> (per dependent):
+ *       For each property explicitly defined in the child's raw (file) model, the old
+ *       and new effective (interpolated) values are compared.  A child defining
+ *       {@code <foo>${bar}</foo>} will be flagged when the parent changes {@code <bar>},
+ *       because the effective value of {@code foo} changes.  Only properties the child
+ *       defines are checked — inherited-but-unused properties do not cause cascading
+ *       false positives.  This also covers properties used in non-dependency POM elements
+ *       ({@code <finalName>}, plugin configuration) and in filtered resources, since those
+ *       properties are typically defined in the project itself.</li>
  *
  *   <li><b>Filtered resource scan</b> (per dependent):
  *       If the child has filtered resources ({@code <filtering>true</filtering>}), those
  *       files are scanned for references to changed properties.  Filtered resources live
- *       outside the POM model, so effective model comparison cannot detect them.</li>
+ *       outside the POM model, so effective model comparison cannot detect them.  Properties
+ *       used in filtered resources may be inherited from a parent rather than defined in the
+ *       child, making the raw-model property check insufficient for this case.</li>
  * </ol>
  *
  * <h2>Output</h2>
@@ -287,7 +292,6 @@ class PomChangeAnalyzer {
         Map<MavenProject, List<MavenProject>> bomImporters;
         List<MavenProject> allProjects;
         Path reactorRoot;
-        long maxResourceFileSize;
         boolean explain;
 
         // Accumulators — populated during analysis
@@ -323,7 +327,6 @@ class PomChangeAnalyzer {
             Map<String, byte[]> oldPomContents,
             List<MavenProject> allProjects,
             Path reactorRoot,
-            long maxResourceFileSize,
             boolean explain,
             ModelResolutionContext resolutionCtx) {
 
@@ -359,7 +362,6 @@ class PomChangeAnalyzer {
         ctx.bomImporters = bomImporters;
         ctx.allProjects = allProjects;
         ctx.reactorRoot = reactorRoot;
-        ctx.maxResourceFileSize = maxResourceFileSize;
         ctx.explain = explain;
 
         for (String changedPomPath : changedPomPaths) {
@@ -592,32 +594,14 @@ class PomChangeAnalyzer {
                 childAffected = hasEffectiveChanges(child, absReactorRoot, ctx);
             }
 
-            // Fallback: check if child POM text references any changed property.
-            // Effective model comparison may not be available for all children
-            // (e.g. when old effective models can't be built), so the text search
-            // provides a safety net for property-driven changes.
-            if (!childAffected && !changedProperties.isEmpty()) {
-                String childPomText = readPomText(child);
-                if (childPomText != null) {
-                    for (String prop : changedProperties) {
-                        if (childPomText.contains("${" + prop + "}")) {
-                            logger.debug("Child {} references changed property {}", key(child), prop);
-                            if (ctx.explain) {
-                                addEvidence(ctx.evidence, child, "property " + prop);
-                            }
-                            childAffected = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
             // Check if child has filtered resources referencing changed properties.
-            // Filtered resources are outside the POM model — effective model comparison
-            // cannot detect property substitutions in resource files.
+            // Filtered resources live outside the POM model — the effective model
+            // comparison cannot detect property substitutions in resource files.
+            // Properties used in filtered resources are often inherited (defined in the
+            // parent, not the child), so the raw-model property check above won't catch them.
             if (!childAffected
                     && !changedProperties.isEmpty()
-                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, ctx.maxResourceFileSize)) {
+                    && hasFilteredResourcesWithChangedProperty(child, changedProperties)) {
                 logger.debug("Child {} has filtered resources referencing changed properties", key(child));
                 if (ctx.explain) {
                     addEvidence(ctx.evidence, child, "filtered resources referencing changed properties");
@@ -707,6 +691,103 @@ class PomChangeAnalyzer {
                 }
             }
             changed = true;
+        }
+
+        // Compare effective values of properties explicitly defined in the child's
+        // raw (file) model.  A property like <foo>${bar}</foo> in the child POM may
+        // resolve to different values when the parent changes <bar>.  Checking only
+        // properties the child defines avoids cascading false positives from inherited
+        // but unused properties.  This also covers properties used in non-dependency
+        // POM elements (e.g. <finalName>, plugin configuration) and in filtered
+        // resources, since those properties are typically defined in the project itself.
+        Properties rawChildProps = child.getOriginalModel().getProperties();
+        if (rawChildProps != null && !rawChildProps.isEmpty()) {
+            Properties oldEffectiveProps = oldChildEffective.getProperties();
+            Properties newEffectiveProps = newChildEffective.getProperties();
+            for (String propName : rawChildProps.stringPropertyNames()) {
+                String oldValue = oldEffectiveProps != null ? oldEffectiveProps.getProperty(propName) : null;
+                String newValue = newEffectiveProps != null ? newEffectiveProps.getProperty(propName) : null;
+                if (!Objects.equals(oldValue, newValue)) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(
+                                "Child {} property {} effective value changed: {} -> {}",
+                                key(child),
+                                propName,
+                                oldValue,
+                                newValue);
+                    }
+                    if (ctx.explain) {
+                        addEvidence(ctx.evidence, child, "effective property " + propName);
+                    }
+                    changed = true;
+                    // Don't break — log all changed properties for diagnostics
+                }
+            }
+        }
+
+        // Compare effective versions of managed dependencies defined in the child's
+        // raw model.  A BOM that declares <version>${lib.version}</version> in its
+        // managed deps will be flagged when the parent changes the property, because
+        // the effective managed dep version changes.  Only managed deps the child
+        // explicitly declares are checked — inherited managed deps are ignored.
+        Model rawChildModel = child.getOriginalModel();
+        if (rawChildModel.getDependencyManagement() != null) {
+            List<Dependency> rawManagedDeps =
+                    rawChildModel.getDependencyManagement().getDependencies();
+            if (rawManagedDeps != null && !rawManagedDeps.isEmpty()) {
+                // Build GA set of managed deps the child declares in its own POM
+                Set<String> rawManagedGAs = new LinkedHashSet<>();
+                for (Dependency dep : rawManagedDeps) {
+                    rawManagedGAs.add(dep.getGroupId() + ":" + dep.getArtifactId());
+                }
+                // Compare only those GAs in old vs new effective managed deps
+                Set<String> changedRawManagedDeps = diffDependencies(
+                        filterByGA(getManagedDependencies(oldChildEffective), rawManagedGAs),
+                        filterByGA(getManagedDependencies(newChildEffective), rawManagedGAs));
+                if (!changedRawManagedDeps.isEmpty()) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(
+                                "Child {} has changed effective managed deps (defined in raw model): {}",
+                                key(child),
+                                changedRawManagedDeps);
+                    }
+                    if (ctx.explain) {
+                        for (String ga : changedRawManagedDeps) {
+                            addEvidence(ctx.evidence, child, "effective managed dep " + ga);
+                        }
+                    }
+                    changed = true;
+                }
+            }
+        }
+
+        // Same for managed plugins defined in the child's raw model.
+        if (rawChildModel.getBuild() != null && rawChildModel.getBuild().getPluginManagement() != null) {
+            List<Plugin> rawManagedPlugins =
+                    rawChildModel.getBuild().getPluginManagement().getPlugins();
+            if (rawManagedPlugins != null && !rawManagedPlugins.isEmpty()) {
+                Set<String> rawPluginGAs = new LinkedHashSet<>();
+                for (Plugin p : rawManagedPlugins) {
+                    rawPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+                }
+                Set<String> changedRawManagedPlugins = diffManagedPluginVersions(
+                        filterPluginsByGA(getManagedPlugins(oldChildEffective), rawPluginGAs),
+                        filterPluginsByGA(getManagedPlugins(newChildEffective), rawPluginGAs));
+                if (!changedRawManagedPlugins.isEmpty()) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(
+                                "Child {} has changed effective managed plugins (defined in raw model): {}",
+                                key(child),
+                                changedRawManagedPlugins);
+                    }
+                    if (ctx.explain) {
+                        for (String ga : changedRawManagedPlugins) {
+                            addEvidence(ctx.evidence, child, "effective managed plugin " + ga);
+                        }
+                    }
+                    changed = true;
+                }
+            }
         }
 
         return changed;
@@ -1199,6 +1280,141 @@ class PomChangeAnalyzer {
         return new ArrayList<>();
     }
 
+    /**
+     * Filter a dependency list to only those whose GA is in the given set.
+     * Used to restrict effective model comparisons to entries the child declares in its raw POM.
+     */
+    private static List<Dependency> filterByGA(List<Dependency> deps, Set<String> gaSet) {
+        List<Dependency> filtered = new ArrayList<>();
+        for (Dependency dep : deps) {
+            if (gaSet.contains(dep.getGroupId() + ":" + dep.getArtifactId())) {
+                filtered.add(dep);
+            }
+        }
+        return filtered;
+    }
+
+    /**
+     * Filter a plugin list to only those whose GA is in the given set.
+     */
+    private static List<Plugin> filterPluginsByGA(List<Plugin> plugins, Set<String> gaSet) {
+        List<Plugin> filtered = new ArrayList<>();
+        for (Plugin p : plugins) {
+            if (gaSet.contains(p.getGroupId() + ":" + p.getArtifactId())) {
+                filtered.add(p);
+            }
+        }
+        return filtered;
+    }
+
+    /**
+     * Check if a project has filtered resources that reference any of the changed properties.
+     * Filtered resources live outside the POM model, so effective model comparison cannot
+     * detect property substitutions in resource files.
+     */
+    private boolean hasFilteredResourcesWithChangedProperty(MavenProject project, Set<String> changedProperties) {
+        List<String> refs = new ArrayList<>();
+        for (String prop : changedProperties) {
+            refs.add("${" + prop + "}");
+        }
+
+        List<Resource> allResources = new ArrayList<>();
+        if (project.getResources() != null) {
+            allResources.addAll(project.getResources());
+        }
+        if (project.getTestResources() != null) {
+            allResources.addAll(project.getTestResources());
+        }
+
+        for (Resource resource : allResources) {
+            if (!resource.isFiltering()) {
+                continue;
+            }
+            String dir = resource.getDirectory();
+            if (dir == null) {
+                continue;
+            }
+            Path resourceDir = Path.of(dir);
+            if (!resourceDir.isAbsolute()) {
+                resourceDir = project.getBasedir().toPath().resolve(resourceDir);
+            }
+            if (!Files.isDirectory(resourceDir)) {
+                continue;
+            }
+            if (scanDirectoryForPropertyRefs(resourceDir, refs)) {
+                logger.debug(
+                        "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
+        List<Path> stack = new ArrayList<>();
+        stack.add(dir);
+        while (!stack.isEmpty()) {
+            Path current = stack.remove(stack.size() - 1);
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(current)) {
+                for (Path entry : stream) {
+                    if (Files.isDirectory(entry)) {
+                        stack.add(entry);
+                    } else if (Files.isRegularFile(entry) && checkFileForPropertyRefs(entry, refs)) {
+                        return true;
+                    }
+                }
+            } catch (IOException e) {
+                // Skip unreadable directories
+            }
+        }
+        return false;
+    }
+
+    private boolean checkFileForPropertyRefs(Path entry, List<String> refs) {
+        try {
+            long size = Files.size(entry);
+            if (size > 1024 * 1024) {
+                // Skip files larger than 1 MB — unlikely to be property-substituted text
+                return false;
+            }
+            if (isBinaryFile(entry, size)) {
+                return false;
+            }
+            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
+            for (String ref : refs) {
+                if (content.contains(ref)) {
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            // Skip unreadable files
+        }
+        return false;
+    }
+
+    /**
+     * Detect binary files using the same heuristic as git: scan for a NUL byte (0x00)
+     * in the first 8000 bytes of the file.
+     */
+    private static boolean isBinaryFile(Path file, long fileSize) {
+        int bytesToRead = (int) Math.min(fileSize, 8000);
+        if (bytesToRead == 0) {
+            return false;
+        }
+        byte[] buffer = new byte[bytesToRead];
+        try (InputStream in = Files.newInputStream(file)) {
+            int read = in.read(buffer, 0, bytesToRead);
+            for (int i = 0; i < read; i++) {
+                if (buffer[i] == 0) {
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            // If we can't read the file, treat as non-binary
+        }
+        return false;
+    }
+
     private List<Profile> safeProfiles(Model model) {
         List<Profile> profiles = model.getProfiles();
         return profiles != null ? profiles : List.of();
@@ -1555,140 +1771,6 @@ class PomChangeAnalyzer {
             current = current.getParent();
         }
         return false;
-    }
-
-    private boolean hasFilteredResourcesWithChangedProperty(
-            MavenProject project, Set<String> changedProperties, long maxResourceFileSize) {
-        List<String> refs = new ArrayList<>();
-        for (String prop : changedProperties) {
-            refs.add("${" + prop + "}");
-        }
-
-        List<Resource> allResources = new ArrayList<>();
-        if (project.getResources() != null) {
-            allResources.addAll(project.getResources());
-        }
-        if (project.getTestResources() != null) {
-            allResources.addAll(project.getTestResources());
-        }
-
-        int filteredDirCount = 0;
-        for (Resource resource : allResources) {
-            if (!resource.isFiltering()) {
-                continue;
-            }
-            String dir = resource.getDirectory();
-            if (dir == null) {
-                continue;
-            }
-            Path resourceDir = Path.of(dir);
-            if (!resourceDir.isAbsolute()) {
-                resourceDir = project.getBasedir().toPath().resolve(resourceDir);
-            }
-            if (!Files.isDirectory(resourceDir)) {
-                continue;
-            }
-            filteredDirCount++;
-            logger.debug("Scanning filtered resource directory {} of {} for property refs", resourceDir, key(project));
-            if (scanDirectoryForPropertyRefs(resourceDir, refs, maxResourceFileSize)) {
-                logger.debug(
-                        "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
-                return true;
-            }
-        }
-        if (filteredDirCount > 0) {
-            logger.debug(
-                    "No property references found in {} filtered resource directories of {}",
-                    filteredDirCount,
-                    key(project));
-        }
-        return false;
-    }
-
-    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs, long maxResourceFileSize) {
-        List<Path> stack = new ArrayList<>();
-        stack.add(dir);
-        while (!stack.isEmpty()) {
-            Path current = stack.remove(stack.size() - 1);
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(current)) {
-                for (Path entry : stream) {
-                    if (Files.isDirectory(entry)) {
-                        stack.add(entry);
-                    } else if (Files.isRegularFile(entry)
-                            && checkFileForPropertyRefs(entry, refs, maxResourceFileSize)) {
-                        return true;
-                    }
-                }
-            } catch (IOException e) {
-                // Skip unreadable directories
-            }
-        }
-        return false;
-    }
-
-    private boolean checkFileForPropertyRefs(Path entry, List<String> refs, long maxResourceFileSize) {
-        try {
-            long size = Files.size(entry);
-            // Read the first 8000 bytes to detect binary files (same heuristic as git)
-            if (isBinaryFile(entry, size)) {
-                logger.debug("Skipping binary file: {}", entry);
-                return false;
-            }
-            if (size > maxResourceFileSize) {
-                // Conservative: treat oversized text files as potentially affected
-                logger.warn(
-                        "Filtered resource {} ({} bytes) exceeds size limit ({} bytes)."
-                                + " Module will be conservatively marked as affected."
-                                + " Increase the limit with -D{}=<bytes> or disable filtering"
-                                + " for this resource.",
-                        entry,
-                        size,
-                        maxResourceFileSize,
-                        ScalpelConfiguration.MAX_RESOURCE_FILE_SIZE);
-                return true;
-            }
-            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
-            for (String ref : refs) {
-                if (content.contains(ref)) {
-                    return true;
-                }
-            }
-        } catch (IOException e) {
-            // Skip unreadable files
-        }
-        return false;
-    }
-
-    /**
-     * Detect binary files using the same heuristic as git: scan for a NUL byte (0x00)
-     * in the first 8000 bytes of the file.
-     */
-    private static boolean isBinaryFile(Path file, long fileSize) {
-        int bytesToRead = (int) Math.min(fileSize, 8000);
-        if (bytesToRead == 0) {
-            return false;
-        }
-        byte[] buffer = new byte[bytesToRead];
-        try (InputStream in = Files.newInputStream(file)) {
-            int read = in.read(buffer, 0, bytesToRead);
-            for (int i = 0; i < read; i++) {
-                if (buffer[i] == 0) {
-                    return true;
-                }
-            }
-        } catch (IOException e) {
-            // If we can't read the file, treat as non-binary (will fail later when reading full content)
-        }
-        return false;
-    }
-
-    private String readPomText(MavenProject project) {
-        try {
-            return new String(Files.readAllBytes(project.getFile().toPath()), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            logger.debug("Cannot read POM file for {}: {}", key(project), e.getMessage());
-            return null;
-        }
     }
 
     /**
