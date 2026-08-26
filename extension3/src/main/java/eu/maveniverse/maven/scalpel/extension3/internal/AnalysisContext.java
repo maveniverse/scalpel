@@ -21,26 +21,36 @@ final class AnalysisContext {
     final Set<String> changedProperties;
     final Set<String> changedManagedDepGAs;
     final Set<String> changedManagedPluginGAs;
+    final Set<String> unmatchedPomPaths;
     final Set<MavenProject> directlyAffected;
     final Set<MavenProject> affectedBySource;
     final Set<MavenProject> testOnlyBySource;
     final Set<MavenProject> affectedByPom;
     final Set<MavenProject> forceIncluded;
     final Map<MavenProject, List<String>> transitivelyAffected;
+    final Map<MavenProject, List<String>> evidence;
     final TrimResult trimResult;
+    /**
+     * The final build set actually passed to {@code session.setProjects()}, after
+     * includePaths filtering. Null when not in trim mode or when includePaths is empty.
+     */
+    final List<MavenProject> filteredBuildSet;
 
     private AnalysisContext(Builder builder) {
         this.changedFiles = builder.changedFiles;
         this.changedProperties = builder.changedProperties;
         this.changedManagedDepGAs = builder.changedManagedDepGAs;
         this.changedManagedPluginGAs = builder.changedManagedPluginGAs;
+        this.unmatchedPomPaths = builder.unmatchedPomPaths;
         this.directlyAffected = builder.directlyAffected;
         this.affectedBySource = builder.affectedBySource;
         this.testOnlyBySource = builder.testOnlyBySource;
         this.affectedByPom = builder.affectedByPom;
         this.forceIncluded = builder.forceIncluded;
         this.transitivelyAffected = builder.transitivelyAffected;
+        this.evidence = builder.evidence;
         this.trimResult = builder.trimResult;
+        this.filteredBuildSet = builder.filteredBuildSet;
     }
 
     static Builder builder(
@@ -70,15 +80,23 @@ final class AnalysisContext {
         private Set<String> changedProperties;
         private Set<String> changedManagedDepGAs;
         private Set<String> changedManagedPluginGAs;
+        private Set<String> unmatchedPomPaths = Set.of();
         private Set<MavenProject> directlyAffected = Set.of();
         private Set<MavenProject> affectedBySource = Set.of();
         private Set<MavenProject> testOnlyBySource = Set.of();
         private Set<MavenProject> affectedByPom = Set.of();
         private Set<MavenProject> forceIncluded = Set.of();
         private Map<MavenProject, List<String>> transitivelyAffected = Map.of();
+        private Map<MavenProject, List<String>> evidence = Map.of();
         private TrimResult trimResult;
+        private List<MavenProject> filteredBuildSet;
 
         private Builder() {}
+
+        Builder unmatchedPomPaths(Set<String> unmatchedPomPaths) {
+            this.unmatchedPomPaths = unmatchedPomPaths;
+            return this;
+        }
 
         Builder directlyAffected(Set<MavenProject> directlyAffected) {
             this.directlyAffected = directlyAffected;
@@ -110,8 +128,18 @@ final class AnalysisContext {
             return this;
         }
 
+        Builder evidence(Map<MavenProject, List<String>> evidence) {
+            this.evidence = evidence;
+            return this;
+        }
+
         Builder trimResult(TrimResult trimResult) {
             this.trimResult = trimResult;
+            return this;
+        }
+
+        Builder filteredBuildSet(List<MavenProject> filteredBuildSet) {
+            this.filteredBuildSet = filteredBuildSet;
             return this;
         }
 

@@ -59,6 +59,11 @@
       "items": { "type": "string" },
       "description": "Coordinates (groupId:artifactId) of managed plugins whose version or configuration changed in the root POM."
     },
+    "unmatchedPomPaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional. Git-relative paths of changed POMs that match no reactor project (profile-gated modules or modules excluded via -pl). Their changes are ignored by Scalpel. Present only when non-empty."
+    },
     "excludedUpstreamCount": {
       "type": "integer",
       "minimum": 0,
@@ -68,6 +73,22 @@
       "type": "array",
       "items": { "$ref": "#/$defs/affectedModule" },
       "description": "Modules affected by the changeset, with reasons and optional metadata."
+    },
+<<<<<<< HEAD
+    "skippedModules": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/skippedModule" },
+      "description": "Optional (added without a version bump per the optional-fields policy): reactor modules left out of the build set, each with the reason it was judged safe to skip. Present only when at least one module was skipped."
+=======
+    "status": {
+      "type": "string",
+      "enum": ["failed", "skipped"],
+      "description": "Present only on status-only documents written when analysis did not complete: 'failed' for error/failSafe bail-outs, 'skipped' for deliberate non-analysis paths (e.g. no changes detected, disabled by disableOnBranch/disableOnBaseBranch/disableTriggers, or all changed files excluded by path filters)."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Human-readable explanation accompanying an optional status field (e.g. 'no changes detected')."
+>>>>>>> origin/main
     }
   },
   "$defs": {
@@ -125,6 +146,34 @@
         "testsSkippedReason": {
           "type": "string",
           "description": "Why tests were skipped on this module (e.g. 'EXCLUDED_DOWNSTREAM' for downstream modules not in the test scope)."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Specific inputs behind this module's decision, emitted only with -Dscalpel.explain=true (e.g. a changed file path, 'property <name>', 'managed dep <groupId:artifactId>', 'managed plugin <groupId:artifactId>', 'downstream of <groupId:artifactId>')."
+        }
+      }
+    },
+    "skippedModule": {
+      "type": "object",
+      "required": ["groupId", "artifactId", "path", "reason"],
+      "properties": {
+        "groupId": {
+          "type": "string",
+          "description": "Maven groupId of the skipped module."
+        },
+        "artifactId": {
+          "type": "string",
+          "description": "Maven artifactId of the skipped module."
+        },
+        "path": {
+          "type": "string",
+          "description": "Reactor-relative path of the module directory."
+        },
+        "reason": {
+          "type": "string",
+          "enum": ["NOT_AFFECTED"],
+          "description": "Why the module was left out of the build set. NOT_AFFECTED: not affected by the changeset (not direct, transitive, upstream or downstream of any change)."
         }
       }
     }

@@ -18,7 +18,6 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -57,16 +56,36 @@ class PomChangeAnalyzer {
         private final Set<String> changedManagedDependencyGAs;
         private final Set<String> changedManagedPluginGAs;
         private final Set<String> changedProperties;
+        private final Map<MavenProject, Set<String>> evidence;
+        private final List<String> unmatchedPomPaths;
 
         Result(
                 Set<MavenProject> affectedProjects,
                 Set<String> changedManagedDependencyGAs,
                 Set<String> changedManagedPluginGAs,
                 Set<String> changedProperties) {
+            this(
+                    affectedProjects,
+                    changedManagedDependencyGAs,
+                    changedManagedPluginGAs,
+                    changedProperties,
+                    Map.of(),
+                    List.of());
+        }
+
+        Result(
+                Set<MavenProject> affectedProjects,
+                Set<String> changedManagedDependencyGAs,
+                Set<String> changedManagedPluginGAs,
+                Set<String> changedProperties,
+                Map<MavenProject, Set<String>> evidence,
+                List<String> unmatchedPomPaths) {
             this.affectedProjects = affectedProjects;
             this.changedManagedDependencyGAs = changedManagedDependencyGAs;
             this.changedManagedPluginGAs = changedManagedPluginGAs;
             this.changedProperties = changedProperties;
+            this.evidence = evidence;
+            this.unmatchedPomPaths = unmatchedPomPaths;
         }
 
         Set<MavenProject> getAffectedProjects() {
@@ -83,6 +102,18 @@ class PomChangeAnalyzer {
 
         Set<String> getChangedProperties() {
             return changedProperties;
+        }
+
+        /**
+         * Specific inputs that triggered each affected module (explain-mode evidence),
+         * e.g. "property foo.version" or "managed dep g:a".
+         */
+        Map<MavenProject, Set<String>> getEvidence() {
+            return evidence;
+        }
+
+        List<String> getUnmatchedPomPaths() {
+            return unmatchedPomPaths;
         }
     }
 
@@ -115,11 +146,23 @@ class PomChangeAnalyzer {
             List<MavenProject> allProjects,
             Path reactorRoot,
             long maxResourceFileSize) {
+        return analyzeChanges(changedPomPaths, oldPomContents, allProjects, reactorRoot, maxResourceFileSize, true);
+    }
+
+    public Result analyzeChanges(
+            Set<String> changedPomPaths,
+            Map<String, byte[]> oldPomContents,
+            List<MavenProject> allProjects,
+            Path reactorRoot,
+            long maxResourceFileSize,
+            boolean explain) {
 
         Set<MavenProject> affected = new LinkedHashSet<>();
+        Map<MavenProject, Set<String>> evidence = new LinkedHashMap<>();
         Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
         Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
         Set<String> allChangedProperties = new LinkedHashSet<>();
+        List<String> unmatchedPomPaths = new ArrayList<>();
 
         // Build a map of relative POM path -> MavenProject
         Map<String, MavenProject> projectByPomPath = new LinkedHashMap<>();
@@ -138,6 +181,7 @@ class PomChangeAnalyzer {
         for (String changedPomPath : changedPomPaths) {
             MavenProject project = projectByPomPath.get(changedPomPath);
             if (project == null) {
+                unmatchedPomPaths.add(changedPomPath);
                 logger.debug("Changed POM {} does not match any reactor project, skipping", changedPomPath);
                 continue;
             }
@@ -149,6 +193,9 @@ class PomChangeAnalyzer {
                 // Leaf module: its own POM changed, mark it as affected
                 logger.debug("Leaf module POM changed: {}", key(project));
                 affected.add(project);
+                if (explain) {
+                    addEvidence(evidence, project, "own pom " + changedPomPath + " changed");
+                }
                 continue;
             }
 
@@ -161,6 +208,12 @@ class PomChangeAnalyzer {
                 }
                 affected.add(project);
                 affected.addAll(dependents);
+                if (explain) {
+                    addEvidence(evidence, project, "new pom " + changedPomPath);
+                    for (MavenProject dependent : dependents) {
+                        addEvidence(evidence, dependent, "new pom " + changedPomPath);
+                    }
+                }
                 continue;
             }
 
@@ -171,10 +224,12 @@ class PomChangeAnalyzer {
                         dependents,
                         reactorRoot,
                         affected,
+                        evidence,
                         allChangedManagedDepGAs,
                         allChangedManagedPluginGAs,
                         allChangedProperties,
-                        maxResourceFileSize);
+                        maxResourceFileSize,
+                        explain);
             } catch (Exception e) {
                 // If we can't parse the old POM, be conservative and mark all dependents
                 logger.warn(
@@ -183,16 +238,39 @@ class PomChangeAnalyzer {
                         e.getMessage());
                 affected.add(project);
                 affected.addAll(dependents);
+                if (explain) {
+                    addEvidence(evidence, project, "unparseable old pom " + changedPomPath);
+                    for (MavenProject dependent : dependents) {
+                        addEvidence(evidence, dependent, "unparseable old pom " + changedPomPath);
+                    }
+                }
             }
         }
 
+        if (!unmatchedPomPaths.isEmpty()) {
+            logger.warn(
+                    "Scalpel: {} changed POM(s) match no reactor project (profile-gated, excluded by -pl, "
+                            + "or module removed); their changes are ignored: {}",
+                    unmatchedPomPaths.size(),
+                    unmatchedPomPaths);
+        }
         logger.debug(
                 "POM change analysis complete: {} affected modules, changedProperties={}, changedManagedDeps={}, changedManagedPlugins={}",
                 affected.size(),
                 allChangedProperties,
                 allChangedManagedDepGAs,
                 allChangedManagedPluginGAs);
-        return new Result(affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties);
+        return new Result(
+                affected,
+                allChangedManagedDepGAs,
+                allChangedManagedPluginGAs,
+                allChangedProperties,
+                evidence,
+                unmatchedPomPaths);
+    }
+
+    private static void addEvidence(Map<MavenProject, Set<String>> evidence, MavenProject project, String item) {
+        evidence.computeIfAbsent(project, k -> new LinkedHashSet<>()).add(item);
     }
 
     private void analyzeParentPomChange(
@@ -201,10 +279,12 @@ class PomChangeAnalyzer {
             List<MavenProject> dependentProjects,
             Path reactorRoot,
             Set<MavenProject> affected,
+            Map<MavenProject, Set<String>> evidence,
             Set<String> allChangedManagedDepGAs,
             Set<String> allChangedManagedPluginGAs,
             Set<String> allChangedProperties,
-            long maxResourceFileSize)
+            long maxResourceFileSize,
+            boolean explain)
             throws IOException, XmlPullParserException {
 
         MavenXpp3Reader reader = new MavenXpp3Reader();
@@ -280,6 +360,12 @@ class PomChangeAnalyzer {
 
         if (parentSelfAffected) {
             affected.add(parentProject);
+            if (explain) {
+                addEvidence(
+                        evidence,
+                        parentProject,
+                        "pom " + parentProject.getFile().getName() + " direct content changed");
+            }
         }
 
         // Resolve property indirection: if a managed dep/plugin uses a changed property
@@ -340,6 +426,9 @@ class PomChangeAnalyzer {
                     for (String prop : changedProperties) {
                         if (childPomText.contains("${" + prop + "}")) {
                             logger.debug("Child {} references changed property {}", key(child), prop);
+                            if (explain) {
+                                addEvidence(evidence, child, "property " + prop);
+                            }
                             childAffected = true;
                             break;
                         }
@@ -354,6 +443,9 @@ class PomChangeAnalyzer {
                     String ga = dep.getGroupId() + ":" + dep.getArtifactId();
                     if (changedManagedDeps.contains(ga)) {
                         logger.debug("Child {} uses changed managed dependency {}", key(child), ga);
+                        if (explain) {
+                            addEvidence(evidence, child, "managed dep " + ga);
+                        }
                         childAffected = true;
                         break;
                     }
@@ -367,6 +459,9 @@ class PomChangeAnalyzer {
                     String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
                     if (changedManagedPlugins.contains(ga)) {
                         logger.debug("Child {} uses changed managed plugin {}", key(child), ga);
+                        if (explain) {
+                            addEvidence(evidence, child, "managed plugin " + ga);
+                        }
                         childAffected = true;
                         break;
                     }
@@ -378,6 +473,9 @@ class PomChangeAnalyzer {
                     && !changedProperties.isEmpty()
                     && hasFilteredResourcesWithChangedProperty(child, changedProperties, maxResourceFileSize)) {
                 logger.debug("Child {} has filtered resources referencing changed properties", key(child));
+                if (explain) {
+                    addEvidence(evidence, child, "filtered resources referencing changed properties");
+                }
                 childAffected = true;
             }
 
@@ -809,7 +907,11 @@ class PomChangeAnalyzer {
         if (a.size() != b.size()) {
             return false;
         }
-        return new HashSet<>(a).equals(new HashSet<>(b));
+        List<String> sortedA = new ArrayList<>(a);
+        List<String> sortedB = new ArrayList<>(b);
+        sortedA.sort(String::compareTo);
+        sortedB.sort(String::compareTo);
+        return sortedA.equals(sortedB);
     }
 
     private boolean equalRepositoryLists(List<Repository> a, List<Repository> b) {

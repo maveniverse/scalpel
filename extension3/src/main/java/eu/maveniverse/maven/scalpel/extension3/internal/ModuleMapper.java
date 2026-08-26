@@ -26,10 +26,15 @@ class ModuleMapper {
     static class Result {
         private final Set<MavenProject> mainAffected;
         private final Set<MavenProject> testOnlyAffected;
+        private final Map<MavenProject, Set<String>> triggeringFiles;
 
-        Result(Set<MavenProject> mainAffected, Set<MavenProject> testOnlyAffected) {
+        Result(
+                Set<MavenProject> mainAffected,
+                Set<MavenProject> testOnlyAffected,
+                Map<MavenProject, Set<String>> triggeringFiles) {
             this.mainAffected = mainAffected;
             this.testOnlyAffected = testOnlyAffected;
+            this.triggeringFiles = triggeringFiles;
         }
 
         Set<MavenProject> getAllAffected() {
@@ -45,11 +50,25 @@ class ModuleMapper {
         Set<MavenProject> getTestOnlyAffected() {
             return testOnlyAffected;
         }
+
+        /**
+         * Files that mapped each module into the affected set (explain-mode evidence).
+         */
+        Map<MavenProject, Set<String>> getTriggeringFiles() {
+            return triggeringFiles;
+        }
     }
 
     public Result mapToProjectsClassified(Set<String> changedFiles, List<MavenProject> projects, Path reactorRoot) {
+        return mapToProjectsClassified(changedFiles, projects, reactorRoot, true);
+    }
+
+    public Result mapToProjectsClassified(
+            Set<String> changedFiles, List<MavenProject> projects, Path reactorRoot, boolean explain) {
         // Track for each project whether it has any main (non-test) source changes
         Map<MavenProject, Boolean> hasMainChange = new LinkedHashMap<>();
+        // Track which changed file triggered each project (explain-mode evidence)
+        Map<MavenProject, Set<String>> triggeringFiles = new LinkedHashMap<>();
 
         // Sort projects by basedir depth (most specific first)
         List<MavenProject> sortedProjects = new ArrayList<>(projects);
@@ -68,6 +87,11 @@ class ModuleMapper {
                     } else if (!isTest) {
                         hasMainChange.put(project, Boolean.TRUE);
                     }
+                    if (explain) {
+                        triggeringFiles
+                                .computeIfAbsent(project, k -> new LinkedHashSet<>())
+                                .add(changedFile);
+                    }
                     break;
                 }
             }
@@ -83,7 +107,7 @@ class ModuleMapper {
             }
         }
 
-        return new Result(mainAffected, testOnlyAffected);
+        return new Result(mainAffected, testOnlyAffected, triggeringFiles);
     }
 
     public Set<MavenProject> mapToProjects(Set<String> changedFiles, List<MavenProject> projects, Path reactorRoot) {

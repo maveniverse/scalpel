@@ -60,6 +60,27 @@ class ScalpelConfigurationTest {
         assertFalse(defaultConfig().isBuildAllIfNoChanges());
     }
 
+    @Test
+    void defaultExplain_isFalse() {
+        assertFalse(defaultConfig().isExplain());
+    }
+
+    @Test
+    void explain_trueParsedFromProperties() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.explain", "true");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertTrue(config.isExplain());
+    }
+
+    @Test
+    void explain_isAKnownKey() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.explain", "true");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertTrue(config.getWarnings().isEmpty(), "scalpel.explain must not be reported as an unknown key");
+    }
+
     // ---------------------------------------------------------------
     // Default values for list fields (empty)
     // ---------------------------------------------------------------
@@ -313,17 +334,29 @@ class ScalpelConfigurationTest {
     }
 
     // ---------------------------------------------------------------
-    // System property takes precedence over user property
+    // User property takes precedence over system property (Maven convention, #81)
     // ---------------------------------------------------------------
 
     @Test
-    void systemProperty_takesPrecedenceOverUserProperty() {
+    void userProperty_takesPrecedenceOverSystemProperty() {
         Properties sys = new Properties();
         sys.setProperty("scalpel.disableOnBranch", "main");
         Properties user = new Properties();
         user.setProperty("scalpel.disableOnBranch", "develop");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, user);
-        assertEquals(List.of("main"), config.getDisableOnBranch());
+        assertEquals(List.of("develop"), config.getDisableOnBranch());
+    }
+
+    @Test
+    void emptyUserPropertyWinsOverSystemProperty() {
+        // An explicit but empty -D value is present, not absent: it wins over the
+        // system property, matching how Maven treats `-Dkey=`
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.disableOnBranch", "main");
+        Properties user = new Properties();
+        user.setProperty("scalpel.disableOnBranch", "");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, user);
+        assertEquals(List.of(), config.getDisableOnBranch());
     }
 
     @Test

@@ -44,39 +44,57 @@ public final class ScalpelReport {
     public static final String REASON_TRANSITIVE_DEPENDENCY_TEST = "TRANSITIVE_DEPENDENCY_TEST";
     public static final String REASON_EXCLUDED_DOWNSTREAM = "EXCLUDED_DOWNSTREAM";
 
+    /**
+     * Skip reason for a reactor module that was left out of the build set because it is
+     * not affected by the changeset (not direct, transitive, upstream or downstream).
+     */
+    public static final String SKIP_REASON_NOT_AFFECTED = "NOT_AFFECTED";
+
     public static final String CATEGORY_DIRECT = "DIRECT";
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";
     public static final String CATEGORY_DOWNSTREAM = "DOWNSTREAM";
     public static final String CATEGORY_TRANSITIVE = "TRANSITIVE";
 
     private final String baseBranch;
+    private final String status;
+    private final String reason;
     private final boolean fullBuildTriggered;
     private final String triggerFile;
     private final List<String> changedFiles;
     private final List<String> changedProperties;
     private final List<String> changedManagedDependencies;
     private final List<String> changedManagedPlugins;
+    private final List<String> unmatchedPomPaths;
     private final List<AffectedModule> affectedModules;
+    private final List<SkippedModule> skippedModules;
     private final int excludedUpstreamCount;
 
     private ScalpelReport(
             String baseBranch,
+            String status,
+            String reason,
             boolean fullBuildTriggered,
             String triggerFile,
             List<String> changedFiles,
             List<String> changedProperties,
             List<String> changedManagedDependencies,
             List<String> changedManagedPlugins,
+            List<String> unmatchedPomPaths,
             List<AffectedModule> affectedModules,
+            List<SkippedModule> skippedModules,
             int excludedUpstreamCount) {
         this.baseBranch = baseBranch;
+        this.status = status;
+        this.reason = reason;
         this.fullBuildTriggered = fullBuildTriggered;
         this.triggerFile = triggerFile;
         this.changedFiles = changedFiles;
         this.changedProperties = changedProperties;
         this.changedManagedDependencies = changedManagedDependencies;
         this.changedManagedPlugins = changedManagedPlugins;
+        this.unmatchedPomPaths = unmatchedPomPaths;
         this.affectedModules = affectedModules;
+        this.skippedModules = skippedModules;
         this.excludedUpstreamCount = excludedUpstreamCount;
     }
 
@@ -88,6 +106,7 @@ public final class ScalpelReport {
         private final String category;
         private final String sourceSet;
         private final String testsSkippedReason;
+        private final List<String> evidence;
 
         public AffectedModule(String groupId, String artifactId, String path, List<String> reasons) {
             this(groupId, artifactId, path, reasons, null, null, null);
@@ -115,6 +134,18 @@ public final class ScalpelReport {
                 String category,
                 String sourceSet,
                 String testsSkippedReason) {
+            this(groupId, artifactId, path, reasons, category, sourceSet, testsSkippedReason, null);
+        }
+
+        public AffectedModule(
+                String groupId,
+                String artifactId,
+                String path,
+                List<String> reasons,
+                String category,
+                String sourceSet,
+                String testsSkippedReason,
+                List<String> evidence) {
             if (sourceSet != null && !"main".equals(sourceSet) && !"test".equals(sourceSet)) {
                 throw new IllegalArgumentException("sourceSet must be 'main', 'test', or null");
             }
@@ -125,6 +156,7 @@ public final class ScalpelReport {
             this.category = category;
             this.sourceSet = sourceSet;
             this.testsSkippedReason = testsSkippedReason;
+            this.evidence = evidence;
         }
 
         public String getGroupId() {
@@ -155,6 +187,10 @@ public final class ScalpelReport {
             return testsSkippedReason;
         }
 
+        public List<String> getEvidence() {
+            return evidence;
+        }
+
         public static ModuleBuilder moduleBuilder(
                 String groupId, String artifactId, String path, List<String> reasons) {
             return new ModuleBuilder(groupId, artifactId, path, reasons);
@@ -168,6 +204,7 @@ public final class ScalpelReport {
             private String category;
             private String sourceSet;
             private String testsSkippedReason;
+            private List<String> evidence;
 
             ModuleBuilder(String groupId, String artifactId, String path, List<String> reasons) {
                 this.groupId = groupId;
@@ -191,9 +228,49 @@ public final class ScalpelReport {
                 return this;
             }
 
-            public AffectedModule build() {
-                return new AffectedModule(groupId, artifactId, path, reasons, category, sourceSet, testsSkippedReason);
+            public ModuleBuilder evidence(List<String> evidence) {
+                this.evidence = evidence;
+                return this;
             }
+
+            public AffectedModule build() {
+                return new AffectedModule(
+                        groupId, artifactId, path, reasons, category, sourceSet, testsSkippedReason, evidence);
+            }
+        }
+    }
+
+    /**
+     * A reactor module that was left out of the build set, with the reason it was judged
+     * safe to skip. Enumerating this set is what makes a green trimmed build reviewable.
+     */
+    public static final class SkippedModule {
+        private final String groupId;
+        private final String artifactId;
+        private final String path;
+        private final String reason;
+
+        public SkippedModule(String groupId, String artifactId, String path, String reason) {
+            this.groupId = groupId;
+            this.artifactId = artifactId;
+            this.path = path;
+            this.reason = reason;
+        }
+
+        public String getGroupId() {
+            return groupId;
+        }
+
+        public String getArtifactId() {
+            return artifactId;
+        }
+
+        public String getPath() {
+            return path;
+        }
+
+        public String getReason() {
+            return reason;
         }
     }
 
@@ -205,6 +282,12 @@ public final class ScalpelReport {
                 .append(jsonString(Version.version()))
                 .append(",\n");
         sb.append("  \"baseBranch\": ").append(jsonString(baseBranch)).append(",\n");
+        if (status != null) {
+            sb.append("  \"status\": ").append(jsonString(status)).append(",\n");
+        }
+        if (reason != null) {
+            sb.append("  \"reason\": ").append(jsonString(reason)).append(",\n");
+        }
         sb.append("  \"fullBuildTriggered\": ").append(fullBuildTriggered).append(",\n");
         sb.append("  \"triggerFile\": ").append(jsonString(triggerFile)).append(",\n");
         sb.append("  \"changedFiles\": ").append(jsonStringArray(changedFiles)).append(",\n");
@@ -217,6 +300,11 @@ public final class ScalpelReport {
         sb.append("  \"changedManagedPlugins\": ")
                 .append(jsonStringArray(changedManagedPlugins))
                 .append(",\n");
+        if (unmatchedPomPaths != null && !unmatchedPomPaths.isEmpty()) {
+            sb.append("  \"unmatchedPomPaths\": ")
+                    .append(jsonStringArray(unmatchedPomPaths))
+                    .append(",\n");
+        }
         sb.append("  \"excludedUpstreamCount\": ").append(excludedUpstreamCount).append(",\n");
         sb.append("  \"affectedModules\": ");
         if (affectedModules.isEmpty()) {
@@ -232,8 +320,29 @@ public final class ScalpelReport {
             }
             sb.append("  ]");
         }
+        if (!skippedModules.isEmpty()) {
+            sb.append(",\n");
+            sb.append("  \"skippedModules\": [\n");
+            for (int i = 0; i < skippedModules.size(); i++) {
+                appendSkippedModuleJson(sb, skippedModules.get(i));
+                if (i < skippedModules.size() - 1) {
+                    sb.append(",");
+                }
+                sb.append("\n");
+            }
+            sb.append("  ]");
+        }
         sb.append("\n}\n");
         return sb.toString();
+    }
+
+    private static void appendSkippedModuleJson(StringBuilder sb, SkippedModule m) {
+        sb.append("    {\n");
+        sb.append("      \"groupId\": ").append(jsonString(m.groupId)).append(",\n");
+        sb.append("      \"artifactId\": ").append(jsonString(m.artifactId)).append(",\n");
+        sb.append("      \"path\": ").append(jsonString(m.path)).append(",\n");
+        sb.append("      \"reason\": ").append(jsonString(m.reason)).append("\n");
+        sb.append("    }");
     }
 
     private static void appendModuleJson(StringBuilder sb, AffectedModule m) {
@@ -248,6 +357,10 @@ public final class ScalpelReport {
             sb.append(",\n");
             sb.append("      \"testsSkipped\": true");
             appendOptionalField(sb, "testsSkippedReason", m.testsSkippedReason);
+        }
+        if (m.evidence != null) {
+            sb.append(",\n");
+            sb.append("      \"evidence\": ").append(jsonStringArray(m.evidence));
         }
         sb.append("\n");
         sb.append("    }");
@@ -322,17 +435,31 @@ public final class ScalpelReport {
 
     public static class Builder {
         private String baseBranch;
+        private String status;
+        private String reason;
         private boolean fullBuildTriggered;
         private String triggerFile;
         private final List<String> changedFiles = new ArrayList<>();
         private final List<String> changedProperties = new ArrayList<>();
         private final List<String> changedManagedDependencies = new ArrayList<>();
         private final List<String> changedManagedPlugins = new ArrayList<>();
+        private final List<String> unmatchedPomPaths = new ArrayList<>();
         private final List<AffectedModule> affectedModules = new ArrayList<>();
+        private final List<SkippedModule> skippedModules = new ArrayList<>();
         private int excludedUpstreamCount;
 
         public Builder baseBranch(String baseBranch) {
             this.baseBranch = baseBranch;
+            return this;
+        }
+
+        public Builder status(String status) {
+            this.status = status;
+            return this;
+        }
+
+        public Builder reason(String reason) {
+            this.reason = reason;
             return this;
         }
 
@@ -366,8 +493,18 @@ public final class ScalpelReport {
             return this;
         }
 
+        public Builder unmatchedPomPaths(Collection<String> paths) {
+            this.unmatchedPomPaths.addAll(paths);
+            return this;
+        }
+
         public Builder addAffectedModule(AffectedModule module) {
             this.affectedModules.add(module);
+            return this;
+        }
+
+        public Builder addSkippedModule(SkippedModule module) {
+            this.skippedModules.add(module);
             return this;
         }
 
@@ -382,13 +519,17 @@ public final class ScalpelReport {
             }
             return new ScalpelReport(
                     baseBranch,
+                    status,
+                    reason,
                     fullBuildTriggered,
                     triggerFile,
                     changedFiles,
                     changedProperties,
                     changedManagedDependencies,
                     changedManagedPlugins,
+                    unmatchedPomPaths,
                     affectedModules,
+                    skippedModules,
                     excludedUpstreamCount);
         }
     }

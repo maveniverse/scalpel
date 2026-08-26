@@ -45,6 +45,38 @@ class ScalpelReportTest {
     }
 
     @Test
+    void toJson_skippedModuleListedWithReason() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE)))
+                .addSkippedModule(new ScalpelReport.SkippedModule(
+                        "com.example", "module-b", "module-b", ScalpelReport.SKIP_REASON_NOT_AFFECTED))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"skippedModules\""), "skippedModules array must be present");
+        assertTrue(json.contains("\"NOT_AFFECTED\""), "skip reason must be serialized");
+        assertTrue(json.contains("\"module-b\""), "skipped module artifactId must be serialized");
+    }
+
+    @Test
+    void toJson_skippedModulesOmittedWhenNothingSkipped() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE)))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("\"skippedModules\""), "skippedModules must be omitted when nothing is skipped");
+    }
+
+    @Test
     void toJson_transitivelyAffectedModule() {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
@@ -388,6 +420,45 @@ class ScalpelReportTest {
     }
 
     // ---------------------------------------------------------------
+    // Evidence (explain mode, #93)
+    // ---------------------------------------------------------------
+
+    @Test
+    void toJson_evidenceIncludedWhenPresent() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/main/java/Foo.java"))
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE))
+                        .category(ScalpelReport.CATEGORY_DIRECT)
+                        .evidence(List.of("module-a/src/main/java/Foo.java"))
+                        .build())
+                .build();
+
+        String json = report.toJson();
+        assertTrue(
+                json.contains("\"evidence\": [\"module-a/src/main/java/Foo.java\"]"),
+                "evidence array must be emitted when present");
+    }
+
+    @Test
+    void toJson_evidenceOmittedWhenNull() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/main/java/Foo.java"))
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE))
+                        .category(ScalpelReport.CATEGORY_DIRECT)
+                        .build())
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("evidence"), "evidence must not appear when not set");
+    }
+
+    // ---------------------------------------------------------------
     // Golden-file and schema tests
     // ---------------------------------------------------------------
 
@@ -456,6 +527,31 @@ class ScalpelReportTest {
     @Test
     void reportVersion_isTwo() {
         assertEquals("2", ScalpelReport.REPORT_VERSION);
+    }
+
+    @Test
+    void toJson_unmatchedPomPathsIncludedWhenSet() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("gated-module/pom.xml"))
+                .unmatchedPomPaths(List.of("gated-module/pom.xml"))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"unmatchedPomPaths\": [\"gated-module/pom.xml\"]"));
+    }
+
+    @Test
+    void toJson_unmatchedPomPathsOmittedWhenEmpty() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/pom.xml"))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("unmatchedPomPaths"));
     }
 
     @Test

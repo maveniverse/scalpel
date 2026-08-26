@@ -157,6 +157,14 @@ is published alongside the code. The current version is **2**.
 }
 ```
 
+**Status-only reports:** when analysis does not complete (failSafe bail-out, unexpected
+error) or is deliberately skipped (no changes detected, disabled by
+`disableOnBranch`/`disableOnBaseBranch`/`disableTriggers`, or all changed files excluded
+by path filters), Scalpel overwrites the report file with a minimal status document so a
+previous run's report cannot be mistaken for current results. It carries two optional
+fields: `status` (`"failed"` or `"skipped"`) and `reason` (human-readable explanation,
+e.g. `"no changes detected"`). Both fields are absent from normal full reports.
+
 **Schema version history:**
 
 | Version | Changes |
@@ -242,6 +250,10 @@ indicating which source set triggered the change.
 ## Configuration
 
 All properties can be set via `-D` on the command line or in `.mvn/maven.config`.
+
+Property precedence follows the Maven convention: **user properties** (explicit `-D` on the command line, including entries from `.mvn/maven.config`) take precedence over **system properties** (JVM properties, e.g. anything set via `MAVEN_OPTS`), which take precedence over the documented defaults. So a `-Dscalpel.mode=trim` on the command line always wins over a `MAVEN_OPTS=-Dscalpel.mode=report`.
+
+Note that properties defined in a project POM's `<properties>` are deliberately **not** read: Scalpel is configured only from session properties, so a pull request cannot reconfigure it through `pom.xml`.
 
 | Property | Default | Description |
 |----------|---------|-------------|
