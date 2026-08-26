@@ -212,6 +212,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedDepGAs = new LinkedHashSet<>();
             Set<String> changedManagedPluginGAs = new LinkedHashSet<>();
             Set<String> changedProperties = new LinkedHashSet<>();
+            Set<String> unmatchedPomPaths = new LinkedHashSet<>();
             if (!pomChanges.isEmpty()) {
                 logger.debug("POM changes detected: {}", pomChanges);
                 try {
@@ -225,6 +226,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     changedManagedDepGAs = pomResult.getChangedManagedDependencyGAs();
                     changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
                     changedProperties = pomResult.getChangedProperties();
+                    unmatchedPomPaths.addAll(pomResult.getUnmatchedPomPaths());
                 } catch (Exception e) {
                     if (config.isFailSafe()) {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
@@ -383,6 +385,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         reactorRoot,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
+                                .unmatchedPomPaths(unmatchedPomPaths)
                                 .directlyAffected(directlyAffected)
                                 .affectedBySource(affectedBySource)
                                 .testOnlyBySource(sourceResult.getTestOnlyAffected())
@@ -995,7 +998,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 .changedFiles(ctx.changedFiles)
                 .changedProperties(ctx.changedProperties)
                 .changedManagedDependencies(ctx.changedManagedDepGAs)
-                .changedManagedPlugins(ctx.changedManagedPluginGAs);
+                .changedManagedPlugins(ctx.changedManagedPluginGAs)
+                .unmatchedPomPaths(ctx.unmatchedPomPaths);
 
         logger.debug(
                 "Building report: {} directly affected, {} transitively affected, trim result has {} upstream / {} downstream / {} downstream-test",

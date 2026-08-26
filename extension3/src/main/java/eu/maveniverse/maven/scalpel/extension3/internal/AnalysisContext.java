@@ -21,6 +21,7 @@ final class AnalysisContext {
     final Set<String> changedProperties;
     final Set<String> changedManagedDepGAs;
     final Set<String> changedManagedPluginGAs;
+    final Set<String> unmatchedPomPaths;
     final Set<MavenProject> directlyAffected;
     final Set<MavenProject> affectedBySource;
     final Set<MavenProject> testOnlyBySource;
@@ -34,6 +35,7 @@ final class AnalysisContext {
         this.changedProperties = builder.changedProperties;
         this.changedManagedDepGAs = builder.changedManagedDepGAs;
         this.changedManagedPluginGAs = builder.changedManagedPluginGAs;
+        this.unmatchedPomPaths = builder.unmatchedPomPaths;
         this.directlyAffected = builder.directlyAffected;
         this.affectedBySource = builder.affectedBySource;
         this.testOnlyBySource = builder.testOnlyBySource;
@@ -70,6 +72,7 @@ final class AnalysisContext {
         private Set<String> changedProperties;
         private Set<String> changedManagedDepGAs;
         private Set<String> changedManagedPluginGAs;
+        private Set<String> unmatchedPomPaths = Set.of();
         private Set<MavenProject> directlyAffected = Set.of();
         private Set<MavenProject> affectedBySource = Set.of();
         private Set<MavenProject> testOnlyBySource = Set.of();
@@ -79,6 +82,11 @@ final class AnalysisContext {
         private TrimResult trimResult;
 
         private Builder() {}
+
+        Builder unmatchedPomPaths(Set<String> unmatchedPomPaths) {
+            this.unmatchedPomPaths = unmatchedPomPaths;
+            return this;
+        }
 
         Builder directlyAffected(Set<MavenProject> directlyAffected) {
             this.directlyAffected = directlyAffected;
