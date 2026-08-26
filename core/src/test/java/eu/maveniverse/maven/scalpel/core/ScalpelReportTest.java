@@ -420,6 +420,45 @@ class ScalpelReportTest {
     }
 
     // ---------------------------------------------------------------
+    // Evidence (explain mode, #93)
+    // ---------------------------------------------------------------
+
+    @Test
+    void toJson_evidenceIncludedWhenPresent() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/main/java/Foo.java"))
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE))
+                        .category(ScalpelReport.CATEGORY_DIRECT)
+                        .evidence(List.of("module-a/src/main/java/Foo.java"))
+                        .build())
+                .build();
+
+        String json = report.toJson();
+        assertTrue(
+                json.contains("\"evidence\": [\"module-a/src/main/java/Foo.java\"]"),
+                "evidence array must be emitted when present");
+    }
+
+    @Test
+    void toJson_evidenceOmittedWhenNull() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/main/java/Foo.java"))
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE))
+                        .category(ScalpelReport.CATEGORY_DIRECT)
+                        .build())
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("evidence"), "evidence must not appear when not set");
+    }
+
+    // ---------------------------------------------------------------
     // Golden-file and schema tests
     // ---------------------------------------------------------------
 

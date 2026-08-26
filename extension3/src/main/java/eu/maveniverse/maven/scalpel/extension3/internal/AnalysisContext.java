@@ -28,6 +28,7 @@ final class AnalysisContext {
     final Set<MavenProject> affectedByPom;
     final Set<MavenProject> forceIncluded;
     final Map<MavenProject, List<String>> transitivelyAffected;
+    final Map<MavenProject, List<String>> evidence;
     final TrimResult trimResult;
     /**
      * The final build set actually passed to {@code session.setProjects()}, after
@@ -47,6 +48,7 @@ final class AnalysisContext {
         this.affectedByPom = builder.affectedByPom;
         this.forceIncluded = builder.forceIncluded;
         this.transitivelyAffected = builder.transitivelyAffected;
+        this.evidence = builder.evidence;
         this.trimResult = builder.trimResult;
         this.filteredBuildSet = builder.filteredBuildSet;
     }
@@ -85,6 +87,7 @@ final class AnalysisContext {
         private Set<MavenProject> affectedByPom = Set.of();
         private Set<MavenProject> forceIncluded = Set.of();
         private Map<MavenProject, List<String>> transitivelyAffected = Map.of();
+        private Map<MavenProject, List<String>> evidence = Map.of();
         private TrimResult trimResult;
         private List<MavenProject> filteredBuildSet;
 
@@ -122,6 +125,11 @@ final class AnalysisContext {
 
         Builder transitivelyAffected(Map<MavenProject, List<String>> transitivelyAffected) {
             this.transitivelyAffected = transitivelyAffected;
+            return this;
+        }
+
+        Builder evidence(Map<MavenProject, List<String>> evidence) {
+            this.evidence = evidence;
             return this;
         }
 

@@ -60,6 +60,27 @@ class ScalpelConfigurationTest {
         assertFalse(defaultConfig().isBuildAllIfNoChanges());
     }
 
+    @Test
+    void defaultExplain_isFalse() {
+        assertFalse(defaultConfig().isExplain());
+    }
+
+    @Test
+    void explain_trueParsedFromProperties() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.explain", "true");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertTrue(config.isExplain());
+    }
+
+    @Test
+    void explain_isAKnownKey() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.explain", "true");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertTrue(config.getWarnings().isEmpty(), "scalpel.explain must not be reported as an unknown key");
+    }
+
     // ---------------------------------------------------------------
     // Default values for list fields (empty)
     // ---------------------------------------------------------------

@@ -27,6 +27,7 @@ public final class ScalpelConfiguration {
     public static final String FULL_BUILD_TRIGGERS = PREFIX + "fullBuildTriggers";
     public static final String FAIL_SAFE = PREFIX + "failSafe";
     public static final String MODE = PREFIX + "mode";
+    public static final String EXPLAIN = PREFIX + "explain";
 
     public static final String DISABLE_ON_BRANCH = PREFIX + "disableOnBranch";
     public static final String DISABLE_ON_BASE_BRANCH = PREFIX + "disableOnBaseBranch";
@@ -69,6 +70,7 @@ public final class ScalpelConfiguration {
             FULL_BUILD_TRIGGERS,
             FAIL_SAFE,
             MODE,
+            EXPLAIN,
             DISABLE_ON_BRANCH,
             DISABLE_ON_BASE_BRANCH,
             EXCLUDE_PATHS,
@@ -112,6 +114,7 @@ public final class ScalpelConfiguration {
     private final String impactedLog;
     private final boolean failSafe;
     private final String mode;
+    private final boolean explain;
     private final String reportFile;
     private final long maxResourceFileSize;
     private final List<String> warnings;
@@ -141,6 +144,7 @@ public final class ScalpelConfiguration {
             String impactedLog,
             boolean failSafe,
             String mode,
+            boolean explain,
             String reportFile,
             long maxResourceFileSize,
             List<String> warnings) {
@@ -168,6 +172,7 @@ public final class ScalpelConfiguration {
         this.impactedLog = impactedLog;
         this.failSafe = failSafe;
         this.mode = mode;
+        this.explain = explain;
         this.reportFile = reportFile;
         this.maxResourceFileSize = maxResourceFileSize;
         this.warnings = warnings;
@@ -212,6 +217,7 @@ public final class ScalpelConfiguration {
             throw new IllegalArgumentException("Invalid scalpel.mode '" + mode + "', expected one of: " + MODE_TRIM
                     + ", " + MODE_SKIP_TESTS + ", " + MODE_REPORT);
         }
+        boolean explain = parseStrictBoolean(EXPLAIN, resolve(system, user, EXPLAIN, "false"));
         String reportFile = resolve(system, user, REPORT_FILE, DEFAULT_REPORT_FILE);
         String maxResourceFileSizeStr = resolve(system, user, MAX_RESOURCE_FILE_SIZE, null);
         long maxResourceFileSize = DEFAULT_MAX_RESOURCE_FILE_SIZE;
@@ -255,6 +261,7 @@ public final class ScalpelConfiguration {
                 impactedLog,
                 failSafe,
                 mode,
+                explain,
                 reportFile,
                 maxResourceFileSize,
                 warnings);
@@ -472,6 +479,10 @@ public final class ScalpelConfiguration {
         return failSafe;
     }
 
+    public boolean isExplain() {
+        return explain;
+    }
+
     public String getMode() {
         return mode;
     }
@@ -507,6 +518,7 @@ public final class ScalpelConfiguration {
                 + ", baseBranch='" + baseBranch + '\''
                 + ", head='" + head + '\''
                 + ", mode='" + mode + '\''
+                + ", explain=" + explain
                 + ", alsoMake=" + alsoMake
                 + ", alsoMakeDependents=" + alsoMakeDependents
                 + ", fullBuildTriggers=" + fullBuildTriggers
