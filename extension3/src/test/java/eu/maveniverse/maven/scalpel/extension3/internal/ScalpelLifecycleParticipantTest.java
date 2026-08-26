@@ -41,17 +41,30 @@ import org.apache.maven.execution.ProjectDependencyGraph;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
+import org.apache.maven.model.Parent;
 import org.apache.maven.model.Plugin;
+import org.apache.maven.model.Profile;
+import org.apache.maven.model.Repository;
+import org.apache.maven.model.building.DefaultModelBuilderFactory;
+import org.apache.maven.model.building.DefaultModelBuildingRequest;
+import org.apache.maven.model.building.FileModelSource;
+import org.apache.maven.model.building.ModelBuildingException;
+import org.apache.maven.model.building.ModelBuildingRequest;
+import org.apache.maven.model.building.ModelSource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+import org.apache.maven.model.resolution.InvalidRepositoryException;
+import org.apache.maven.model.resolution.UnresolvableModelException;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
 import org.apache.maven.project.DependencyResolutionException;
 import org.apache.maven.project.DependencyResolutionResult;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
+import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.graph.DefaultDependencyNode;
 import org.eclipse.aether.graph.DependencyNode;
+import org.eclipse.aether.impl.RemoteRepositoryManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -66,12 +79,54 @@ class ScalpelLifecycleParticipantTest {
     private ProjectDependenciesResolver dependenciesResolver;
     private ScalpelLifecycleParticipant participant;
 
+    /**
+     * Maps GAV coordinates ("groupId:artifactId:version") to POM files available in the
+     * test reactor. Populated by {@link #createProject} so that both the mock RepositorySystem
+     * (for old effective models) and the ReactorModelResolver (for new effective models set
+     * by {@link #setEffectiveModel}) can resolve parent POMs and BOM imports.
+     */
+    private final Map<String, File> reactorPomFiles = new HashMap<>();
+
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
+        reactorPomFiles.clear();
         scalpelCore = mock(ScalpelCore.class);
         dependenciesResolver = mock(ProjectDependenciesResolver.class);
+        // Configure mock RepositorySystem to resolve POM artifacts from the test reactor.
+        // When a GAV matches a reactor project (registered via reactorPomFiles), the mock
+        // returns the POM file. This allows buildEffectiveModels to resolve parent POMs
+        // and BOM imports in old effective models, matching production behavior.
+        RepositorySystem repositorySystem = mock(RepositorySystem.class);
+        when(repositorySystem.resolveArtifact(any(), any(org.eclipse.aether.resolution.ArtifactRequest.class)))
+                .thenAnswer(invocation -> {
+                    org.eclipse.aether.resolution.ArtifactRequest request = invocation.getArgument(1);
+                    org.eclipse.aether.artifact.Artifact artifact = request.getArtifact();
+                    String key = artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getVersion();
+                    File pomFile = reactorPomFiles.get(key);
+                    if (pomFile != null && pomFile.exists()) {
+                        org.eclipse.aether.resolution.ArtifactResult result =
+                                new org.eclipse.aether.resolution.ArtifactResult(request);
+                        result.setArtifact(new DefaultArtifact(
+                                        artifact.getGroupId(),
+                                        artifact.getArtifactId(),
+                                        artifact.getClassifier(),
+                                        artifact.getExtension(),
+                                        artifact.getVersion())
+                                .setFile(pomFile));
+                        return result;
+                    }
+                    throw new org.eclipse.aether.resolution.ArtifactResolutionException(
+                            List.of(new org.eclipse.aether.resolution.ArtifactResult(request)), "not in test reactor");
+                });
         participant = new ScalpelLifecycleParticipant(
-                scalpelCore, new ModuleMapper(), new PomChangeAnalyzer(), new ReactorTrimmer(), dependenciesResolver);
+                scalpelCore,
+                new ModuleMapper(),
+                new PomChangeAnalyzer(
+                        repositorySystem,
+                        mock(RemoteRepositoryManager.class),
+                        new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance()),
+                new ReactorTrimmer(),
+                dependenciesResolver);
     }
 
     @Test
@@ -201,21 +256,28 @@ class ScalpelLifecycleParticipantTest {
         ChangeDetectionResult detectionResult = new ChangeDetectionResult(changedFiles, oldPoms);
         when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(detectionResult);
 
-        // commons-lang dependency used for transitive resolution
-        org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
+        // commons-lang dependency used for transitive resolution (old vs new version)
+        org.eclipse.aether.graph.Dependency commonsLangNew = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
+        org.eclipse.aether.graph.Dependency commonsLangOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "1.0"), "compile");
 
         // Route resolution calls:
         // module-b and module-d: resolution succeeds, has commons-lang
+        //   - "new" resolution (real project): commons-lang:2.0
+        //   - "old" resolution (temp copy): commons-lang:1.0
         // module-e: resolution fails with empty partial results (simulates unresolvable deps)
         // others: resolution succeeds, no matching deps
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    String aid = req.getMavenProject().getArtifactId();
+                    MavenProject reqProject = req.getMavenProject();
+                    String aid = reqProject.getArtifactId();
+                    boolean isOldResolution = allProjects.stream().noneMatch(p -> p == reqProject);
                     if ("module-b".equals(aid) || "module-d".equals(aid)) {
                         DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getDependencyGraph()).thenReturn(createDependencyGraph(commonsLangDep));
+                        when(res.getDependencyGraph())
+                                .thenReturn(createDependencyGraph(isOldResolution ? commonsLangOld : commonsLangNew));
                         return res;
                     }
                     if ("module-e".equals(aid)) {
@@ -739,17 +801,22 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // module-b: commons-lang is only via test scope
-        DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
-        org.eclipse.aether.graph.Dependency testDep = new org.eclipse.aether.graph.Dependency(
+        // module-b: commons-lang is only via test scope (old=1.0, new=2.0)
+        org.eclipse.aether.graph.Dependency testDepNew = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "test");
-        when(moduleBResolution.getDependencyGraph()).thenReturn(createDependencyGraph(testDep));
+        org.eclipse.aether.graph.Dependency testDepOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "1.0"), "test");
 
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-b".equals(req.getMavenProject().getArtifactId())) {
-                        return moduleBResolution;
+                    MavenProject reqProject = req.getMavenProject();
+                    boolean isOldResolution = allProjects.stream().noneMatch(p -> p == reqProject);
+                    if ("module-b".equals(reqProject.getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph())
+                                .thenReturn(createDependencyGraph(isOldResolution ? testDepOld : testDepNew));
+                        return res;
                     }
                     DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
                     when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
@@ -1517,23 +1584,26 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // Mock dependency resolution: module-b has commons-lang transitively
-        DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
-        org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
+        // Mock dependency resolution: module-b has commons-lang transitively (old=1.0, new=2.0)
+        org.eclipse.aether.graph.Dependency commonsLangNew = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
-        when(moduleBResolution.getDependencyGraph()).thenReturn(createDependencyGraph(commonsLangDep));
-
-        // Other modules: no matching deps
-        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
+        org.eclipse.aether.graph.Dependency commonsLangOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "1.0"), "compile");
 
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-b".equals(req.getMavenProject().getArtifactId())) {
-                        return moduleBResolution;
+                    MavenProject reqProject = req.getMavenProject();
+                    boolean isOldResolution = allProjects.stream().noneMatch(p -> p == reqProject);
+                    if ("module-b".equals(reqProject.getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph())
+                                .thenReturn(createDependencyGraph(isOldResolution ? commonsLangOld : commonsLangNew));
+                        return res;
                     }
-                    return emptyResolution;
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
                 });
 
         MavenSession session = mock(MavenSession.class);
@@ -1901,20 +1971,25 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // module-b has commons-lang transitively (makes it transitively affected)
-        DependencyResolutionResult moduleBResolution = mock(DependencyResolutionResult.class);
-        org.eclipse.aether.graph.Dependency commonsLangDep = new org.eclipse.aether.graph.Dependency(
+        // module-b has commons-lang transitively (old=1.0, new=2.0)
+        org.eclipse.aether.graph.Dependency commonsLangNew = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
-        when(moduleBResolution.getDependencyGraph()).thenReturn(createDependencyGraph(commonsLangDep));
-        DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
-        when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
+        org.eclipse.aether.graph.Dependency commonsLangOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "1.0"), "compile");
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-b".equals(req.getMavenProject().getArtifactId())) {
-                        return moduleBResolution;
+                    MavenProject reqProject = req.getMavenProject();
+                    boolean isOldResolution = allProjects.stream().noneMatch(p -> p == reqProject);
+                    if ("module-b".equals(reqProject.getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph())
+                                .thenReturn(createDependencyGraph(isOldResolution ? commonsLangOld : commonsLangNew));
+                        return res;
                     }
-                    return emptyResolution;
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
                 });
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
@@ -1969,24 +2044,29 @@ class ScalpelLifecycleParticipantTest {
         writePom(root, "pom.xml", newParentPom);
         String moduleAPom = simpleChildPom("module-a");
         writePom(root, "module-a/pom.xml", moduleAPom);
-        String moduleBPom = simpleChildPomWithDep("module-b", "module-a");
+        // module-b declares the compiler plugin (version comes from parent's pluginManagement)
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>module-a</artifactId><version>1.0</version></dependency>
+                  </dependencies>
+                  <build><plugins>
+                    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId></plugin>
+                  </plugins></build>
+                </project>
+                """;
         writePom(root, "module-b/pom.xml", moduleBPom);
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
         parentProject.getModel().setPackaging("pom");
-        Build parentBuild = new Build();
-        parentProject.getModel().setBuild(parentBuild);
         MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
         moduleA.setParent(parentProject);
         MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
         moduleB.setParent(parentProject);
-        // module-b uses the changed managed plugin
-        Build build = new Build();
-        Plugin compilerPlugin = new Plugin();
-        compilerPlugin.setGroupId("org.apache.maven.plugins");
-        compilerPlugin.setArtifactId("maven-compiler-plugin");
-        build.addPlugin(compilerPlugin);
-        moduleB.getModel().setBuild(build);
 
         List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
@@ -3753,8 +3833,9 @@ class ScalpelLifecycleParticipantTest {
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         String block = extractModuleBlock(json, "module-x");
         assertTrue(
-                block != null && block.contains("property foo.version"),
-                "module-x evidence must name the changed property, block was: " + block);
+                block != null
+                        && (block.contains("effective dep org.example:lib") || block.contains("property foo.version")),
+                "module-x evidence must name the changed dependency or property, block was: " + block);
         assertFalse(modulePresent(json, "module-y"), "module-y does not reference the property, must not be affected");
     }
 
@@ -3927,7 +4008,106 @@ class ScalpelLifecycleParticipantTest {
         MavenProject project = new MavenProject(model);
         project.setFile(pomFile);
         project.setOriginalModel(parseModel(pomXml));
+        // Register in reactor so parent and BOM resolution works
+        reactorPomFiles.put(groupId + ":" + artifactId + ":" + version, pomFile);
+        // Set effective model using ModelBuilder with processPlugins=true and
+        // reactor-aware resolver, matching production behavior.
+        setEffectiveModel(project, pomXml);
         return project;
+    }
+
+    /**
+     * Set the effective model on a MavenProject using Maven's ModelBuilder with
+     * {@code processPlugins=true} to match production behavior. The ReactorModelResolver
+     * resolves parents and BOM imports from the reactor POM files (populated by
+     * {@link #createProject}), so the effective model includes parent inheritance,
+     * BOM import resolution, lifecycle default plugins, and pluginManagement merging.
+     */
+    private void setEffectiveModel(MavenProject project, String pomXml) {
+        try {
+            org.apache.maven.model.building.ModelBuilder modelBuilder = new DefaultModelBuilderFactory().newInstance();
+            DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
+            request.setPomFile(project.getFile());
+            request.setProcessPlugins(true);
+            request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
+            request.setModelResolver(new ReactorModelResolver(reactorPomFiles));
+
+            // Activate the same profiles as the project's build
+            if (project.getActiveProfiles() != null
+                    && !project.getActiveProfiles().isEmpty()) {
+                List<String> activeIds = new ArrayList<>();
+                for (Profile p : project.getActiveProfiles()) {
+                    activeIds.add(p.getId());
+                }
+                request.setActiveProfileIds(activeIds);
+            }
+
+            Model effective = modelBuilder.build(request).getEffectiveModel();
+            effective.setPomFile(project.getFile());
+            project.setModel(effective);
+        } catch (ModelBuildingException e) {
+            if (e.getResult() != null && e.getResult().getEffectiveModel() != null) {
+                Model effective = e.getResult().getEffectiveModel();
+                effective.setPomFile(project.getFile());
+                project.setModel(effective);
+            } else {
+                // Fall back to raw XML parsing (no interpolation)
+                Model effective = parseModel(pomXml);
+                if (effective.getGroupId() == null) {
+                    effective.setGroupId(project.getGroupId());
+                }
+                if (effective.getArtifactId() == null) {
+                    effective.setArtifactId(project.getArtifactId());
+                }
+                if (effective.getVersion() == null) {
+                    effective.setVersion(project.getVersion());
+                }
+                effective.setPomFile(project.getFile());
+                project.setModel(effective);
+            }
+        }
+    }
+
+    /**
+     * ModelResolver that resolves parents and BOM imports from the test reactor.
+     */
+    private static class ReactorModelResolver implements org.apache.maven.model.resolution.ModelResolver {
+        private final Map<String, File> reactorPoms;
+
+        ReactorModelResolver(Map<String, File> reactorPoms) {
+            this.reactorPoms = reactorPoms;
+        }
+
+        @Override
+        public ModelSource resolveModel(String groupId, String artifactId, String version)
+                throws UnresolvableModelException {
+            File f = reactorPoms.get(groupId + ":" + artifactId + ":" + version);
+            if (f != null && f.exists()) {
+                return new FileModelSource(f);
+            }
+            throw new UnresolvableModelException("not in reactor", groupId, artifactId, version);
+        }
+
+        @Override
+        public ModelSource resolveModel(Parent parent) throws UnresolvableModelException {
+            return resolveModel(parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
+        }
+
+        @Override
+        public ModelSource resolveModel(Dependency dependency) throws UnresolvableModelException {
+            return resolveModel(dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
+        }
+
+        @Override
+        public void addRepository(Repository repository) throws InvalidRepositoryException {}
+
+        @Override
+        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {}
+
+        @Override
+        public org.apache.maven.model.resolution.ModelResolver newCopy() {
+            return this;
+        }
     }
 
     private boolean modulePresent(String json, String artifactId) {
@@ -4105,15 +4285,20 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // module-a has smallrye-graphql as a transitive dependency
-        org.eclipse.aether.graph.Dependency graphqlDep = new org.eclipse.aether.graph.Dependency(
+        // module-a has smallrye-graphql as a transitive dependency (old=2.18.1, new=2.18.2)
+        org.eclipse.aether.graph.Dependency graphqlNew = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("io.smallrye", "smallrye-graphql", "jar", "2.18.2"), "compile");
+        org.eclipse.aether.graph.Dependency graphqlOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("io.smallrye", "smallrye-graphql", "jar", "2.18.1"), "compile");
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if ("module-a".equals(req.getMavenProject().getArtifactId())) {
+                    MavenProject reqProject = req.getMavenProject();
+                    boolean isOldResolution = allProjects.stream().noneMatch(p -> p == reqProject);
+                    if ("module-a".equals(reqProject.getArtifactId())) {
                         DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getDependencyGraph()).thenReturn(createDependencyGraph(graphqlDep));
+                        when(res.getDependencyGraph())
+                                .thenReturn(createDependencyGraph(isOldResolution ? graphqlOld : graphqlNew));
                         return res;
                     }
                     DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
@@ -5058,16 +5243,21 @@ class ScalpelLifecycleParticipantTest {
 
     /**
      * Mocks dependency resolution so that the module with the given artifactId gets the
-     * provided multi-level graph, and every other module gets an empty graph.
+     * provided graph for new resolutions and oldGraph for old resolutions.
+     * Old vs new is distinguished by checking if the project instance is one of the
+     * known allProjects (new) or a temp copy (old).
      */
-    private void mockDependencyResolution(String targetArtifactId, DependencyNode graph)
+    private void mockDependencyResolution(
+            String targetArtifactId, DependencyNode newGraph, DependencyNode oldGraph, List<MavenProject> allProjects)
             throws DependencyResolutionException {
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
                     DefaultDependencyResolutionRequest req = invocation.getArgument(0);
-                    if (targetArtifactId.equals(req.getMavenProject().getArtifactId())) {
+                    MavenProject reqProject = req.getMavenProject();
+                    boolean isOldResolution = allProjects.stream().noneMatch(p -> p == reqProject);
+                    if (targetArtifactId.equals(reqProject.getArtifactId())) {
                         DependencyResolutionResult res = mock(DependencyResolutionResult.class);
-                        when(res.getDependencyGraph()).thenReturn(graph);
+                        when(res.getDependencyGraph()).thenReturn(isOldResolution ? oldGraph : newGraph);
                         return res;
                     }
                     DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
@@ -5137,20 +5327,27 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // Build a two-level dependency graph:
+        // Build two-level dependency graphs (old=1.0, new=2.0 for deep-lib):
         // root -> intermediate-lib (compile) -> deep-lib (compile, the changed managed dep)
-        org.eclipse.aether.graph.Dependency deepLibDep = new org.eclipse.aether.graph.Dependency(
+        org.eclipse.aether.graph.Dependency deepLibNew = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("org.example", "deep-lib", "jar", "2.0"), "compile");
-        DefaultDependencyNode deepLibNode = new DefaultDependencyNode(deepLibDep);
-        deepLibNode.setChildren(List.of());
-
-        org.eclipse.aether.graph.Dependency intermediateDep = new org.eclipse.aether.graph.Dependency(
+        DefaultDependencyNode deepLibNewNode = new DefaultDependencyNode(deepLibNew);
+        deepLibNewNode.setChildren(List.of());
+        org.eclipse.aether.graph.Dependency intermediateNew = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("org.example", "intermediate-lib", "jar", "1.0"), "compile");
-        DefaultDependencyNode intermediateNode = createNodeWithChildren(intermediateDep, deepLibNode);
+        DependencyNode newGraph =
+                createMultiLevelDependencyGraph(createNodeWithChildren(intermediateNew, deepLibNewNode));
 
-        DependencyNode graph = createMultiLevelDependencyGraph(intermediateNode);
+        org.eclipse.aether.graph.Dependency deepLibOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "deep-lib", "jar", "1.0"), "compile");
+        DefaultDependencyNode deepLibOldNode = new DefaultDependencyNode(deepLibOld);
+        deepLibOldNode.setChildren(List.of());
+        org.eclipse.aether.graph.Dependency intermediateOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "intermediate-lib", "jar", "1.0"), "compile");
+        DependencyNode oldGraph =
+                createMultiLevelDependencyGraph(createNodeWithChildren(intermediateOld, deepLibOldNode));
 
-        mockDependencyResolution("module-a", graph);
+        mockDependencyResolution("module-a", newGraph, oldGraph, allProjects);
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
 
@@ -5234,29 +5431,45 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // Build a diamond dependency graph (test scope to exercise visited-set deduplication):
+        // Build diamond dependency graphs (old=1.0, new=2.0 for target-lib):
         // root -> path-b -> target-lib (test, changed)
         //      -> path-c -> target-lib (test, changed)
-        org.eclipse.aether.graph.Dependency targetLibDep = new org.eclipse.aether.graph.Dependency(
+
+        // New graph (target-lib:2.0)
+        org.eclipse.aether.graph.Dependency targetLibNew = new org.eclipse.aether.graph.Dependency(
                 new DefaultArtifact("org.example", "target-lib", "jar", "2.0"), "test");
+        DefaultDependencyNode targetFromBNew = new DefaultDependencyNode(targetLibNew);
+        targetFromBNew.setChildren(List.of());
+        DefaultDependencyNode targetFromCNew = new DefaultDependencyNode(targetLibNew);
+        targetFromCNew.setChildren(List.of());
+        DefaultDependencyNode pathBNodeNew = createNodeWithChildren(
+                new org.eclipse.aether.graph.Dependency(
+                        new DefaultArtifact("org.example", "path-b", "jar", "1.0"), "compile"),
+                targetFromBNew);
+        DefaultDependencyNode pathCNodeNew = createNodeWithChildren(
+                new org.eclipse.aether.graph.Dependency(
+                        new DefaultArtifact("org.example", "path-c", "jar", "1.0"), "compile"),
+                targetFromCNew);
+        DependencyNode newGraph = createMultiLevelDependencyGraph(pathBNodeNew, pathCNodeNew);
 
-        // Both paths lead to the same GA
-        DefaultDependencyNode targetFromB = new DefaultDependencyNode(targetLibDep);
-        targetFromB.setChildren(List.of());
-        DefaultDependencyNode targetFromC = new DefaultDependencyNode(targetLibDep);
-        targetFromC.setChildren(List.of());
+        // Old graph (target-lib:1.0)
+        org.eclipse.aether.graph.Dependency targetLibOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "target-lib", "jar", "1.0"), "test");
+        DefaultDependencyNode targetFromBOld = new DefaultDependencyNode(targetLibOld);
+        targetFromBOld.setChildren(List.of());
+        DefaultDependencyNode targetFromCOld = new DefaultDependencyNode(targetLibOld);
+        targetFromCOld.setChildren(List.of());
+        DefaultDependencyNode pathBNodeOld = createNodeWithChildren(
+                new org.eclipse.aether.graph.Dependency(
+                        new DefaultArtifact("org.example", "path-b", "jar", "1.0"), "compile"),
+                targetFromBOld);
+        DefaultDependencyNode pathCNodeOld = createNodeWithChildren(
+                new org.eclipse.aether.graph.Dependency(
+                        new DefaultArtifact("org.example", "path-c", "jar", "1.0"), "compile"),
+                targetFromCOld);
+        DependencyNode oldGraph = createMultiLevelDependencyGraph(pathBNodeOld, pathCNodeOld);
 
-        org.eclipse.aether.graph.Dependency pathBDep = new org.eclipse.aether.graph.Dependency(
-                new DefaultArtifact("org.example", "path-b", "jar", "1.0"), "compile");
-        DefaultDependencyNode pathBNode = createNodeWithChildren(pathBDep, targetFromB);
-
-        org.eclipse.aether.graph.Dependency pathCDep = new org.eclipse.aether.graph.Dependency(
-                new DefaultArtifact("org.example", "path-c", "jar", "1.0"), "compile");
-        DefaultDependencyNode pathCNode = createNodeWithChildren(pathCDep, targetFromC);
-
-        DependencyNode diamondGraph = createMultiLevelDependencyGraph(pathBNode, pathCNode);
-
-        mockDependencyResolution("module-a", diamondGraph);
+        mockDependencyResolution("module-a", newGraph, oldGraph, allProjects);
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
 
@@ -5339,20 +5552,30 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
-        // Build a two-level tree: root -> intermediate-test-lib (test) -> deep-test-lib (test, changed).
-        // Only the scope of deep-test-lib matters -- the walker checks scope only for matched GAs.
-        org.eclipse.aether.graph.Dependency deepTestLibDep = new org.eclipse.aether.graph.Dependency(
-                new DefaultArtifact("org.example", "deep-test-lib", "jar", "2.0"), "test");
-        DefaultDependencyNode deepTestLibNode = new DefaultDependencyNode(deepTestLibDep);
-        deepTestLibNode.setChildren(List.of());
+        // Build two-level trees (old=1.0, new=2.0 for deep-test-lib):
+        // root -> intermediate-test-lib (test) -> deep-test-lib (test, the changed managed dep)
 
-        org.eclipse.aether.graph.Dependency intermediateTestDep = new org.eclipse.aether.graph.Dependency(
-                new DefaultArtifact("org.example", "intermediate-test-lib", "jar", "1.0"), "test");
-        DefaultDependencyNode intermediateTestNode = createNodeWithChildren(intermediateTestDep, deepTestLibNode);
+        // New graph (deep-test-lib:2.0)
+        DefaultDependencyNode deepTestNewNode = new DefaultDependencyNode(new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "deep-test-lib", "jar", "2.0"), "test"));
+        deepTestNewNode.setChildren(List.of());
+        DefaultDependencyNode intermediateNewNode = createNodeWithChildren(
+                new org.eclipse.aether.graph.Dependency(
+                        new DefaultArtifact("org.example", "intermediate-test-lib", "jar", "1.0"), "test"),
+                deepTestNewNode);
+        DependencyNode newGraph = createMultiLevelDependencyGraph(intermediateNewNode);
 
-        DependencyNode testGraph = createMultiLevelDependencyGraph(intermediateTestNode);
+        // Old graph (deep-test-lib:1.0)
+        DefaultDependencyNode deepTestOldNode = new DefaultDependencyNode(new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "deep-test-lib", "jar", "1.0"), "test"));
+        deepTestOldNode.setChildren(List.of());
+        DefaultDependencyNode intermediateOldNode = createNodeWithChildren(
+                new org.eclipse.aether.graph.Dependency(
+                        new DefaultArtifact("org.example", "intermediate-test-lib", "jar", "1.0"), "test"),
+                deepTestOldNode);
+        DependencyNode oldGraph = createMultiLevelDependencyGraph(intermediateOldNode);
 
-        mockDependencyResolution("module-a", testGraph);
+        mockDependencyResolution("module-a", newGraph, oldGraph, allProjects);
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
 

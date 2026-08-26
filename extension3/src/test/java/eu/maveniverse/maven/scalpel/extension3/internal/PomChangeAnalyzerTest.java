@@ -10,6 +10,9 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
@@ -24,17 +27,27 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Stream;
-import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
-import org.apache.maven.model.DependencyManagement;
 import org.apache.maven.model.Model;
-import org.apache.maven.model.Plugin;
-import org.apache.maven.model.PluginExecution;
-import org.apache.maven.model.PluginManagement;
+import org.apache.maven.model.Parent;
 import org.apache.maven.model.Profile;
-import org.apache.maven.model.Resource;
+import org.apache.maven.model.Repository;
+import org.apache.maven.model.building.DefaultModelBuildingRequest;
+import org.apache.maven.model.building.FileModelSource;
+import org.apache.maven.model.building.ModelBuildingException;
+import org.apache.maven.model.building.ModelBuildingRequest;
+import org.apache.maven.model.building.ModelSource;
+import org.apache.maven.model.resolution.InvalidRepositoryException;
+import org.apache.maven.model.resolution.ModelResolver;
+import org.apache.maven.model.resolution.UnresolvableModelException;
 import org.apache.maven.project.MavenProject;
-import org.codehaus.plexus.util.xml.Xpp3Dom;
+import org.eclipse.aether.RepositorySystem;
+import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.artifact.DefaultArtifact;
+import org.eclipse.aether.impl.RemoteRepositoryManager;
+import org.eclipse.aether.resolution.ArtifactRequest;
+import org.eclipse.aether.resolution.ArtifactResolutionException;
+import org.eclipse.aether.resolution.ArtifactResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -46,12 +59,97 @@ class PomChangeAnalyzerTest {
 
     private PomChangeAnalyzer analyzer;
 
+    /**
+     * Maps GAV coordinates ("groupId:artifactId:version") to POM files available in the
+     * test reactor. Populated by test helpers (createReactor, createReactorWithBomImport, etc.)
+     * so that both the mock RepositorySystem (for old effective models built by
+     * buildEffectiveModels) and the ReactorModelResolver (for new effective models set by
+     * setEffectiveModel) can resolve parent POMs and BOM imports.
+     */
+    private final Map<String, File> reactorPomFiles = new HashMap<>();
+
+    /** Default resolution context with a mock session — used by all tests that don't need real artifact resolution. */
+    private final PomChangeAnalyzer.ModelResolutionContext defaultResolutionCtx =
+            new PomChangeAnalyzer.ModelResolutionContext(
+                    new Properties(), new Properties(), mock(RepositorySystemSession.class), List.of());
+
     @TempDir
     Path tempDir;
 
     @BeforeEach
-    void setUp() {
-        analyzer = new PomChangeAnalyzer();
+    void setUp() throws Exception {
+        reactorPomFiles.clear();
+        // Configure mock RepositorySystem to resolve POM artifacts from the test reactor.
+        // When a GAV matches a reactor project (registered via reactorPomFiles), the mock
+        // returns the POM file. This allows buildEffectiveModels to resolve parent POMs
+        // and BOM imports in old effective models, matching production behavior.
+        // For unknown artifacts, it throws ArtifactResolutionException.
+        RepositorySystem repositorySystem = mock(RepositorySystem.class);
+        when(repositorySystem.resolveArtifact(any(), any(ArtifactRequest.class)))
+                .thenAnswer(invocation -> {
+                    ArtifactRequest request = invocation.getArgument(1);
+                    org.eclipse.aether.artifact.Artifact artifact = request.getArtifact();
+                    String key = artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getVersion();
+                    File pomFile = reactorPomFiles.get(key);
+                    if (pomFile != null && pomFile.exists()) {
+                        ArtifactResult result = new ArtifactResult(request);
+                        result.setArtifact(new DefaultArtifact(
+                                        artifact.getGroupId(),
+                                        artifact.getArtifactId(),
+                                        artifact.getClassifier(),
+                                        artifact.getExtension(),
+                                        artifact.getVersion())
+                                .setFile(pomFile));
+                        return result;
+                    }
+                    throw new ArtifactResolutionException(List.of(new ArtifactResult(request)), "not in test reactor");
+                });
+        analyzer = new PomChangeAnalyzer(
+                repositorySystem,
+                mock(RemoteRepositoryManager.class),
+                new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance());
+    }
+
+    /** Convenience wrapper: calls analyzeChanges with default explain=true and the default mock resolution context. */
+    private PomChangeAnalyzer.Result analyzeChanges(
+            Set<String> changedPomPaths,
+            Map<String, byte[]> oldPomContents,
+            List<MavenProject> allProjects,
+            Path reactorRoot) {
+        return analyzer.analyzeChanges(
+                changedPomPaths, oldPomContents, allProjects, reactorRoot, true, defaultResolutionCtx);
+    }
+
+    /**
+     * Derive changed managed dependency GAs from result's effective models.
+     * Mirrors ScalpelLifecycleParticipant.deriveChangedManagedDeps for test assertions.
+     */
+    private Set<String> deriveChangedManagedDeps(PomChangeAnalyzer.Result result) {
+        Set<String> changed = new LinkedHashSet<>();
+        for (Map.Entry<String, Model> entry : result.getOldEffectiveModels().entrySet()) {
+            Model newModel = result.getNewEffectiveModels().get(entry.getKey());
+            if (newModel != null) {
+                changed.addAll(analyzer.diffDependencies(
+                        analyzer.getManagedDependencies(entry.getValue()), analyzer.getManagedDependencies(newModel)));
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Derive changed managed plugin GAs from result's effective models.
+     * Mirrors ScalpelLifecycleParticipant.deriveChangedManagedPlugins for test assertions.
+     */
+    private Set<String> deriveChangedManagedPlugins(PomChangeAnalyzer.Result result) {
+        Set<String> changed = new LinkedHashSet<>();
+        for (Map.Entry<String, Model> entry : result.getOldEffectiveModels().entrySet()) {
+            Model newModel = result.getNewEffectiveModels().get(entry.getKey());
+            if (newModel != null) {
+                changed.addAll(analyzer.diffManagedPluginVersions(
+                        analyzer.getManagedPlugins(entry.getValue()), analyzer.getManagedPlugins(newModel)));
+            }
+        }
+        return changed;
     }
 
     // --- diffProperties tests ---
@@ -102,48 +200,6 @@ class PomChangeAnalyzerTest {
         assertTrue(changed.isEmpty());
     }
 
-    // --- diffDependencyManagement tests ---
-
-    @Test
-    void diffDependencyManagement_noChanges() {
-        Model old = modelWithManagedDep("com.example", "lib-a", "1.0");
-        Model now = modelWithManagedDep("com.example", "lib-a", "1.0");
-        assertTrue(analyzer.diffDependencyManagement(old, now).isEmpty());
-    }
-
-    @Test
-    void diffDependencyManagement_versionChanged() {
-        Model old = modelWithManagedDep("com.example", "lib-a", "1.0");
-        Model now = modelWithManagedDep("com.example", "lib-a", "2.0");
-        Set<String> changed = analyzer.diffDependencyManagement(old, now);
-        assertEquals(Set.of("com.example:lib-a"), changed);
-    }
-
-    @Test
-    void diffDependencyManagement_addedDep() {
-        Model old = new Model();
-        Model now = modelWithManagedDep("com.example", "lib-new", "1.0");
-        Set<String> changed = analyzer.diffDependencyManagement(old, now);
-        assertEquals(Set.of("com.example:lib-new"), changed);
-    }
-
-    // --- diffPluginManagement tests ---
-
-    @Test
-    void diffPluginManagement_noChanges() {
-        Model old = modelWithManagedPlugin("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0");
-        Model now = modelWithManagedPlugin("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0");
-        assertTrue(analyzer.diffPluginManagement(old, now).isEmpty());
-    }
-
-    @Test
-    void diffPluginManagement_versionChanged() {
-        Model old = modelWithManagedPlugin("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0");
-        Model now = modelWithManagedPlugin("org.apache.maven.plugins", "maven-compiler-plugin", "3.12.0");
-        Set<String> changed = analyzer.diffPluginManagement(old, now);
-        assertEquals(Set.of("org.apache.maven.plugins:maven-compiler-plugin"), changed);
-    }
-
     // --- analyzeChanges integration tests ---
 
     @Test
@@ -158,7 +214,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("module-a/pom.xml", readFile(moduleA.getFile()));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.contains(moduleA), "Leaf module with changed POM should be affected");
         assertEquals(1, affected.size(), "Only the leaf module should be affected");
@@ -191,12 +247,12 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
+        MavenProject moduleA = projects.get(1);
         MavenProject moduleB = projects.get(2);
         assertTrue(affected.contains(moduleB), "module-b references ${dep.version} and should be affected");
 
-        MavenProject moduleA = projects.get(1);
         assertFalse(
                 affected.contains(moduleA), "module-a does NOT reference ${dep.version} and should NOT be affected");
     }
@@ -232,7 +288,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleB = projects.get(2);
         assertTrue(affected.contains(moduleB), "module-b uses managed dep com.example:lib-x and should be affected");
@@ -265,7 +321,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.isEmpty(), "Cosmetic parent POM change should not affect any module");
     }
@@ -280,7 +336,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertEquals(3, affected.size(), "New parent POM should mark parent + all children");
     }
@@ -309,7 +365,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getChangedProperties().contains("dep.version"), "Changed properties should include dep.version");
@@ -347,10 +403,10 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("org.springframework:spring-core"),
+                deriveChangedManagedDeps(result).contains("org.springframework:spring-core"),
                 "Changed managed dep GAs should include spring-core (via property indirection)");
     }
 
@@ -390,7 +446,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleB = projects.get(2);
         assertTrue(
@@ -437,7 +493,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleB = projects.get(2);
         assertTrue(
@@ -525,7 +581,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(2)),
@@ -604,7 +660,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.isEmpty(), "Inactive profile change should not affect any module");
     }
@@ -662,6 +718,14 @@ class PomChangeAnalyzerTest {
         activeProfile.setId("my-profile");
         projects.get(0).setActiveProfiles(List.of(activeProfile));
 
+        // Simulate Maven resolving managed dep version from the active profile into
+        // module-b's effective dependency list (setEffectiveModel doesn't merge profiles)
+        for (Dependency dep : projects.get(2).getModel().getDependencies()) {
+            if ("lib-x".equals(dep.getArtifactId())) {
+                dep.setVersion("2.0");
+            }
+        }
+
         // Old parent POM had lib-x:1.0 in the profile
         String oldParentPom = """
                 <?xml version="1.0"?>
@@ -685,58 +749,13 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(2)),
                 "module-b uses managed dep lib-x from active profile and should be affected");
         assertFalse(result.getAffectedProjects().contains(projects.get(1)), "module-a does NOT use lib-x");
-        assertTrue(result.getChangedManagedDependencyGAs().contains("com.example:lib-x"));
-    }
-
-    // --- Plugin configuration semantic diff tests ---
-
-    @Test
-    void diffPluginManagement_whitespaceConfigChangeIgnored() {
-        Model old =
-                modelWithManagedPluginConfig("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0", "  11  ");
-        Model now = modelWithManagedPluginConfig("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0", "11");
-        assertTrue(
-                analyzer.diffPluginManagement(old, now).isEmpty(),
-                "Whitespace-only config change should not trigger diff");
-    }
-
-    @Test
-    void diffPluginManagement_configValueChangeDetected() {
-        Model old = modelWithManagedPluginConfig("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0", "11");
-        Model now = modelWithManagedPluginConfig("org.apache.maven.plugins", "maven-compiler-plugin", "3.11.0", "17");
-        Set<String> changed = analyzer.diffPluginManagement(old, now);
-        assertEquals(
-                Set.of("org.apache.maven.plugins:maven-compiler-plugin"),
-                changed,
-                "Config value change should be detected");
-    }
-
-    @Test
-    void diffPluginManagement_executionChangeDetected() {
-        Model old = modelWithManagedPluginExecution(
-                "org.apache.maven.plugins", "maven-surefire-plugin", "3.0.0", "default-test", "test");
-        Model now = modelWithManagedPluginExecution(
-                "org.apache.maven.plugins", "maven-surefire-plugin", "3.0.0", "default-test", "integration-test");
-        Set<String> changed = analyzer.diffPluginManagement(old, now);
-        assertEquals(
-                Set.of("org.apache.maven.plugins:maven-surefire-plugin"),
-                changed,
-                "Execution phase change should be detected");
-    }
-
-    @Test
-    void diffPluginManagement_sameExecutionNoChange() {
-        Model old = modelWithManagedPluginExecution(
-                "org.apache.maven.plugins", "maven-surefire-plugin", "3.0.0", "default-test", "test");
-        Model now = modelWithManagedPluginExecution(
-                "org.apache.maven.plugins", "maven-surefire-plugin", "3.0.0", "default-test", "test");
-        assertTrue(analyzer.diffPluginManagement(old, now).isEmpty(), "Identical executions should not trigger diff");
+        assertTrue(deriveChangedManagedDeps(result).contains("com.example:lib-x"));
     }
 
     // --- Source directory, resource, and repository comparison tests (parameterized) ---
@@ -775,7 +794,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -957,7 +976,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(result.getAffectedProjects().isEmpty(), description);
     }
@@ -1004,13 +1023,17 @@ class PomChangeAnalyzerTest {
                 """.formatted(extraSection);
     }
 
-    // --- Resource filtering property tracking tests ---
+    // --- New managed dep filtering tests (issue #131) ---
 
     @Test
-    void analyzeChanges_filteredResourcePropertyChangeAffectsChild() throws Exception {
+    void analyzeChanges_newManagedDepNotUsedByAnyModule_noChildAffected() throws Exception {
+        // Parent adds a NEW managed dep (lib-new) that no child module uses.
+        // No child should be marked as directly affected. Brand-new managed deps are
+        // excluded from changedManagedDependencyGAs (issue #131) — only modifications
+        // and removals of existing managed deps are tracked.
         Path root = setupReactorRoot();
 
-        // Parent POM with app.version=2.0 (new)
+        // Current parent POM: has lib-x (existing, bumped) and lib-new (brand new)
         String parentPomXml = """
                 <?xml version="1.0"?>
                 <project>
@@ -1020,25 +1043,37 @@ class PomChangeAnalyzerTest {
                   <version>1.0</version>
                   <packaging>pom</packaging>
                   <modules><module>module-a</module><module>module-b</module></modules>
-                  <properties>
-                    <app.version>2.0</app.version>
-                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-x</artifactId>
+                      <version>2.0</version>
+                    </dependency>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-new</artifactId>
+                      <version>1.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
                 </project>
                 """;
         writePom(root.resolve("pom.xml"), parentPomXml);
 
-        // module-a: no filtered resources
+        // module-a: uses lib-x (affected by version bump), does NOT use lib-new
         String moduleAPomXml = """
                 <?xml version="1.0"?>
                 <project>
                   <modelVersion>4.0.0</modelVersion>
                   <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
                   <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId></dependency>
+                  </dependencies>
                 </project>
                 """;
         writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
 
-        // module-b: has filtered resources
+        // module-b: does NOT use lib-x or lib-new
         String moduleBPomXml = """
                 <?xml version="1.0"?>
                 <project>
@@ -1049,25 +1084,9 @@ class PomChangeAnalyzerTest {
                 """;
         writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
 
-        // Create filtered resource file referencing ${app.version}
-        Path resourceDir = root.resolve("module-b/src/main/resources");
-        Files.createDirectories(resourceDir);
-        Files.write(
-                resourceDir.resolve("application.properties"),
-                "app.version=${app.version}\n".getBytes(StandardCharsets.UTF_8));
-
         List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
 
-        // Set up filtered resource on module-b
-        MavenProject moduleB = projects.get(2);
-        Resource resource = new Resource();
-        resource.setDirectory(root.resolve("module-b/src/main/resources").toString());
-        resource.setFiltering(true);
-        Build build = new Build();
-        build.addResource(resource);
-        moduleB.getModel().setBuild(build);
-
-        // Old parent POM had app.version=1.0
+        // Old parent POM: only had lib-x:1.0 (no lib-new)
         String oldParentPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -1077,9 +1096,13 @@ class PomChangeAnalyzerTest {
                   <version>1.0</version>
                   <packaging>pom</packaging>
                   <modules><module>module-a</module><module>module-b</module></modules>
-                  <properties>
-                    <app.version>1.0</app.version>
-                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-x</artifactId>
+                      <version>1.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
                 </project>
                 """;
 
@@ -1087,21 +1110,33 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
 
         assertTrue(
-                affected.contains(moduleB),
-                "module-b has filtered resource with ${app.version} and should be affected");
+                result.getAffectedProjects().contains(moduleA),
+                "module-a uses lib-x whose version was bumped, should be affected");
         assertFalse(
-                affected.contains(projects.get(1)), "module-a has no filtered resources and should NOT be affected");
+                result.getAffectedProjects().contains(moduleB),
+                "module-b does not use lib-x or lib-new, should NOT be affected");
+        assertTrue(
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
+                "lib-x version was bumped (modified), should be in changedManagedDependencyGAs");
+        assertFalse(
+                deriveChangedManagedDeps(result).contains("com.example:lib-new"),
+                "lib-new is brand new (not a modification), should NOT be in changedManagedDependencyGAs");
     }
 
     @Test
-    void analyzeChanges_filteredResourceWithoutPropertyRefNotAffected() throws Exception {
+    void analyzeChanges_newManagedDepUsedByOneModule_notIncludedInDownstream() throws Exception {
+        // Parent adds a NEW managed dep (lib-new) and one child uses it.
+        // The child whose effective dependency tree changes (version resolved by the new
+        // managed dep) IS affected — its build inputs change. But modules that do NOT
+        // use lib-new are unaffected (issue #131).
         Path root = setupReactorRoot();
 
-        // Parent POM with app.version=2.0
         String parentPomXml = """
                 <?xml version="1.0"?>
                 <project>
@@ -1111,9 +1146,188 @@ class PomChangeAnalyzerTest {
                   <version>1.0</version>
                   <packaging>pom</packaging>
                   <modules><module>module-a</module><module>module-b</module></modules>
-                  <properties>
-                    <app.version>2.0</app.version>
-                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-new</artifactId>
+                      <version>1.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        // module-a: uses lib-new
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>lib-new</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // module-b: does NOT use lib-new
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        // Old parent POM: no managed deps at all
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a uses lib-new and its effective dependency version changes, should be affected");
+        assertFalse(
+                result.getAffectedProjects().contains(moduleB),
+                "module-b does not use lib-new, should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_modifiedManagedDepAlwaysIncluded() throws Exception {
+        // Parent bumps version of existing managed dep lib-x. Even if no child uses it
+        // directly, it must remain in changedManagedDependencyGAs because it could affect
+        // transitive resolution.
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-x</artifactId>
+                      <version>2.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        // Neither module uses lib-x directly
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        // Old parent POM: had lib-x:1.0 (version bump, NOT new)
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-x</artifactId>
+                      <version>1.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
+                "Modified (version-bumped) managed dep must always be in changedManagedDependencyGAs, even if unused");
+    }
+
+    @Test
+    void analyzeChanges_newManagedDepOnlyInParent_allNewUnused_noChildAffected() throws Exception {
+        // Parent adds ONLY new managed deps (no existing deps modified). No child uses any.
+        // No children should be directly affected. Brand-new managed deps are excluded
+        // from changedManagedDependencyGAs (issue #131).
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-new1</artifactId>
+                      <version>1.0</version>
+                    </dependency>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-new2</artifactId>
+                      <version>1.0</version>
+                    </dependency>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-new3</artifactId>
+                      <version>1.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
                 </project>
                 """;
         writePom(root.resolve("pom.xml"), parentPomXml);
@@ -1138,22 +1352,9 @@ class PomChangeAnalyzerTest {
                 """;
         writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
 
-        // Create filtered resource that does NOT reference ${app.version}
-        Path resourceDir = root.resolve("module-b/src/main/resources");
-        Files.createDirectories(resourceDir);
-        Files.write(resourceDir.resolve("config.properties"), "key=value\n".getBytes(StandardCharsets.UTF_8));
-
         List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
 
-        // Set up filtered resource on module-b
-        MavenProject moduleB = projects.get(2);
-        Resource resource = new Resource();
-        resource.setDirectory(root.resolve("module-b/src/main/resources").toString());
-        resource.setFiltering(true);
-        Build build = new Build();
-        build.addResource(resource);
-        moduleB.getModel().setBuild(build);
-
+        // Old parent POM: no managed deps
         String oldParentPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -1163,9 +1364,6 @@ class PomChangeAnalyzerTest {
                   <version>1.0</version>
                   <packaging>pom</packaging>
                   <modules><module>module-a</module><module>module-b</module></modules>
-                  <properties>
-                    <app.version>1.0</app.version>
-                  </properties>
                 </project>
                 """;
 
@@ -1173,233 +1371,20 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
 
         assertFalse(
-                affected.contains(moduleB),
-                "module-b's filtered resources don't reference ${app.version} - should NOT be affected");
-    }
-
-    @Test
-    void analyzeChanges_filteredResourceBinaryFileSkipped() throws Exception {
-        Path root = setupReactorRoot();
-
-        String parentPomXml = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <groupId>com.example</groupId>
-                  <artifactId>parent</artifactId>
-                  <version>1.0</version>
-                  <packaging>pom</packaging>
-                  <modules><module>module-a</module></modules>
-                  <properties>
-                    <app.version>2.0</app.version>
-                  </properties>
-                </project>
-                """;
-        writePom(root.resolve("pom.xml"), parentPomXml);
-
-        String moduleAPomXml = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
-                  <artifactId>module-a</artifactId>
-                </project>
-                """;
-        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
-
-        // Create a binary file (contains NUL bytes) in filtered resources
-        Path resourceDir = root.resolve("module-a/src/main/resources");
-        Files.createDirectories(resourceDir);
-        byte[] binaryContent = new byte[100];
-        binaryContent[50] = 0; // NUL byte makes it binary
-        Files.write(resourceDir.resolve("image.png"), binaryContent);
-
-        MavenProject parent = createProject(
-                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
-        parent.setOriginalModel(parseModel(parentPomXml));
-        parent.getModel().setPackaging("pom");
-
-        MavenProject moduleA = createProject(
-                "com.example",
-                "module-a",
-                "1.0",
-                root.resolve("module-a/pom.xml").toFile());
-        moduleA.setOriginalModel(parseModel(moduleAPomXml));
-        moduleA.setParent(parent);
-        Resource resource = new Resource();
-        resource.setDirectory(resourceDir.toString());
-        resource.setFiltering(true);
-        Build build = new Build();
-        build.addResource(resource);
-        moduleA.getModel().setBuild(build);
-
-        List<MavenProject> projects = List.of(parent, moduleA);
-
-        String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
-
-        Set<MavenProject> affected = analyzer.analyzeChanges(
-                        Set.of("pom.xml"),
-                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
-                        projects,
-                        root)
-                .getAffectedProjects();
-
+                result.getAffectedProjects().contains(moduleA),
+                "module-a does not use any new managed dep, should NOT be affected");
         assertFalse(
-                affected.contains(moduleA),
-                "module-a has only binary files in filtered resources and should NOT be affected");
-    }
-
-    @Test
-    void analyzeChanges_filteredResourceOversizedTextFileMarkedAsAffected() throws Exception {
-        Path root = setupReactorRoot();
-
-        String parentPomXml = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <groupId>com.example</groupId>
-                  <artifactId>parent</artifactId>
-                  <version>1.0</version>
-                  <packaging>pom</packaging>
-                  <modules><module>module-a</module></modules>
-                  <properties>
-                    <app.version>2.0</app.version>
-                  </properties>
-                </project>
-                """;
-        writePom(root.resolve("pom.xml"), parentPomXml);
-
-        String moduleAPomXml = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
-                  <artifactId>module-a</artifactId>
-                </project>
-                """;
-        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
-
-        // Create a large text file (no NUL bytes) exceeding a small custom limit
-        Path resourceDir = root.resolve("module-a/src/main/resources");
-        Files.createDirectories(resourceDir);
-        byte[] largeText = new byte[2000];
-        java.util.Arrays.fill(largeText, (byte) 'x');
-        Files.write(resourceDir.resolve("large.txt"), largeText);
-
-        MavenProject parent = createProject(
-                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
-        parent.setOriginalModel(parseModel(parentPomXml));
-        parent.getModel().setPackaging("pom");
-
-        MavenProject moduleA = createProject(
-                "com.example",
-                "module-a",
-                "1.0",
-                root.resolve("module-a/pom.xml").toFile());
-        moduleA.setOriginalModel(parseModel(moduleAPomXml));
-        moduleA.setParent(parent);
-        Resource resource = new Resource();
-        resource.setDirectory(resourceDir.toString());
-        resource.setFiltering(true);
-        Build build = new Build();
-        build.addResource(resource);
-        moduleA.getModel().setBuild(build);
-
-        List<MavenProject> projects = List.of(parent, moduleA);
-
-        String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
-
-        // Use a custom small limit (1000 bytes) so the 2000-byte file exceeds it
-        Set<MavenProject> affected = analyzer.analyzeChanges(
-                        Set.of("pom.xml"),
-                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
-                        projects,
-                        root,
-                        1000L)
-                .getAffectedProjects();
-
+                result.getAffectedProjects().contains(moduleB),
+                "module-b does not use any new managed dep, should NOT be affected");
         assertTrue(
-                affected.contains(moduleA),
-                "module-a has oversized text file in filtered resources and should be conservatively affected");
-    }
-
-    @Test
-    void analyzeChanges_filteredResourceOversizedBinaryFileSkipped() throws Exception {
-        Path root = setupReactorRoot();
-
-        String parentPomXml = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <groupId>com.example</groupId>
-                  <artifactId>parent</artifactId>
-                  <version>1.0</version>
-                  <packaging>pom</packaging>
-                  <modules><module>module-a</module></modules>
-                  <properties>
-                    <app.version>2.0</app.version>
-                  </properties>
-                </project>
-                """;
-        writePom(root.resolve("pom.xml"), parentPomXml);
-
-        String moduleAPomXml = """
-                <?xml version="1.0"?>
-                <project>
-                  <modelVersion>4.0.0</modelVersion>
-                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
-                  <artifactId>module-a</artifactId>
-                </project>
-                """;
-        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
-
-        // Create a large binary file (contains NUL bytes AND exceeds the size limit)
-        // Binary detection should run BEFORE size check, so it should be skipped
-        Path resourceDir = root.resolve("module-a/src/main/resources");
-        Files.createDirectories(resourceDir);
-        byte[] largeBinary = new byte[2000];
-        largeBinary[10] = 0; // NUL byte makes it binary
-        Files.write(resourceDir.resolve("font.woff2"), largeBinary);
-
-        MavenProject parent = createProject(
-                "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
-        parent.setOriginalModel(parseModel(parentPomXml));
-        parent.getModel().setPackaging("pom");
-
-        MavenProject moduleA = createProject(
-                "com.example",
-                "module-a",
-                "1.0",
-                root.resolve("module-a/pom.xml").toFile());
-        moduleA.setOriginalModel(parseModel(moduleAPomXml));
-        moduleA.setParent(parent);
-        Resource resource = new Resource();
-        resource.setDirectory(resourceDir.toString());
-        resource.setFiltering(true);
-        Build build = new Build();
-        build.addResource(resource);
-        moduleA.getModel().setBuild(build);
-
-        List<MavenProject> projects = List.of(parent, moduleA);
-
-        String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
-
-        // Use a small limit so the file would exceed it IF it weren't binary
-        Set<MavenProject> affected = analyzer.analyzeChanges(
-                        Set.of("pom.xml"),
-                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
-                        projects,
-                        root,
-                        1000L)
-                .getAffectedProjects();
-
-        assertFalse(
-                affected.contains(moduleA),
-                "module-a has only a large binary file - binary check should bail before size limit kicks in");
+                deriveChangedManagedDeps(result).isEmpty(),
+                "All managed deps are brand new (not modifications), changedManagedDependencyGAs should be empty");
     }
 
     // --- New POM and edge case tests ---
@@ -1415,7 +1400,7 @@ class PomChangeAnalyzerTest {
         // Intentionally no entry for "pom.xml" (null = new file)
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.contains(projects.get(0)), "Parent should be affected");
         assertTrue(affected.contains(projects.get(1)), "module-a should be affected (new parent POM)");
@@ -1491,7 +1476,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         // Parent should be self-affected because the removed profile had direct dependencies
         assertTrue(
@@ -1557,7 +1542,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -1574,7 +1559,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.contains(projects.get(1)), "module-a should be affected");
         assertFalse(affected.contains(projects.get(2)), "module-b should NOT be affected");
@@ -1629,7 +1614,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -1684,7 +1669,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -1737,7 +1722,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -1754,7 +1739,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.isEmpty(), "Unmatched POM path should not affect any module");
     }
@@ -1769,7 +1754,7 @@ class PomChangeAnalyzerTest {
         changedPoms.add("also-missing/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertEquals(
                 List.of("nonexistent/pom.xml", "also-missing/pom.xml"),
@@ -1786,7 +1771,7 @@ class PomChangeAnalyzerTest {
         Set<String> changedPoms = Set.of("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(result.getUnmatchedPomPaths().isEmpty(), "All changed POMs matched a reactor project");
     }
@@ -1822,7 +1807,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject moduleA = projects.get(2);
         MavenProject moduleB = projects.get(3);
@@ -1833,7 +1818,7 @@ class PomChangeAnalyzerTest {
         assertFalse(
                 result.getAffectedProjects().contains(moduleB), "module-b does not import BOM, should NOT be affected");
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
                 "Changed managed dep GAs should include lib-x");
     }
 
@@ -1865,7 +1850,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(result.getAffectedProjects().isEmpty(), "Cosmetic BOM change should not affect any module");
     }
@@ -1907,14 +1892,14 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject moduleA = projects.get(2);
         assertTrue(
                 result.getAffectedProjects().contains(moduleA),
                 "module-a uses managed dep lib-x whose version comes from changed property in BOM");
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
                 "Changed managed dep GAs should include lib-x (via property indirection in BOM)");
     }
 
@@ -1999,6 +1984,7 @@ class PomChangeAnalyzerTest {
         MavenProject parent = createProject(
                 "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
         parent.setOriginalModel(parseModel(parentPomXml));
+        setEffectiveModel(parent, parentPomXml);
         parent.getModel().setPackaging("pom");
 
         MavenProject bom = createProject(
@@ -2006,6 +1992,7 @@ class PomChangeAnalyzerTest {
         bom.setOriginalModel(parseModel(bomPomXml));
         bom.getModel().setPackaging("pom");
         bom.setParent(parent);
+        setEffectiveModel(bom, bomPomXml);
 
         MavenProject moduleA = createProject(
                 "com.example",
@@ -2014,6 +2001,7 @@ class PomChangeAnalyzerTest {
                 root.resolve("module-a/pom.xml").toFile());
         moduleA.setOriginalModel(parseModel(moduleAPomXml));
         moduleA.setParent(parent);
+        setEffectiveModel(moduleA, moduleAPomXml);
 
         MavenProject moduleB = createProject(
                 "com.example",
@@ -2022,6 +2010,7 @@ class PomChangeAnalyzerTest {
                 root.resolve("module-b/pom.xml").toFile());
         moduleB.setOriginalModel(parseModel(moduleBPomXml));
         moduleB.setParent(parent);
+        setEffectiveModel(moduleB, moduleBPomXml);
 
         List<MavenProject> projects = new ArrayList<>();
         projects.add(parent);
@@ -2036,7 +2025,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         // BOM is directly affected because it references ${lib.version} in its managed dep version
         assertTrue(
@@ -2053,7 +2042,7 @@ class PomChangeAnalyzerTest {
         // computeTransitivelyAffected (in ScalpelLifecycleParticipant) to subsequently find
         // consumers of lib-x (like module-a) via Maven dependency resolution.
         assertTrue(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
+                deriveChangedManagedDeps(result).contains("com.example:lib-x"),
                 "Changed managed dep GAs should include lib-x (property defined in root, consumed in BOM managed dep)");
 
         assertTrue(
@@ -2112,6 +2101,7 @@ class PomChangeAnalyzerTest {
         MavenProject parent = createProject(
                 "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
         parent.setOriginalModel(parseModel(parentPomXml));
+        setEffectiveModel(parent, parentPomXml);
         parent.getModel().setPackaging("pom");
 
         MavenProject bom = createProject(
@@ -2119,6 +2109,7 @@ class PomChangeAnalyzerTest {
         bom.setOriginalModel(parseModel(bomPomXml));
         bom.getModel().setPackaging("pom");
         bom.setParent(parent);
+        setEffectiveModel(bom, bomPomXml);
 
         MavenProject moduleA = createProject(
                 "com.example",
@@ -2127,20 +2118,21 @@ class PomChangeAnalyzerTest {
                 root.resolve("module-a/pom.xml").toFile());
         moduleA.setOriginalModel(parseModel(moduleAPomXml));
         moduleA.setParent(parent);
+        setEffectiveModel(moduleA, moduleAPomXml);
 
         List<MavenProject> projects = List.of(parent, bom, moduleA);
 
         String oldParentPom = parentPomXml.replace(
                 "<compiler.version>3.12.0</compiler.version>", "<compiler.version>3.11.0</compiler.version>");
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(
+        PomChangeAnalyzer.Result result = analyzeChanges(
                 Set.of("pom.xml"), Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)), projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(bom),
                 "BOM references ${compiler.version} in managed plugin and should be affected");
         assertTrue(
-                result.getChangedManagedPluginGAs().contains("org.apache.maven.plugins:maven-compiler-plugin"),
+                deriveChangedManagedPlugins(result).contains("org.apache.maven.plugins:maven-compiler-plugin"),
                 "Changed managed plugin GAs should include maven-compiler-plugin"
                         + " (property in root, consumed in BOM managed plugin)");
     }
@@ -2155,7 +2147,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         // No entry for bom/pom.xml = new file
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject bom = projects.get(1);
         MavenProject moduleA = projects.get(2);
@@ -2325,7 +2317,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(moduleB),
@@ -2419,9 +2411,18 @@ class PomChangeAnalyzerTest {
                 """;
         writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
 
+        // Register reactor POMs for parent and BOM resolution
+        reactorPomFiles.put("com.example:parent:1.0", root.resolve("pom.xml").toFile());
+        reactorPomFiles.put("com.example:bom:1.0", root.resolve("bom/pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:module-a:1.0", root.resolve("module-a/pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:module-b:1.0", root.resolve("module-b/pom.xml").toFile());
+
         MavenProject parent = createProject(
                 "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
         parent.setOriginalModel(parseModel(parentPomXml));
+        setEffectiveModel(parent, parentPomXml);
         parent.getModel().setPackaging("pom");
 
         MavenProject bom = createProject(
@@ -2429,6 +2430,7 @@ class PomChangeAnalyzerTest {
         bom.setOriginalModel(parseModel(bomPomXml));
         bom.getModel().setPackaging("pom");
         bom.setParent(parent);
+        setEffectiveModel(bom, bomPomXml);
 
         MavenProject moduleA = createProject(
                 "com.example",
@@ -2437,6 +2439,7 @@ class PomChangeAnalyzerTest {
                 root.resolve("module-a/pom.xml").toFile());
         moduleA.setOriginalModel(parseModel(moduleAPomXml));
         moduleA.setParent(parent);
+        setEffectiveModel(moduleA, moduleAPomXml);
 
         MavenProject moduleB = createProject(
                 "com.example",
@@ -2445,6 +2448,7 @@ class PomChangeAnalyzerTest {
                 root.resolve("module-b/pom.xml").toFile());
         moduleB.setOriginalModel(parseModel(moduleBPomXml));
         moduleB.setParent(parent);
+        setEffectiveModel(moduleB, moduleBPomXml);
 
         List<MavenProject> projects = new ArrayList<>();
         projects.add(parent);
@@ -2710,10 +2714,19 @@ class PomChangeAnalyzerTest {
 
     private List<MavenProject> buildProjectList(
             Path root, String parentPomXml, String moduleAPomXml, String moduleBPomXml) {
+        // Register reactor POMs so the mock RepositorySystem and ReactorModelResolver
+        // can resolve parent POMs and BOM imports during effective model building.
+        reactorPomFiles.put("com.example:parent:1.0", root.resolve("pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:module-a:1.0", root.resolve("module-a/pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:module-b:1.0", root.resolve("module-b/pom.xml").toFile());
+
         MavenProject parent = createProject(
                 "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
         parent.setOriginalModel(parseModel(parentPomXml));
         parent.getModel().setPackaging("pom");
+        setEffectiveModel(parent, parentPomXml);
 
         MavenProject moduleA = createProject(
                 "com.example",
@@ -2722,6 +2735,7 @@ class PomChangeAnalyzerTest {
                 root.resolve("module-a/pom.xml").toFile());
         moduleA.setOriginalModel(parseModel(moduleAPomXml));
         moduleA.setParent(parent);
+        setEffectiveModel(moduleA, moduleAPomXml);
 
         MavenProject moduleB = createProject(
                 "com.example",
@@ -2730,12 +2744,57 @@ class PomChangeAnalyzerTest {
                 root.resolve("module-b/pom.xml").toFile());
         moduleB.setOriginalModel(parseModel(moduleBPomXml));
         moduleB.setParent(parent);
+        setEffectiveModel(moduleB, moduleBPomXml);
 
         List<MavenProject> projects = new ArrayList<>();
         projects.add(parent);
         projects.add(moduleA);
         projects.add(moduleB);
         return projects;
+    }
+
+    /**
+     * Set the effective model on a MavenProject using Maven's ModelBuilder with
+     * {@code processPlugins=true} to match production behavior. The ReactorModelResolver
+     * resolves parents and BOM imports from the reactor POM files (populated by test helpers),
+     * so the effective model includes parent inheritance, BOM import resolution, lifecycle
+     * default plugins, and pluginManagement merging — all symmetrical with what
+     * {@code buildEffectiveModels} produces for old models.
+     */
+    private void setEffectiveModel(MavenProject project, String pomXml) {
+        Model effective = null;
+        try {
+            org.apache.maven.model.building.ModelBuilder modelBuilder =
+                    new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance();
+            DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
+            request.setPomFile(project.getFile());
+            request.setProcessPlugins(true);
+            request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
+            request.setModelResolver(new ReactorModelResolver(reactorPomFiles));
+
+            // Activate the same profiles as the project's build to match production behavior
+            if (project.getActiveProfiles() != null
+                    && !project.getActiveProfiles().isEmpty()) {
+                List<String> activeIds = new ArrayList<>();
+                for (Profile p : project.getActiveProfiles()) {
+                    activeIds.add(p.getId());
+                }
+                request.setActiveProfileIds(activeIds);
+            }
+
+            effective = modelBuilder.build(request).getEffectiveModel();
+        } catch (ModelBuildingException e) {
+            if (e.getResult() != null && e.getResult().getEffectiveModel() != null) {
+                effective = e.getResult().getEffectiveModel();
+            }
+        }
+
+        if (effective == null) {
+            effective = parseModel(pomXml);
+        }
+
+        effective.setPomFile(project.getFile());
+        project.setModel(effective);
     }
 
     private MavenProject createProject(String groupId, String artifactId, String version, File pomFile) {
@@ -2767,67 +2826,46 @@ class PomChangeAnalyzerTest {
         return Files.readAllBytes(file.toPath());
     }
 
-    private Model modelWithManagedDep(String groupId, String artifactId, String version) {
-        Model model = new Model();
-        DependencyManagement dm = new DependencyManagement();
-        Dependency dep = new Dependency();
-        dep.setGroupId(groupId);
-        dep.setArtifactId(artifactId);
-        dep.setVersion(version);
-        dm.addDependency(dep);
-        model.setDependencyManagement(dm);
-        return model;
-    }
+    /**
+     * ModelResolver that resolves parents and BOM imports from the test reactor.
+     * Maps GAV coordinates to POM files written by test helpers.
+     */
+    private static class ReactorModelResolver implements ModelResolver {
+        private final Map<String, File> reactorPoms;
 
-    private Model modelWithManagedPlugin(String groupId, String artifactId, String version) {
-        Model model = new Model();
-        Build build = new Build();
-        PluginManagement pm = new PluginManagement();
-        Plugin plugin = new Plugin();
-        plugin.setGroupId(groupId);
-        plugin.setArtifactId(artifactId);
-        plugin.setVersion(version);
-        pm.addPlugin(plugin);
-        build.setPluginManagement(pm);
-        model.setBuild(build);
-        return model;
-    }
+        ReactorModelResolver(Map<String, File> reactorPoms) {
+            this.reactorPoms = reactorPoms;
+        }
 
-    private Model modelWithManagedPluginConfig(String groupId, String artifactId, String version, String sourceValue) {
-        Model model = new Model();
-        Build build = new Build();
-        PluginManagement pm = new PluginManagement();
-        Plugin plugin = new Plugin();
-        plugin.setGroupId(groupId);
-        plugin.setArtifactId(artifactId);
-        plugin.setVersion(version);
-        Xpp3Dom config = new Xpp3Dom("configuration");
-        Xpp3Dom source = new Xpp3Dom("source");
-        source.setValue(sourceValue);
-        config.addChild(source);
-        plugin.setConfiguration(config);
-        pm.addPlugin(plugin);
-        build.setPluginManagement(pm);
-        model.setBuild(build);
-        return model;
-    }
+        @Override
+        public ModelSource resolveModel(String groupId, String artifactId, String version)
+                throws UnresolvableModelException {
+            File f = reactorPoms.get(groupId + ":" + artifactId + ":" + version);
+            if (f != null && f.exists()) {
+                return new FileModelSource(f);
+            }
+            throw new UnresolvableModelException("not in reactor", groupId, artifactId, version);
+        }
 
-    private Model modelWithManagedPluginExecution(
-            String groupId, String artifactId, String version, String execId, String phase) {
-        Model model = new Model();
-        Build build = new Build();
-        PluginManagement pm = new PluginManagement();
-        Plugin plugin = new Plugin();
-        plugin.setGroupId(groupId);
-        plugin.setArtifactId(artifactId);
-        plugin.setVersion(version);
-        PluginExecution execution = new PluginExecution();
-        execution.setId(execId);
-        execution.setPhase(phase);
-        plugin.addExecution(execution);
-        pm.addPlugin(plugin);
-        build.setPluginManagement(pm);
-        model.setBuild(build);
-        return model;
+        @Override
+        public ModelSource resolveModel(Parent parent) throws UnresolvableModelException {
+            return resolveModel(parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
+        }
+
+        @Override
+        public ModelSource resolveModel(Dependency dependency) throws UnresolvableModelException {
+            return resolveModel(dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
+        }
+
+        @Override
+        public void addRepository(Repository repository) throws InvalidRepositoryException {}
+
+        @Override
+        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {}
+
+        @Override
+        public ModelResolver newCopy() {
+            return this;
+        }
     }
 }
