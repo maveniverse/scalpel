@@ -426,7 +426,7 @@ class PomChangeAnalyzer {
         Set<String> changedManagedDeps =
                 diffDependencies(getManagedDependencies(oldEffectiveModel), getManagedDependencies(newEffectiveModel));
         Set<String> changedManagedPlugins =
-                diffPlugins(getManagedPlugins(oldEffectiveModel), getManagedPlugins(newEffectiveModel));
+                diffManagedPluginVersions(getManagedPlugins(oldEffectiveModel), getManagedPlugins(newEffectiveModel));
 
         ctx.allChangedManagedDepGAs.addAll(changedManagedDeps);
         ctx.allChangedManagedPluginGAs.addAll(changedManagedPlugins);
@@ -604,16 +604,6 @@ class PomChangeAnalyzer {
             ctx.allChangedManagedDepGAs.addAll(childChangedDeps);
         }
 
-        // Effective plugins: propagate changed GAs
-        Set<String> childChangedPlugins =
-                diffPlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
-        if (!childChangedPlugins.isEmpty()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Child {} propagates changed effective plugins: {}", key(child), childChangedPlugins);
-            }
-            ctx.allChangedManagedPluginGAs.addAll(childChangedPlugins);
-        }
-
         // Managed dependencies: propagate changed GAs (important for BOMs that provide
         // managed deps to other modules — version changes must be tracked for transitive checking)
         Set<String> childChangedManagedDeps =
@@ -627,7 +617,7 @@ class PomChangeAnalyzer {
 
         // Managed plugins: propagate changed GAs
         Set<String> childChangedManagedPlugins =
-                diffPlugins(getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective));
+                diffManagedPluginVersions(getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective));
         if (!childChangedManagedPlugins.isEmpty()) {
             if (logger.isDebugEnabled()) {
                 logger.debug("Child {} propagates changed managed plugins: {}", key(child), childChangedManagedPlugins);
@@ -646,9 +636,12 @@ class PomChangeAnalyzer {
      * (even with processPlugins=false), so the effective dependency comparison correctly
      * detects managed version changes that flow into the module's actual dependency tree.
      * <p>
-     * Plugin comparison uses the existing diff (modifications/removals only) because old
-     * effective models are built with processPlugins=false, preventing full plugin management
-     * resolution; managed plugin matching is handled separately in the caller as a fallback.
+     * Effective plugin comparison is NOT done here because the standalone
+     * {@code DefaultModelBuilder} used for old effective models may produce subtly
+     * different plugin configuration/execution XML compared to the live reactor model,
+     * even for identical POM content.  This would cause false positives.  Managed plugin
+     * version changes are detected by the version-only GA-matching fallback in the caller
+     * (analyzeChildren).
      */
     private boolean hasEffectiveChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
         Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
@@ -677,19 +670,12 @@ class PomChangeAnalyzer {
             return true;
         }
 
-        Set<String> changedPlugins =
-                diffPlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
-        if (!changedPlugins.isEmpty()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Child {} has changed effective plugins: {}", key(child), changedPlugins);
-            }
-            if (ctx.explain) {
-                for (String ga : changedPlugins) {
-                    addEvidence(ctx.evidence, child, "effective plugin " + ga);
-                }
-            }
-            return true;
-        }
+        // Note: effective plugin comparison is NOT done here because old effective
+        // models are built with processPlugins=false, which omits lifecycle defaults
+        // and pluginManagement-to-plugins merging.  This asymmetry would cause every
+        // module to appear as having "new" plugins (surefire, compiler, site, …).
+        // Managed plugin version changes are detected by the GA-matching fallback in
+        // the caller (analyzeChildren).
         return false;
     }
 
@@ -865,6 +851,37 @@ class PomChangeAnalyzer {
         for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
             Plugin newPlugin = newMap.get(e.getKey());
             if (newPlugin == null || !equalPlugin(e.getValue(), newPlugin)) {
+                changed.add(e.getKey());
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Compare managed plugins by GA + version only, ignoring configuration and executions.
+     * <p>
+     * Old effective models built with a standalone {@code DefaultModelBuilder} may produce
+     * subtly different Xpp3Dom configuration/execution structures compared to the live reactor
+     * model (e.g. attribute handling, default configuration merging).  These are model-building
+     * artifacts, not real POM changes.  Real plugin configuration changes are already detected
+     * by the POM file diff (the parent POM appears in the changeset).
+     * <p>
+     * Only report modifications and removals — not brand-new entries (issue #131).
+     */
+    private Set<String> diffManagedPluginVersions(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
+        Set<String> changed = new LinkedHashSet<>();
+        Map<String, String> oldVersions = new LinkedHashMap<>();
+        for (Plugin p : oldPlugins) {
+            oldVersions.put(p.getGroupId() + ":" + p.getArtifactId(), p.getVersion());
+        }
+        Map<String, String> newVersions = new LinkedHashMap<>();
+        for (Plugin p : newPlugins) {
+            newVersions.put(p.getGroupId() + ":" + p.getArtifactId(), p.getVersion());
+        }
+
+        for (Map.Entry<String, String> e : oldVersions.entrySet()) {
+            String newVersion = newVersions.get(e.getKey());
+            if (newVersion == null || !Objects.equals(e.getValue(), newVersion)) {
                 changed.add(e.getKey());
             }
         }
@@ -1262,9 +1279,11 @@ class PomChangeAnalyzer {
             request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
 
             // Resolve external parents and BOM imports from the local repository cache.
-            // Plugin processing stays disabled: lifecycle defaults and plugin management
-            // injection depend on reactor state that the temp-dir model lacks, and would
-            // create false diffs against the live model from project.getModel().
+            // processPlugins=true so lifecycle defaults and pluginManagement-to-plugins
+            // merging produce a model comparable to the live reactor's project.getModel().
+            // Any remaining config/execution differences between standalone and reactor
+            // model builders are handled by using version-only comparison for managed plugins
+            // (see diffManagedPluginVersions).
             request.setModelResolver(new ProjectModelResolver(
                     resolutionCtx.repoSession(),
                     null, // no request trace needed
@@ -1273,7 +1292,7 @@ class PomChangeAnalyzer {
                     resolutionCtx.remoteRepositories() != null ? resolutionCtx.remoteRepositories() : List.of(),
                     ProjectBuildingRequest.RepositoryMerging.POM_DOMINANT,
                     null)); // no reactor model pool — we use temp dir files
-            request.setProcessPlugins(false);
+            request.setProcessPlugins(true);
 
             // Pass system and user properties so interpolation and
             // property-activated profiles work correctly
