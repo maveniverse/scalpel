@@ -115,13 +115,22 @@ class ShallowCloneTest {
                     "setDepth(1) clone against a local path should produce .git/shallow");
             assertTrue(new GitChangeDetector().isShallow(repository));
             // the pre-clone history is genuinely absent: HEAD~1 cannot be resolved, so a
-            // merge base reaching past the shallow boundary comes back null. Note the second
-            // assertion below exercises the unresolvable-base guard in findMergeBase (the
-            // baseId == null early return), not isShallow itself.
+            // merge base reaching past the shallow boundary comes back null. The findMergeBase
+            // call below takes the unresolvable-base early return (baseId == null), and on a
+            // shallow repository that path must still surface the actionable remediation -
+            // not only the generic "Cannot resolve base branch" warning.
             assertNull(repository.resolve("HEAD~1"), "HEAD~1 should not exist in a depth-1 clone");
-            assertNull(
+            String logged = captureErr(() -> assertNull(
                     new GitChangeDetector().findMergeBase(repository, "HEAD~1", "HEAD"),
-                    "merge base with pre-clone history should not be resolvable on a depth-1 clone");
+                    "merge base with pre-clone history should not be resolvable on a depth-1 clone"));
+            assertTrue(
+                    logged.contains("Repository is shallow"),
+                    "unresolved revision on a shallow repo should name the shallow cause, got: " + logged);
+            assertTrue(
+                    logged.contains("fetch-depth: 0") || logged.contains("--unshallow"),
+                    "unresolved revision on a shallow repo should name the fix (fetch-depth: 0 /"
+                            + " --unshallow), got: "
+                            + logged);
         }
     }
 

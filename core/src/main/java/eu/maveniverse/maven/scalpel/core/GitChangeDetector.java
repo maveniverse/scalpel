@@ -65,11 +65,13 @@ public class GitChangeDetector {
     public ObjectId findMergeBase(Repository repository, String baseBranch, String head) throws IOException {
         ObjectId baseId = repository.resolve(baseBranch);
         if (baseId == null) {
+            warnIfShallow(repository, baseBranch, head);
             logger.warn("Cannot resolve base branch: {}", baseBranch);
             return null;
         }
         ObjectId headId = repository.resolve(head);
         if (headId == null) {
+            warnIfShallow(repository, baseBranch, head);
             logger.warn("Cannot resolve head: {}", head);
             return null;
         }
@@ -81,14 +83,7 @@ public class GitChangeDetector {
             RevCommit mergeBase = revWalk.next();
             if (mergeBase == null) {
                 logger.warn("No merge base found between {} and {}", baseBranch, head);
-                if (isShallow(repository)) {
-                    logger.warn(
-                            "Repository is shallow (depth-limited clone/fetch, e.g. actions/checkout with fetch-depth: 1);"
-                                    + " the connecting history between {} and {} may be missing. Fix: use fetch-depth: 0"
-                                    + " in CI, or run 'git fetch --unshallow' before the build",
-                            baseBranch,
-                            head);
-                }
+                warnIfShallow(repository, baseBranch, head);
                 return null;
             }
             logger.debug("Merge base between {} and {}: {}", baseBranch, head, mergeBase.getName());
@@ -106,6 +101,22 @@ public class GitChangeDetector {
             logger.warn("Cannot compute merge base between {} and {}: {}", baseBranch, head, e.getMessage());
             logger.debug("Merge base computation error details", e);
             return null;
+        }
+    }
+
+    /**
+     * Emits the actionable remediation when the repository is shallow: the commits needed to relate
+     * {@code baseBranch} and {@code head} may sit beyond the depth-limited boundary, so an
+     * unresolved revision or a missing merge base is not a real topology problem but a clone artifact.
+     */
+    private void warnIfShallow(Repository repository, String baseBranch, String head) {
+        if (isShallow(repository)) {
+            logger.warn(
+                    "Repository is shallow (depth-limited clone/fetch, e.g. actions/checkout with fetch-depth: 1);"
+                            + " the connecting history between {} and {} may be missing. Fix: use fetch-depth: 0"
+                            + " in CI, or run 'git fetch --unshallow' before the build",
+                    baseBranch,
+                    head);
         }
     }
 
