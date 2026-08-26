@@ -17,20 +17,18 @@ on:
       - '[0-9]*.[0-9]*.[0-9]*'
 
 permissions:
-  contents: read
+  contents: write
+  issues: write
 
 jobs:
   release:
     name: Release to Maven Central
-    permissions:
-      contents: write
-      issues: write
     runs-on: ubuntu-latest
     if: github.ref_type == 'tag'
     steps:
 
       - name: Checkout ${{ github.ref_name }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           ref: ${{ github.ref }}
@@ -47,14 +45,14 @@ jobs:
           echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Setup Java
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
         with:
           distribution: temurin
           java-version: 21
           cache: maven
 
       - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v7
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
         with:
           gpg_private_key: ${{ secrets.GPG_SIGNING_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
@@ -73,10 +71,11 @@ jobs:
       - name: Post release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
           gh extension install valeriobelli/gh-milestone
-          version=${{ steps.version.outputs.version }}
+          version="$VERSION"
           echo "Trying to find milestone $version"
           milestone=$(gh milestone list --json id,title,state  --jq "map_values(select(.title == \"${version}\" and .state == \"OPEN\")).[].number")
           if [ ! -z "$milestone" ]; then
@@ -105,12 +104,5 @@ jobs:
           fi
 
           name="Scalpel"
-          # If release-drafter already created a draft, publish it with the tag;
-          # otherwise fall back to creating a new release from the tag annotation.
-          if gh release view $version > /dev/null 2>&1; then
-            echo "Publishing existing draft release \"$name $version\""
-            gh release edit $version --draft=false --verify-tag --title "$name $version"
-          else
-            echo "Creating release \"$name $version\" from tag"
-            gh release create $version --verify-tag --notes-from-tag --title "$name $version"
-          fi
+          echo "Creating release \"$name $version\" from tag"
+          gh release create $version --verify-tag --notes-from-tag --title "$name $version" || echo "Release already exists, skipping creation"
