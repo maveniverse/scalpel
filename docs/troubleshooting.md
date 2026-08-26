@@ -205,8 +205,9 @@ Three recurring shapes:
    not a module (`docs/guide.md`, `.github/workflows/ci.yml`) maps to the root aggregator
    module, marks it `DIRECT` (`SOURCE_CHANGE`), and cascades every reactor module as
    `DOWNSTREAM`. Only `.mvn/**` is exempted from this mapping (those files go through the
-   full-build trigger instead). Fixes: `scalpel.excludePaths` or `scalpel.disableTriggers` for
-   the directories that should never affect the build.
+   full-build trigger instead). Fixes: `scalpel.excludePaths` for the files that should not
+   count as changes (`scalpel.disableTriggers` also stops the cascade, but by disabling Scalpel
+   entirely for the whole build, which is heavier than excluding the paths).
 
 Run with `-Dscalpel.explain=true` to see, per module, the specific file or relationship that
 put it in the build set (`Scalpel explain: BUILD com.example:module-b because: ...`).
