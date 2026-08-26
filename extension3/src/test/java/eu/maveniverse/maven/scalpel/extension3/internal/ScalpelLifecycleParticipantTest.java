@@ -43,15 +43,16 @@ import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Parent;
 import org.apache.maven.model.Plugin;
+import org.apache.maven.model.Profile;
 import org.apache.maven.model.Repository;
 import org.apache.maven.model.building.DefaultModelBuilderFactory;
 import org.apache.maven.model.building.DefaultModelBuildingRequest;
+import org.apache.maven.model.building.FileModelSource;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.model.building.ModelSource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
 import org.apache.maven.model.resolution.InvalidRepositoryException;
-import org.apache.maven.model.resolution.ModelResolver;
 import org.apache.maven.model.resolution.UnresolvableModelException;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
 import org.apache.maven.project.DependencyResolutionException;
@@ -78,15 +79,50 @@ class ScalpelLifecycleParticipantTest {
     private ProjectDependenciesResolver dependenciesResolver;
     private ScalpelLifecycleParticipant participant;
 
+    /**
+     * Maps GAV coordinates ("groupId:artifactId:version") to POM files available in the
+     * test reactor. Populated by {@link #createProject} so that both the mock RepositorySystem
+     * (for old effective models) and the ReactorModelResolver (for new effective models set
+     * by {@link #setEffectiveModel}) can resolve parent POMs and BOM imports.
+     */
+    private final Map<String, File> reactorPomFiles = new HashMap<>();
+
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
+        reactorPomFiles.clear();
         scalpelCore = mock(ScalpelCore.class);
         dependenciesResolver = mock(ProjectDependenciesResolver.class);
+        // Configure mock RepositorySystem to resolve POM artifacts from the test reactor.
+        // When a GAV matches a reactor project (registered via reactorPomFiles), the mock
+        // returns the POM file. This allows buildEffectiveModels to resolve parent POMs
+        // and BOM imports in old effective models, matching production behavior.
+        RepositorySystem repositorySystem = mock(RepositorySystem.class);
+        when(repositorySystem.resolveArtifact(any(), any(org.eclipse.aether.resolution.ArtifactRequest.class)))
+                .thenAnswer(invocation -> {
+                    org.eclipse.aether.resolution.ArtifactRequest request = invocation.getArgument(1);
+                    org.eclipse.aether.artifact.Artifact artifact = request.getArtifact();
+                    String key = artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getVersion();
+                    File pomFile = reactorPomFiles.get(key);
+                    if (pomFile != null && pomFile.exists()) {
+                        org.eclipse.aether.resolution.ArtifactResult result =
+                                new org.eclipse.aether.resolution.ArtifactResult(request);
+                        result.setArtifact(new DefaultArtifact(
+                                        artifact.getGroupId(),
+                                        artifact.getArtifactId(),
+                                        artifact.getClassifier(),
+                                        artifact.getExtension(),
+                                        artifact.getVersion())
+                                .setFile(pomFile));
+                        return result;
+                    }
+                    throw new org.eclipse.aether.resolution.ArtifactResolutionException(
+                            List.of(new org.eclipse.aether.resolution.ArtifactResult(request)), "not in test reactor");
+                });
         participant = new ScalpelLifecycleParticipant(
                 scalpelCore,
                 new ModuleMapper(),
                 new PomChangeAnalyzer(
-                        mock(RepositorySystem.class),
+                        repositorySystem,
                         mock(RemoteRepositoryManager.class),
                         new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance()),
                 new ReactorTrimmer(),
@@ -3947,26 +3983,39 @@ class ScalpelLifecycleParticipantTest {
         MavenProject project = new MavenProject(model);
         project.setFile(pomFile);
         project.setOriginalModel(parseModel(pomXml));
-        // Set effective model from POM XML so that effective model comparison in
-        // PomChangeAnalyzer works correctly. In tests, POM XML has hardcoded values,
-        // so the parsed model serves as the effective model.
+        // Register in reactor so parent and BOM resolution works
+        reactorPomFiles.put(groupId + ":" + artifactId + ":" + version, pomFile);
+        // Set effective model using ModelBuilder with processPlugins=true and
+        // reactor-aware resolver, matching production behavior.
         setEffectiveModel(project, pomXml);
         return project;
     }
 
     /**
-     * Set the effective model on a MavenProject using Maven's ModelBuilder to properly
-     * interpolate property references (e.g., {@code ${project.version}}, {@code ${lib.version}}).
-     * Falls back to raw XML parsing when ModelBuilder cannot build the model.
+     * Set the effective model on a MavenProject using Maven's ModelBuilder with
+     * {@code processPlugins=true} to match production behavior. The ReactorModelResolver
+     * resolves parents and BOM imports from the reactor POM files (populated by
+     * {@link #createProject}), so the effective model includes parent inheritance,
+     * BOM import resolution, lifecycle default plugins, and pluginManagement merging.
      */
     private void setEffectiveModel(MavenProject project, String pomXml) {
         try {
             org.apache.maven.model.building.ModelBuilder modelBuilder = new DefaultModelBuilderFactory().newInstance();
             DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
             request.setPomFile(project.getFile());
-            request.setProcessPlugins(false);
+            request.setProcessPlugins(true);
             request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
-            request.setModelResolver(new NoOpModelResolver());
+            request.setModelResolver(new ReactorModelResolver(reactorPomFiles));
+
+            // Activate the same profiles as the project's build
+            if (project.getActiveProfiles() != null
+                    && !project.getActiveProfiles().isEmpty()) {
+                List<String> activeIds = new ArrayList<>();
+                for (Profile p : project.getActiveProfiles()) {
+                    activeIds.add(p.getId());
+                }
+                request.setActiveProfileIds(activeIds);
+            }
 
             Model effective = modelBuilder.build(request).getEffectiveModel();
             effective.setPomFile(project.getFile());
@@ -3994,37 +4043,44 @@ class ScalpelLifecycleParticipantTest {
         }
     }
 
-    private static class NoOpModelResolver implements ModelResolver {
+    /**
+     * ModelResolver that resolves parents and BOM imports from the test reactor.
+     */
+    private static class ReactorModelResolver implements org.apache.maven.model.resolution.ModelResolver {
+        private final Map<String, File> reactorPoms;
+
+        ReactorModelResolver(Map<String, File> reactorPoms) {
+            this.reactorPoms = reactorPoms;
+        }
+
         @Override
         public ModelSource resolveModel(String groupId, String artifactId, String version)
                 throws UnresolvableModelException {
-            throw new UnresolvableModelException("offline", groupId, artifactId, version);
+            File f = reactorPoms.get(groupId + ":" + artifactId + ":" + version);
+            if (f != null && f.exists()) {
+                return new FileModelSource(f);
+            }
+            throw new UnresolvableModelException("not in reactor", groupId, artifactId, version);
         }
 
         @Override
         public ModelSource resolveModel(Parent parent) throws UnresolvableModelException {
-            throw new UnresolvableModelException(
-                    "offline", parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
+            return resolveModel(parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
         }
 
         @Override
         public ModelSource resolveModel(Dependency dependency) throws UnresolvableModelException {
-            throw new UnresolvableModelException(
-                    "offline", dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
+            return resolveModel(dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
         }
 
         @Override
-        public void addRepository(Repository repository) throws InvalidRepositoryException {
-            // No-op: offline model resolution does not need repository management
-        }
+        public void addRepository(Repository repository) throws InvalidRepositoryException {}
 
         @Override
-        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {
-            // No-op: offline model resolution does not need repository management
-        }
+        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {}
 
         @Override
-        public ModelResolver newCopy() {
+        public org.apache.maven.model.resolution.ModelResolver newCopy() {
             return this;
         }
     }

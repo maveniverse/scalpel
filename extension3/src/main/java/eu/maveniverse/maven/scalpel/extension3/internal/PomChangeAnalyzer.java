@@ -37,6 +37,7 @@ import javax.inject.Named;
 import javax.inject.Singleton;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
+import org.apache.maven.model.Parent;
 import org.apache.maven.model.Plugin;
 import org.apache.maven.model.PluginExecution;
 import org.apache.maven.model.Profile;
@@ -44,10 +45,15 @@ import org.apache.maven.model.Repository;
 import org.apache.maven.model.RepositoryPolicy;
 import org.apache.maven.model.Resource;
 import org.apache.maven.model.building.DefaultModelBuildingRequest;
+import org.apache.maven.model.building.FileModelSource;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingResult;
+import org.apache.maven.model.building.ModelSource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+import org.apache.maven.model.resolution.InvalidRepositoryException;
+import org.apache.maven.model.resolution.ModelResolver;
+import org.apache.maven.model.resolution.UnresolvableModelException;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.project.ProjectModelResolver;
@@ -464,10 +470,10 @@ class PomChangeAnalyzer {
         Path absReactorRoot = ctx.reactorRoot.toAbsolutePath().normalize();
 
         // Check each dependent (child or BOM importer) for impact.
-        // Primary detection: compare effective dependencies and plugins (the resolved
-        // dependency tree, not managed dependency declarations). This catches managed
-        // dep version changes that actually affect the module's build, without false
-        // positives from managed deps the module doesn't use (issue #131).
+        // Compare effective dependencies and plugins (the resolved dependency tree and
+        // merged plugin list, not managed declarations). This catches managed version
+        // changes that actually affect the module's build, without false positives from
+        // managed deps/plugins the module doesn't use (issue #131).
         for (MavenProject child : dependentProjects) {
             if (ctx.affected.contains(child)) {
                 continue;
@@ -481,44 +487,6 @@ class PomChangeAnalyzer {
             // into the module's actual dependency tree.
             if (!childAffected) {
                 childAffected = hasEffectiveChanges(child, absReactorRoot, ctx);
-            }
-
-            // FALLBACK: GA matching for managed deps when effective models are
-            // incomplete (e.g. old model couldn't fully resolve parent/BOM hierarchy,
-            // or profile-activated managed deps weren't merged). The check only fires
-            // when effective dep comparison found nothing, providing a safety net.
-            if (!childAffected && !changedManagedDeps.isEmpty()) {
-                for (Dependency dep : child.getOriginalModel().getDependencies()) {
-                    String ga = dep.getGroupId() + ":" + dep.getArtifactId();
-                    if (changedManagedDeps.contains(ga)) {
-                        logger.debug("Child {} uses changed managed dependency {} (GA fallback)", key(child), ga);
-                        if (ctx.explain) {
-                            addEvidence(ctx.evidence, child, "managed dep " + ga);
-                        }
-                        childAffected = true;
-                        break;
-                    }
-                }
-            }
-
-            // Managed plugin GA matching (fallback for processPlugins=false).
-            // Old effective models are built with processPlugins=false to avoid
-            // false diffs from lifecycle default injection, so pluginManagement
-            // is NOT applied to plugin declarations — effective plugin comparison
-            // alone cannot detect managed plugin version changes.
-            if (!childAffected && !changedManagedPlugins.isEmpty()) {
-                Model childRawModel = child.getOriginalModel();
-                for (Plugin plugin : getPlugins(childRawModel)) {
-                    String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
-                    if (changedManagedPlugins.contains(ga)) {
-                        logger.debug("Child {} uses changed managed plugin {}", key(child), ga);
-                        if (ctx.explain) {
-                            addEvidence(ctx.evidence, child, "managed plugin " + ga);
-                        }
-                        childAffected = true;
-                        break;
-                    }
-                }
             }
 
             // Fallback: check if child POM text references any changed property.
@@ -632,20 +600,14 @@ class PomChangeAnalyzer {
 
     /**
      * Check if a child's effective dependencies or plugins changed between old and new models.
-     * Compares the resolved dependency tree (effective dependencies) rather than managed
-     * dependency declarations — a module is only affected if its actual build inputs change,
-     * not merely because an unused managed dependency was added or modified (issue #131).
+     * Compares the resolved dependency tree (effective dependencies) and the merged plugin
+     * list rather than managed declarations — a module is only affected if its actual build
+     * inputs change, not merely because an unused managed dependency was added (issue #131).
      * <p>
-     * dependencyManagement versions ARE injected into dependencies during model building
-     * (even with processPlugins=false), so the effective dependency comparison correctly
-     * detects managed version changes that flow into the module's actual dependency tree.
-     * <p>
-     * Effective plugin comparison is NOT done here because the standalone
-     * {@code DefaultModelBuilder} used for old effective models may produce subtly
-     * different plugin configuration/execution XML compared to the live reactor model,
-     * even for identical POM content.  This would cause false positives.  Managed plugin
-     * version changes are detected by the version-only GA-matching fallback in the caller
-     * (analyzeChildren).
+     * Both old and new effective models are built with {@code processPlugins=true} using the
+     * container-injected {@code ModelBuilder}, so lifecycle defaults and pluginManagement
+     * merging are applied identically to both — making the comparison symmetric for
+     * dependencies and plugins alike.
      */
     private boolean hasEffectiveChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
         Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
@@ -656,9 +618,10 @@ class PomChangeAnalyzer {
             return false;
         }
 
-        // Compare effective dependencies (the resolved dependency list, not managed deps).
-        // dependencyManagement versions are injected into <dependencies> during model
-        // building (even with processPlugins=false), so this catches managed dep version
+        boolean changed = false;
+
+        // Compare effective dependencies — dependencyManagement versions are injected
+        // into <dependencies> during model building, so this catches managed dep version
         // changes that affect the module's actual dependency tree.
         Set<String> changedDeps =
                 diffEffectiveDependencies(oldChildEffective.getDependencies(), newChildEffective.getDependencies());
@@ -671,16 +634,27 @@ class PomChangeAnalyzer {
                     addEvidence(ctx.evidence, child, "effective dep " + ga);
                 }
             }
-            return true;
+            changed = true;
         }
 
-        // Note: effective plugin comparison is NOT done here because old effective
-        // models are built with processPlugins=false, which omits lifecycle defaults
-        // and pluginManagement-to-plugins merging.  This asymmetry would cause every
-        // module to appear as having "new" plugins (surefire, compiler, site, …).
-        // Managed plugin version changes are detected by the GA-matching fallback in
-        // the caller (analyzeChildren).
-        return false;
+        // Compare effective plugins — with processPlugins=true and the injected
+        // ModelBuilder, both old and new models have lifecycle defaults injected and
+        // pluginManagement merged, so the comparison is symmetric.
+        Set<String> changedPlugins =
+                diffEffectivePlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
+        if (!changedPlugins.isEmpty()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Child {} has changed effective plugins: {}", key(child), changedPlugins);
+            }
+            if (ctx.explain) {
+                for (String ga : changedPlugins) {
+                    addEvidence(ctx.evidence, child, "effective plugin " + ga);
+                }
+            }
+            changed = true;
+        }
+
+        return changed;
     }
 
     /**
@@ -828,19 +802,10 @@ class PomChangeAnalyzer {
     }
 
     /**
-     * Returns a key that distinguishes dependencies with the same GA but different classifier/type.
+     * Diff two plugin lists reporting all changes (additions, modifications, removals).
+     * Appropriate for comparing effective plugin lists where any change indicates a build impact.
      */
-    private static String dependencyKey(Dependency d) {
-        String key = d.getGroupId() + ":" + d.getArtifactId();
-        String type = d.getType();
-        String classifier = d.getClassifier();
-        if ((type != null && !"jar".equals(type)) || classifier != null) {
-            key += ":" + (type != null ? type : "jar") + ":" + (classifier != null ? classifier : "");
-        }
-        return key;
-    }
-
-    private Set<String> diffPlugins(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
+    private Set<String> diffEffectivePlugins(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
         Set<String> changed = new LinkedHashSet<>();
         Map<String, Plugin> oldMap = new LinkedHashMap<>();
         for (Plugin p : oldPlugins) {
@@ -851,14 +816,33 @@ class PomChangeAnalyzer {
             newMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
         }
 
-        // Only report modifications and removals — not brand-new entries (issue #131).
+        // Modifications and removals
         for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
             Plugin newPlugin = newMap.get(e.getKey());
             if (newPlugin == null || !equalPlugin(e.getValue(), newPlugin)) {
                 changed.add(e.getKey());
             }
         }
+        // Additions
+        for (Map.Entry<String, Plugin> e : newMap.entrySet()) {
+            if (!oldMap.containsKey(e.getKey())) {
+                changed.add(e.getKey());
+            }
+        }
         return changed;
+    }
+
+    /**
+     * Returns a key that distinguishes dependencies with the same GA but different classifier/type.
+     */
+    private static String dependencyKey(Dependency d) {
+        String key = d.getGroupId() + ":" + d.getArtifactId();
+        String type = d.getType();
+        String classifier = d.getClassifier();
+        if ((type != null && !"jar".equals(type)) || classifier != null) {
+            key += ":" + (type != null ? type : "jar") + ":" + (classifier != null ? classifier : "");
+        }
+        return key;
     }
 
     /**
@@ -1230,6 +1214,20 @@ class PomChangeAnalyzer {
             // Uses the container-injected ModelBuilder — the same instance Maven uses for the
             // reactor build — so lifecycle bindings contributed by extensions are visible and
             // the old/new effective models are fully comparable.
+
+            // Build a GAV→file map for resolving reactor-local parents and BOM imports.
+            // This ensures import-scope BOMs and parents from non-standard relative paths
+            // resolve from the temp dir (with old POM content), not from the local repo
+            // (which has current content).
+            Map<String, java.io.File> reactorPomsByGAV = new LinkedHashMap<>();
+            for (MavenProject project : allProjects) {
+                Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
+                Path relativePom = absRoot.relativize(pomPath);
+                Path tempPomPath = tempDir.resolve(relativePom);
+                String gav = project.getGroupId() + ":" + project.getArtifactId() + ":" + project.getVersion();
+                reactorPomsByGAV.put(gav, tempPomPath.toFile());
+            }
+
             Map<String, Model> result = new LinkedHashMap<>();
 
             for (MavenProject project : allProjects) {
@@ -1238,8 +1236,8 @@ class PomChangeAnalyzer {
                 String relPath = relativePom.toString().replace('\\', '/');
                 Path tempPomFile = tempDir.resolve(relativePom);
 
-                Model model =
-                        buildSingleEffectiveModel(this.modelBuilder, tempPomFile, relPath, project, resolutionCtx);
+                Model model = buildSingleEffectiveModel(
+                        this.modelBuilder, tempPomFile, relPath, project, resolutionCtx, reactorPomsByGAV);
                 if (model != null) {
                     result.put(relPath, model);
                 }
@@ -1279,27 +1277,29 @@ class PomChangeAnalyzer {
             Path tempPomFile,
             String relPath,
             MavenProject project,
-            ModelResolutionContext resolutionCtx) {
+            ModelResolutionContext resolutionCtx,
+            Map<String, java.io.File> reactorPomsByGAV) {
         try {
             DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
             request.setPomFile(tempPomFile.toFile());
             request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
 
-            // Resolve external parents and BOM imports from the local repository cache.
+            // Resolve parents and BOM imports. The ReactorFirstModelResolver checks the
+            // reactor's temp dir first (with old POM content) before falling back to the
+            // ProjectModelResolver (local repo / remote repos). This ensures import-scope
+            // BOMs and parents at non-standard relative paths resolve from the correct
+            // (old) POM content, not from the current reactor.
             // processPlugins=true so lifecycle defaults and pluginManagement-to-plugins
             // merging produce a model comparable to the live reactor's project.getModel().
-            // The injected ModelBuilder is the same instance Maven uses for the reactor,
-            // so extension-contributed lifecycle bindings are visible.
-            // Any remaining config/execution differences are handled by version-only
-            // comparison for managed plugins (see diffManagedPluginVersions).
-            request.setModelResolver(new ProjectModelResolver(
+            ProjectModelResolver repoResolver = new ProjectModelResolver(
                     resolutionCtx.repoSession(),
                     null, // no request trace needed
                     repositorySystem,
                     remoteRepositoryManager,
                     resolutionCtx.remoteRepositories() != null ? resolutionCtx.remoteRepositories() : List.of(),
                     ProjectBuildingRequest.RepositoryMerging.POM_DOMINANT,
-                    null)); // no reactor model pool — we use temp dir files
+                    null); // no reactor model pool — we use temp dir files
+            request.setModelResolver(new ReactorFirstModelResolver(reactorPomsByGAV, repoResolver));
             request.setProcessPlugins(true);
 
             // Pass system and user properties so interpolation and
@@ -1632,6 +1632,58 @@ class PomChangeAnalyzer {
         } catch (IOException e) {
             logger.debug("Cannot read POM file for {}: {}", key(project), e.getMessage());
             return null;
+        }
+    }
+
+    /**
+     * ModelResolver that checks the reactor's temp dir for POM files before falling back
+     * to the delegate resolver (which resolves from the local/remote repository).
+     * This ensures that reactor-internal parents and BOM imports resolve from the temp dir
+     * (which contains old POM content during effective model building) rather than from
+     * the current local repository.
+     */
+    static class ReactorFirstModelResolver implements ModelResolver {
+        private final Map<String, java.io.File> reactorPomsByGAV;
+        private final ModelResolver delegate;
+
+        ReactorFirstModelResolver(Map<String, java.io.File> reactorPomsByGAV, ModelResolver delegate) {
+            this.reactorPomsByGAV = reactorPomsByGAV;
+            this.delegate = delegate;
+        }
+
+        @Override
+        public ModelSource resolveModel(String groupId, String artifactId, String version)
+                throws UnresolvableModelException {
+            java.io.File f = reactorPomsByGAV.get(groupId + ":" + artifactId + ":" + version);
+            if (f != null && f.exists()) {
+                return new FileModelSource(f);
+            }
+            return delegate.resolveModel(groupId, artifactId, version);
+        }
+
+        @Override
+        public ModelSource resolveModel(Parent parent) throws UnresolvableModelException {
+            return resolveModel(parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
+        }
+
+        @Override
+        public ModelSource resolveModel(Dependency dependency) throws UnresolvableModelException {
+            return resolveModel(dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
+        }
+
+        @Override
+        public void addRepository(Repository repository) throws InvalidRepositoryException {
+            delegate.addRepository(repository);
+        }
+
+        @Override
+        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {
+            delegate.addRepository(repository, replace);
+        }
+
+        @Override
+        public ModelResolver newCopy() {
+            return new ReactorFirstModelResolver(reactorPomsByGAV, delegate.newCopy());
         }
     }
 }

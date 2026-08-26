@@ -10,7 +10,9 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.io.File;
@@ -29,13 +31,26 @@ import java.util.stream.Stream;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
-import org.apache.maven.model.Plugin;
+import org.apache.maven.model.Parent;
 import org.apache.maven.model.Profile;
+import org.apache.maven.model.Repository;
 import org.apache.maven.model.Resource;
+import org.apache.maven.model.building.DefaultModelBuildingRequest;
+import org.apache.maven.model.building.FileModelSource;
+import org.apache.maven.model.building.ModelBuildingException;
+import org.apache.maven.model.building.ModelBuildingRequest;
+import org.apache.maven.model.building.ModelSource;
+import org.apache.maven.model.resolution.InvalidRepositoryException;
+import org.apache.maven.model.resolution.ModelResolver;
+import org.apache.maven.model.resolution.UnresolvableModelException;
 import org.apache.maven.project.MavenProject;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.impl.RemoteRepositoryManager;
+import org.eclipse.aether.resolution.ArtifactRequest;
+import org.eclipse.aether.resolution.ArtifactResolutionException;
+import org.eclipse.aether.resolution.ArtifactResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -47,6 +62,15 @@ class PomChangeAnalyzerTest {
 
     private PomChangeAnalyzer analyzer;
 
+    /**
+     * Maps GAV coordinates ("groupId:artifactId:version") to POM files available in the
+     * test reactor. Populated by test helpers (createReactor, createReactorWithBomImport, etc.)
+     * so that both the mock RepositorySystem (for old effective models built by
+     * buildEffectiveModels) and the ReactorModelResolver (for new effective models set by
+     * setEffectiveModel) can resolve parent POMs and BOM imports.
+     */
+    private final Map<String, File> reactorPomFiles = new HashMap<>();
+
     /** Default resolution context with a mock session — used by all tests that don't need real artifact resolution. */
     private final PomChangeAnalyzer.ModelResolutionContext defaultResolutionCtx =
             new PomChangeAnalyzer.ModelResolutionContext(
@@ -56,9 +80,35 @@ class PomChangeAnalyzerTest {
     Path tempDir;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
+        reactorPomFiles.clear();
+        // Configure mock RepositorySystem to resolve POM artifacts from the test reactor.
+        // When a GAV matches a reactor project (registered via reactorPomFiles), the mock
+        // returns the POM file. This allows buildEffectiveModels to resolve parent POMs
+        // and BOM imports in old effective models, matching production behavior.
+        // For unknown artifacts, it throws ArtifactResolutionException.
+        RepositorySystem repositorySystem = mock(RepositorySystem.class);
+        when(repositorySystem.resolveArtifact(any(), any(ArtifactRequest.class)))
+                .thenAnswer(invocation -> {
+                    ArtifactRequest request = invocation.getArgument(1);
+                    org.eclipse.aether.artifact.Artifact artifact = request.getArtifact();
+                    String key = artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getVersion();
+                    File pomFile = reactorPomFiles.get(key);
+                    if (pomFile != null && pomFile.exists()) {
+                        ArtifactResult result = new ArtifactResult(request);
+                        result.setArtifact(new DefaultArtifact(
+                                        artifact.getGroupId(),
+                                        artifact.getArtifactId(),
+                                        artifact.getClassifier(),
+                                        artifact.getExtension(),
+                                        artifact.getVersion())
+                                .setFile(pomFile));
+                        return result;
+                    }
+                    throw new ArtifactResolutionException(List.of(new ArtifactResult(request)), "not in test reactor");
+                });
         analyzer = new PomChangeAnalyzer(
-                mock(RepositorySystem.class),
+                repositorySystem,
                 mock(RemoteRepositoryManager.class),
                 new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance());
     }
@@ -661,6 +711,14 @@ class PomChangeAnalyzerTest {
         Profile activeProfile = new Profile();
         activeProfile.setId("my-profile");
         projects.get(0).setActiveProfiles(List.of(activeProfile));
+
+        // Simulate Maven resolving managed dep version from the active profile into
+        // module-b's effective dependency list (setEffectiveModel doesn't merge profiles)
+        for (Dependency dep : projects.get(2).getModel().getDependencies()) {
+            if ("lib-x".equals(dep.getArtifactId())) {
+                dep.setVersion("2.0");
+            }
+        }
 
         // Old parent POM had lib-x:1.0 in the profile
         String oldParentPom = """
@@ -2745,6 +2803,14 @@ class PomChangeAnalyzerTest {
                 """;
         writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
 
+        // Register reactor POMs for parent and BOM resolution
+        reactorPomFiles.put("com.example:parent:1.0", root.resolve("pom.xml").toFile());
+        reactorPomFiles.put("com.example:bom:1.0", root.resolve("bom/pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:module-a:1.0", root.resolve("module-a/pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:module-b:1.0", root.resolve("module-b/pom.xml").toFile());
+
         MavenProject parent = createProject(
                 "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
         parent.setOriginalModel(parseModel(parentPomXml));
@@ -3040,11 +3106,18 @@ class PomChangeAnalyzerTest {
 
     private List<MavenProject> buildProjectList(
             Path root, String parentPomXml, String moduleAPomXml, String moduleBPomXml) {
+        // Register reactor POMs so the mock RepositorySystem and ReactorModelResolver
+        // can resolve parent POMs and BOM imports during effective model building.
+        reactorPomFiles.put("com.example:parent:1.0", root.resolve("pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:module-a:1.0", root.resolve("module-a/pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:module-b:1.0", root.resolve("module-b/pom.xml").toFile());
+
         MavenProject parent = createProject(
                 "com.example", "parent", "1.0", root.resolve("pom.xml").toFile());
         parent.setOriginalModel(parseModel(parentPomXml));
         parent.getModel().setPackaging("pom");
-        // Set effective model from the POM XML (for effective model comparison)
         setEffectiveModel(parent, parentPomXml);
 
         MavenProject moduleA = createProject(
@@ -3073,135 +3146,47 @@ class PomChangeAnalyzerTest {
     }
 
     /**
-     * Set the effective model on a MavenProject by parsing the POM XML and resolving
-     * managed dependency/plugin versions from the parent.
-     * In production, Maven builds the effective model with inheritance and interpolation.
-     * In tests, we simulate this by merging parent managed dep/plugin versions into
-     * child dependencies, and inheriting parent properties.
+     * Set the effective model on a MavenProject using Maven's ModelBuilder with
+     * {@code processPlugins=true} to match production behavior. The ReactorModelResolver
+     * resolves parents and BOM imports from the reactor POM files (populated by test helpers),
+     * so the effective model includes parent inheritance, BOM import resolution, lifecycle
+     * default plugins, and pluginManagement merging — all symmetrical with what
+     * {@code buildEffectiveModels} produces for old models.
      */
     private void setEffectiveModel(MavenProject project, String pomXml) {
-        Model effective = parseModel(pomXml);
-        // Preserve the GAV and packaging from the project's existing model
-        if (effective.getGroupId() == null) {
-            effective.setGroupId(project.getGroupId());
+        Model effective = null;
+        try {
+            org.apache.maven.model.building.ModelBuilder modelBuilder =
+                    new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance();
+            DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
+            request.setPomFile(project.getFile());
+            request.setProcessPlugins(true);
+            request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
+            request.setModelResolver(new ReactorModelResolver(reactorPomFiles));
+
+            // Activate the same profiles as the project's build to match production behavior
+            if (project.getActiveProfiles() != null
+                    && !project.getActiveProfiles().isEmpty()) {
+                List<String> activeIds = new ArrayList<>();
+                for (Profile p : project.getActiveProfiles()) {
+                    activeIds.add(p.getId());
+                }
+                request.setActiveProfileIds(activeIds);
+            }
+
+            effective = modelBuilder.build(request).getEffectiveModel();
+        } catch (ModelBuildingException e) {
+            if (e.getResult() != null && e.getResult().getEffectiveModel() != null) {
+                effective = e.getResult().getEffectiveModel();
+            }
         }
-        if (effective.getArtifactId() == null) {
-            effective.setArtifactId(project.getArtifactId());
+
+        if (effective == null) {
+            effective = parseModel(pomXml);
         }
-        if (effective.getVersion() == null) {
-            effective.setVersion(project.getVersion());
-        }
+
         effective.setPomFile(project.getFile());
-
-        // Simulate Maven's effective model: resolve managed dep/plugin versions from parent
-        if (project.getParent() != null) {
-            Model parentModel = project.getParent().getModel();
-            if (parentModel != null) {
-                // Inherit parent properties
-                Properties parentProps = parentModel.getProperties();
-                if (parentProps != null) {
-                    Properties effectiveProps = effective.getProperties();
-                    if (effectiveProps == null) {
-                        effectiveProps = new Properties();
-                        effective.setProperties(effectiveProps);
-                    }
-                    for (String name : parentProps.stringPropertyNames()) {
-                        if (!effectiveProps.containsKey(name)) {
-                            effectiveProps.setProperty(name, parentProps.getProperty(name));
-                        }
-                    }
-                }
-
-                // Resolve managed dependency versions
-                if (parentModel.getDependencyManagement() != null) {
-                    Map<String, String> managedVersions = new HashMap<>();
-                    for (Dependency d : parentModel.getDependencyManagement().getDependencies()) {
-                        managedVersions.put(d.getGroupId() + ":" + d.getArtifactId(), d.getVersion());
-                    }
-                    for (Dependency dep : effective.getDependencies()) {
-                        if (dep.getVersion() == null || dep.getVersion().startsWith("${")) {
-                            String version = managedVersions.get(dep.getGroupId() + ":" + dep.getArtifactId());
-                            if (version != null) {
-                                dep.setVersion(version);
-                            }
-                        }
-                    }
-                }
-
-                // Resolve managed plugin versions
-                if (parentModel.getBuild() != null && parentModel.getBuild().getPluginManagement() != null) {
-                    Map<String, String> managedPluginVersions = new HashMap<>();
-                    for (Plugin p : parentModel.getBuild().getPluginManagement().getPlugins()) {
-                        managedPluginVersions.put(p.getGroupId() + ":" + p.getArtifactId(), p.getVersion());
-                    }
-                    if (effective.getBuild() != null && effective.getBuild().getPlugins() != null) {
-                        for (Plugin plugin : effective.getBuild().getPlugins()) {
-                            if (plugin.getVersion() == null
-                                    || plugin.getVersion().startsWith("${")) {
-                                String version =
-                                        managedPluginVersions.get(plugin.getGroupId() + ":" + plugin.getArtifactId());
-                                if (version != null) {
-                                    plugin.setVersion(version);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Interpolate property references in dependency, plugin, and managed dep/plugin versions
-        Properties props = effective.getProperties();
-        if (props != null) {
-            interpolateDepVersions(effective.getDependencies(), props);
-            if (effective.getDependencyManagement() != null) {
-                interpolateDepVersions(effective.getDependencyManagement().getDependencies(), props);
-            }
-            if (effective.getBuild() != null) {
-                interpolatePluginVersions(effective.getBuild().getPlugins(), props);
-                if (effective.getBuild().getPluginManagement() != null) {
-                    interpolatePluginVersions(
-                            effective.getBuild().getPluginManagement().getPlugins(), props);
-                }
-            }
-        }
-
         project.setModel(effective);
-    }
-
-    private void interpolateDepVersions(List<Dependency> deps, Properties props) {
-        if (deps == null) {
-            return;
-        }
-        for (Dependency dep : deps) {
-            if (dep.getVersion() != null
-                    && dep.getVersion().startsWith("${")
-                    && dep.getVersion().endsWith("}")) {
-                String propName = dep.getVersion().substring(2, dep.getVersion().length() - 1);
-                String propValue = props.getProperty(propName);
-                if (propValue != null) {
-                    dep.setVersion(propValue);
-                }
-            }
-        }
-    }
-
-    private void interpolatePluginVersions(List<Plugin> plugins, Properties props) {
-        if (plugins == null) {
-            return;
-        }
-        for (Plugin plugin : plugins) {
-            if (plugin.getVersion() != null
-                    && plugin.getVersion().startsWith("${")
-                    && plugin.getVersion().endsWith("}")) {
-                String propName =
-                        plugin.getVersion().substring(2, plugin.getVersion().length() - 1);
-                String propValue = props.getProperty(propName);
-                if (propValue != null) {
-                    plugin.setVersion(propValue);
-                }
-            }
-        }
     }
 
     private MavenProject createProject(String groupId, String artifactId, String version, File pomFile) {
@@ -3231,5 +3216,48 @@ class PomChangeAnalyzerTest {
 
     private byte[] readFile(File file) throws IOException {
         return Files.readAllBytes(file.toPath());
+    }
+
+    /**
+     * ModelResolver that resolves parents and BOM imports from the test reactor.
+     * Maps GAV coordinates to POM files written by test helpers.
+     */
+    private static class ReactorModelResolver implements ModelResolver {
+        private final Map<String, File> reactorPoms;
+
+        ReactorModelResolver(Map<String, File> reactorPoms) {
+            this.reactorPoms = reactorPoms;
+        }
+
+        @Override
+        public ModelSource resolveModel(String groupId, String artifactId, String version)
+                throws UnresolvableModelException {
+            File f = reactorPoms.get(groupId + ":" + artifactId + ":" + version);
+            if (f != null && f.exists()) {
+                return new FileModelSource(f);
+            }
+            throw new UnresolvableModelException("not in reactor", groupId, artifactId, version);
+        }
+
+        @Override
+        public ModelSource resolveModel(Parent parent) throws UnresolvableModelException {
+            return resolveModel(parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
+        }
+
+        @Override
+        public ModelSource resolveModel(Dependency dependency) throws UnresolvableModelException {
+            return resolveModel(dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
+        }
+
+        @Override
+        public void addRepository(Repository repository) throws InvalidRepositoryException {}
+
+        @Override
+        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {}
+
+        @Override
+        public ModelResolver newCopy() {
+            return this;
+        }
     }
 }
