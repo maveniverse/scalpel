@@ -69,6 +69,7 @@ public final class ScalpelConfiguration {
      * {@link #MODE_SKIP_TESTS}, or {@link #MODE_REPORT}. Default: {@code trim}.
      */
     public static final String MODE = PREFIX + "mode";
+
     public static final String EXPLAIN = PREFIX + "explain";
 
     /**
@@ -683,6 +684,10 @@ public final class ScalpelConfiguration {
         return maxResourceFileSize;
     }
 
+    /**
+     * Returns configuration warnings collected during parsing (e.g. unknown {@code scalpel.*} keys
+     * with a "did you mean" suggestion). Empty when the configuration is clean.
+     */
     public List<String> getWarnings() {
         return warnings;
     }
