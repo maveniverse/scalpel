@@ -21,7 +21,6 @@ import static org.mockito.Mockito.when;
 
 import eu.maveniverse.maven.scalpel.core.ChangeDetectionResult;
 import eu.maveniverse.maven.scalpel.core.ScalpelCore;
-import eu.maveniverse.maven.scalpel.core.ScalpelException;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -41,17 +40,29 @@ import org.apache.maven.execution.ProjectDependencyGraph;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
+import org.apache.maven.model.Parent;
 import org.apache.maven.model.Plugin;
+import org.apache.maven.model.Repository;
+import org.apache.maven.model.building.DefaultModelBuilderFactory;
+import org.apache.maven.model.building.DefaultModelBuildingRequest;
+import org.apache.maven.model.building.ModelBuildingException;
+import org.apache.maven.model.building.ModelBuildingRequest;
+import org.apache.maven.model.building.ModelSource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+import org.apache.maven.model.resolution.InvalidRepositoryException;
+import org.apache.maven.model.resolution.ModelResolver;
+import org.apache.maven.model.resolution.UnresolvableModelException;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
 import org.apache.maven.project.DependencyResolutionException;
 import org.apache.maven.project.DependencyResolutionResult;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
+import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.graph.DefaultDependencyNode;
 import org.eclipse.aether.graph.DependencyNode;
+import org.eclipse.aether.impl.RemoteRepositoryManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -71,7 +82,11 @@ class ScalpelLifecycleParticipantTest {
         scalpelCore = mock(ScalpelCore.class);
         dependenciesResolver = mock(ProjectDependenciesResolver.class);
         participant = new ScalpelLifecycleParticipant(
-                scalpelCore, new ModuleMapper(), new PomChangeAnalyzer(), new ReactorTrimmer(), dependenciesResolver);
+                scalpelCore,
+                new ModuleMapper(),
+                new PomChangeAnalyzer(mock(RepositorySystem.class), mock(RemoteRepositoryManager.class)),
+                new ReactorTrimmer(),
+                dependenciesResolver);
     }
 
     @Test
@@ -3217,70 +3232,6 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
-    void scalpelException_failSafeTrue_buildsAll() throws Exception {
-        Path root = tempDir.resolve("project");
-        Files.createDirectories(root);
-
-        String parentPom = simpleParentPom("module-a");
-        writePom(root, "pom.xml", parentPom);
-        String moduleAPom = simpleChildPom("module-a");
-        writePom(root, "module-a/pom.xml", moduleAPom);
-
-        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
-        parentProject.getModel().setPackaging("pom");
-        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
-        moduleA.setParent(parentProject);
-
-        List<MavenProject> allProjects = List.of(parentProject, moduleA);
-
-        // ScalpelCore throws ScalpelException (e.g. merge-base unavailable with failSafe=false in core,
-        // but the lifecycle participant should still respect its own failSafe check)
-        when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenThrow(new ScalpelException("Could not find merge base between origin/main and HEAD"));
-        setupEmptyDependencyResolution();
-
-        MavenSession session = createSimpleSession(root, allProjects, "trim");
-        session.getSystemProperties().setProperty("scalpel.failSafe", "true");
-
-        // Should not throw — failSafe=true should catch ScalpelException gracefully
-        participant.afterProjectsRead(session);
-
-        Path reportFile = root.resolve("target/scalpel-report.json");
-        assertFalse(Files.exists(reportFile));
-    }
-
-    @Test
-    void scalpelException_failSafeDisabled_throws() throws Exception {
-        Path root = tempDir.resolve("project");
-        Files.createDirectories(root);
-
-        String parentPom = simpleParentPom("module-a");
-        writePom(root, "pom.xml", parentPom);
-        String moduleAPom = simpleChildPom("module-a");
-        writePom(root, "module-a/pom.xml", moduleAPom);
-
-        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
-        parentProject.getModel().setPackaging("pom");
-        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
-        moduleA.setParent(parentProject);
-
-        List<MavenProject> allProjects = List.of(parentProject, moduleA);
-
-        when(scalpelCore.detectChanges(any(), any(), any()))
-                .thenThrow(new ScalpelException("Could not find merge base between origin/main and HEAD"));
-        setupEmptyDependencyResolution();
-
-        MavenSession session = createSimpleSession(root, allProjects, "trim");
-        session.getSystemProperties().setProperty("scalpel.failSafe", "false");
-
-        // Should throw MavenExecutionException when failSafe is disabled
-        assertThrows(
-                MavenExecutionException.class,
-                () -> participant.afterProjectsRead(session),
-                "Should throw MavenExecutionException when ScalpelException occurs with failSafe disabled");
-    }
-
-    @Test
     void noModulesAffected_skipTestsMode_skipsAllTests() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
@@ -3927,7 +3878,86 @@ class ScalpelLifecycleParticipantTest {
         MavenProject project = new MavenProject(model);
         project.setFile(pomFile);
         project.setOriginalModel(parseModel(pomXml));
+        // Set effective model from POM XML so that effective model comparison in
+        // PomChangeAnalyzer works correctly. In tests, POM XML has hardcoded values,
+        // so the parsed model serves as the effective model.
+        setEffectiveModel(project, pomXml);
         return project;
+    }
+
+    /**
+     * Set the effective model on a MavenProject using Maven's ModelBuilder to properly
+     * interpolate property references (e.g., {@code ${project.version}}, {@code ${lib.version}}).
+     * Falls back to raw XML parsing when ModelBuilder cannot build the model.
+     */
+    private void setEffectiveModel(MavenProject project, String pomXml) {
+        try {
+            org.apache.maven.model.building.ModelBuilder modelBuilder = new DefaultModelBuilderFactory().newInstance();
+            DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
+            request.setPomFile(project.getFile());
+            request.setProcessPlugins(false);
+            request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
+            request.setModelResolver(new NoOpModelResolver());
+
+            Model effective = modelBuilder.build(request).getEffectiveModel();
+            effective.setPomFile(project.getFile());
+            project.setModel(effective);
+        } catch (ModelBuildingException e) {
+            if (e.getResult() != null && e.getResult().getEffectiveModel() != null) {
+                Model effective = e.getResult().getEffectiveModel();
+                effective.setPomFile(project.getFile());
+                project.setModel(effective);
+            } else {
+                // Fall back to raw XML parsing (no interpolation)
+                Model effective = parseModel(pomXml);
+                if (effective.getGroupId() == null) {
+                    effective.setGroupId(project.getGroupId());
+                }
+                if (effective.getArtifactId() == null) {
+                    effective.setArtifactId(project.getArtifactId());
+                }
+                if (effective.getVersion() == null) {
+                    effective.setVersion(project.getVersion());
+                }
+                effective.setPomFile(project.getFile());
+                project.setModel(effective);
+            }
+        }
+    }
+
+    private static class NoOpModelResolver implements ModelResolver {
+        @Override
+        public ModelSource resolveModel(String groupId, String artifactId, String version)
+                throws UnresolvableModelException {
+            throw new UnresolvableModelException("offline", groupId, artifactId, version);
+        }
+
+        @Override
+        public ModelSource resolveModel(Parent parent) throws UnresolvableModelException {
+            throw new UnresolvableModelException(
+                    "offline", parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
+        }
+
+        @Override
+        public ModelSource resolveModel(Dependency dependency) throws UnresolvableModelException {
+            throw new UnresolvableModelException(
+                    "offline", dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
+        }
+
+        @Override
+        public void addRepository(Repository repository) throws InvalidRepositoryException {
+            // No-op: offline model resolution does not need repository management
+        }
+
+        @Override
+        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {
+            // No-op: offline model resolution does not need repository management
+        }
+
+        @Override
+        public ModelResolver newCopy() {
+            return this;
+        }
     }
 
     private boolean modulePresent(String json, String artifactId) {

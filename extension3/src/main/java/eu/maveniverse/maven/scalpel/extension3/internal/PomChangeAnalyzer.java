@@ -8,6 +8,7 @@
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
+import static java.util.Objects.requireNonNull;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.io.ByteArrayInputStream;
@@ -15,8 +16,14 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileAttribute;
+import java.nio.file.attribute.PosixFilePermission;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -25,6 +32,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
+import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
 import org.apache.maven.model.Dependency;
@@ -35,10 +43,24 @@ import org.apache.maven.model.Profile;
 import org.apache.maven.model.Repository;
 import org.apache.maven.model.RepositoryPolicy;
 import org.apache.maven.model.Resource;
+import org.apache.maven.model.building.DefaultModelBuilderFactory;
+import org.apache.maven.model.building.DefaultModelBuildingRequest;
+import org.apache.maven.model.building.ModelBuildingException;
+import org.apache.maven.model.building.ModelBuildingRequest;
+import org.apache.maven.model.building.ModelBuildingResult;
+import org.apache.maven.model.building.ModelSource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+import org.apache.maven.model.resolution.ModelResolver;
+import org.apache.maven.model.resolution.UnresolvableModelException;
 import org.apache.maven.project.MavenProject;
+import org.apache.maven.project.ProjectBuildingRequest;
+import org.apache.maven.project.ProjectModelResolver;
 import org.codehaus.plexus.util.xml.Xpp3Dom;
 import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
+import org.eclipse.aether.RepositorySystem;
+import org.eclipse.aether.RepositorySystemSession;
+import org.eclipse.aether.impl.RemoteRepositoryManager;
+import org.eclipse.aether.repository.RemoteRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -47,6 +69,53 @@ import org.slf4j.LoggerFactory;
 class PomChangeAnalyzer {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
+    private final RepositorySystem repositorySystem;
+    private final RemoteRepositoryManager remoteRepositoryManager;
+
+    /**
+     * Fallback resolver for tests without a live Maven session.
+     * Rejects all resolution with {@link UnresolvableModelException};
+     * Maven's {@link org.apache.maven.model.building.DefaultModelBuilder}
+     * requires a non-null resolver even when processing is minimal.
+     */
+    private static final ModelResolver OFFLINE_MODEL_RESOLVER = new ModelResolver() {
+        @Override
+        public ModelSource resolveModel(String g, String a, String v) throws UnresolvableModelException {
+            throw new UnresolvableModelException("offline", g, a, v);
+        }
+
+        @Override
+        public ModelSource resolveModel(org.apache.maven.model.Parent parent) throws UnresolvableModelException {
+            throw new UnresolvableModelException(
+                    "offline", parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
+        }
+
+        @Override
+        public ModelSource resolveModel(Dependency dep) throws UnresolvableModelException {
+            throw new UnresolvableModelException("offline", dep.getGroupId(), dep.getArtifactId(), dep.getVersion());
+        }
+
+        @Override
+        public void addRepository(Repository repository) {
+            // No-op: offline resolver does not track repositories
+        }
+
+        @Override
+        public void addRepository(Repository repository, boolean replace) {
+            // No-op: offline resolver does not track repositories
+        }
+
+        @Override
+        public ModelResolver newCopy() {
+            return this;
+        }
+    };
+
+    @Inject
+    PomChangeAnalyzer(RepositorySystem repositorySystem, RemoteRepositoryManager remoteRepositoryManager) {
+        this.repositorySystem = requireNonNull(repositorySystem, "repositorySystem");
+        this.remoteRepositoryManager = requireNonNull(remoteRepositoryManager, "remoteRepositoryManager");
+    }
 
     /**
      * Result of POM change analysis.
@@ -118,6 +187,42 @@ class PomChangeAnalyzer {
     }
 
     /**
+     * Shared context for a single POM change analysis pass.
+     * Groups lookup maps, effective models, and accumulators to avoid
+     * threading many parameters through the analysis call chain.
+     */
+    private static class AnalysisContext {
+        Map<String, MavenProject> projectByPomPath;
+        Map<String, byte[]> oldPomContents;
+        Map<String, Model> oldEffectiveModels;
+        Map<String, Model> newEffectiveModels;
+        Set<MavenProject> parents;
+        Map<MavenProject, List<MavenProject>> bomImporters;
+        List<MavenProject> allProjects;
+        Path reactorRoot;
+        long maxResourceFileSize;
+        boolean explain;
+
+        // Accumulators — populated during analysis
+        final Set<MavenProject> affected = new LinkedHashSet<>();
+        final Map<MavenProject, Set<String>> evidence = new LinkedHashMap<>();
+        final Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
+        final Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
+        final Set<String> allChangedProperties = new LinkedHashSet<>();
+        final List<String> unmatchedPomPaths = new ArrayList<>();
+    }
+
+    /**
+     * Groups Maven session state needed to resolve external parents and BOM imports
+     * when building effective models from old POM content.
+     */
+    record ModelResolutionContext(
+            Properties systemProperties,
+            Properties userProperties,
+            RepositorySystemSession repoSession,
+            List<RemoteRepository> remoteRepositories) {}
+
+    /**
      * Analyze POM changes and return the set of affected projects plus changed managed GAs.
      * <p>
      * For child/leaf POM changes: the module itself is marked as affected.
@@ -137,7 +242,9 @@ class PomChangeAnalyzer {
                 oldPomContents,
                 allProjects,
                 reactorRoot,
-                ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE);
+                ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE,
+                true,
+                new ModelResolutionContext(null, null, null, null));
     }
 
     public Result analyzeChanges(
@@ -146,7 +253,14 @@ class PomChangeAnalyzer {
             List<MavenProject> allProjects,
             Path reactorRoot,
             long maxResourceFileSize) {
-        return analyzeChanges(changedPomPaths, oldPomContents, allProjects, reactorRoot, maxResourceFileSize, true);
+        return analyzeChanges(
+                changedPomPaths,
+                oldPomContents,
+                allProjects,
+                reactorRoot,
+                maxResourceFileSize,
+                true,
+                new ModelResolutionContext(null, null, null, null));
     }
 
     public Result analyzeChanges(
@@ -155,14 +269,8 @@ class PomChangeAnalyzer {
             List<MavenProject> allProjects,
             Path reactorRoot,
             long maxResourceFileSize,
-            boolean explain) {
-
-        Set<MavenProject> affected = new LinkedHashSet<>();
-        Map<MavenProject, Set<String>> evidence = new LinkedHashMap<>();
-        Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
-        Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
-        Set<String> allChangedProperties = new LinkedHashSet<>();
-        List<String> unmatchedPomPaths = new ArrayList<>();
+            boolean explain,
+            ModelResolutionContext resolutionCtx) {
 
         // Build a map of relative POM path -> MavenProject
         Map<String, MavenProject> projectByPomPath = new LinkedHashMap<>();
@@ -178,115 +286,144 @@ class PomChangeAnalyzer {
         // Build map of reactor modules imported as BOMs by other reactor modules
         Map<MavenProject, List<MavenProject>> bomImporters = findBomImporters(allProjects);
 
-        for (String changedPomPath : changedPomPaths) {
-            MavenProject project = projectByPomPath.get(changedPomPath);
-            if (project == null) {
-                unmatchedPomPaths.add(changedPomPath);
-                logger.debug("Changed POM {} does not match any reactor project, skipping", changedPomPath);
-                continue;
-            }
-
-            // Determine all dependent modules (children via parent inheritance + BOM importers)
-            List<MavenProject> dependents = collectDependents(project, parents, bomImporters, allProjects);
-
-            if (dependents.isEmpty()) {
-                // Leaf module: its own POM changed, mark it as affected
-                logger.debug("Leaf module POM changed: {}", key(project));
-                affected.add(project);
-                if (explain) {
-                    addEvidence(evidence, project, "own pom " + changedPomPath + " changed");
-                }
-                continue;
-            }
-
-            // Parent/BOM POM changed: analyze what actually changed
-            byte[] oldPomBytes = oldPomContents.get(changedPomPath);
-            if (oldPomBytes == null) {
-                // New POM (didn't exist in base), mark all dependents as affected
-                if (logger.isDebugEnabled()) {
-                    logger.debug("New parent/BOM POM: {}, marking all dependents as affected", key(project));
-                }
-                affected.add(project);
-                affected.addAll(dependents);
-                if (explain) {
-                    addEvidence(evidence, project, "new pom " + changedPomPath);
-                    for (MavenProject dependent : dependents) {
-                        addEvidence(evidence, dependent, "new pom " + changedPomPath);
-                    }
-                }
-                continue;
-            }
-
-            try {
-                analyzeParentPomChange(
-                        project,
-                        oldPomBytes,
-                        dependents,
-                        reactorRoot,
-                        affected,
-                        evidence,
-                        allChangedManagedDepGAs,
-                        allChangedManagedPluginGAs,
-                        allChangedProperties,
-                        maxResourceFileSize,
-                        explain);
-            } catch (Exception e) {
-                // If we can't parse the old POM, be conservative and mark all dependents
-                logger.warn(
-                        "Cannot parse old POM for {}, marking all dependents as affected: {}",
-                        key(project),
-                        e.getMessage());
-                affected.add(project);
-                affected.addAll(dependents);
-                if (explain) {
-                    addEvidence(evidence, project, "unparseable old pom " + changedPomPath);
-                    for (MavenProject dependent : dependents) {
-                        addEvidence(evidence, dependent, "unparseable old pom " + changedPomPath);
-                    }
-                }
-            }
+        // Build effective models for the entire reactor.
+        // Old state: changed POMs use their old bytes from git; unchanged POMs use current content.
+        // New state: Maven has already built effective models for the current reactor — use them directly.
+        // The effective models handle property interpolation, parent inheritance, and
+        // profile activation — eliminating manual property-to-managed-dep chasing.
+        Map<String, Model> oldEffectiveModels =
+                buildEffectiveModels(oldPomContents, allProjects, reactorRoot, resolutionCtx);
+        Path absRoot = reactorRoot.toAbsolutePath().normalize();
+        Map<String, Model> newEffectiveModels = new LinkedHashMap<>();
+        for (MavenProject project : allProjects) {
+            Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
+            String relPath = absRoot.relativize(pomPath).toString().replace('\\', '/');
+            newEffectiveModels.put(relPath, project.getModel());
         }
 
-        if (!unmatchedPomPaths.isEmpty()) {
+        AnalysisContext ctx = new AnalysisContext();
+        ctx.projectByPomPath = projectByPomPath;
+        ctx.oldPomContents = oldPomContents;
+        ctx.oldEffectiveModels = oldEffectiveModels;
+        ctx.newEffectiveModels = newEffectiveModels;
+        ctx.parents = parents;
+        ctx.bomImporters = bomImporters;
+        ctx.allProjects = allProjects;
+        ctx.reactorRoot = reactorRoot;
+        ctx.maxResourceFileSize = maxResourceFileSize;
+        ctx.explain = explain;
+
+        for (String changedPomPath : changedPomPaths) {
+            analyzeChangedPom(changedPomPath, ctx);
+        }
+
+        if (!ctx.unmatchedPomPaths.isEmpty()) {
             logger.warn(
                     "Scalpel: {} changed POM(s) match no reactor project (profile-gated, excluded by -pl, "
                             + "or module removed); their changes are ignored: {}",
-                    unmatchedPomPaths.size(),
-                    unmatchedPomPaths);
+                    ctx.unmatchedPomPaths.size(),
+                    ctx.unmatchedPomPaths);
         }
         logger.debug(
                 "POM change analysis complete: {} affected modules, changedProperties={}, changedManagedDeps={}, changedManagedPlugins={}",
-                affected.size(),
-                allChangedProperties,
-                allChangedManagedDepGAs,
-                allChangedManagedPluginGAs);
+                ctx.affected.size(),
+                ctx.allChangedProperties,
+                ctx.allChangedManagedDepGAs,
+                ctx.allChangedManagedPluginGAs);
         return new Result(
-                affected,
-                allChangedManagedDepGAs,
-                allChangedManagedPluginGAs,
-                allChangedProperties,
-                evidence,
-                unmatchedPomPaths);
+                ctx.affected,
+                ctx.allChangedManagedDepGAs,
+                ctx.allChangedManagedPluginGAs,
+                ctx.allChangedProperties,
+                ctx.evidence,
+                ctx.unmatchedPomPaths);
     }
 
     private static void addEvidence(Map<MavenProject, Set<String>> evidence, MavenProject project, String item) {
         evidence.computeIfAbsent(project, k -> new LinkedHashSet<>()).add(item);
     }
 
+    private void analyzeChangedPom(String changedPomPath, AnalysisContext ctx) {
+
+        MavenProject project = ctx.projectByPomPath.get(changedPomPath);
+        if (project == null) {
+            ctx.unmatchedPomPaths.add(changedPomPath);
+            logger.debug("Changed POM {} does not match any reactor project, skipping", changedPomPath);
+            return;
+        }
+
+        // Determine all dependent modules (children via parent inheritance + BOM importers)
+        List<MavenProject> dependents = collectDependents(project, ctx.parents, ctx.bomImporters, ctx.allProjects);
+
+        if (dependents.isEmpty()) {
+            // Leaf module: its own POM changed, mark it as affected
+            logger.debug("Leaf module POM changed: {}", key(project));
+            ctx.affected.add(project);
+            if (ctx.explain) {
+                addEvidence(ctx.evidence, project, "own pom " + changedPomPath + " changed");
+            }
+            return;
+        }
+
+        // Parent/BOM POM changed: analyze what actually changed
+        byte[] oldPomBytes = ctx.oldPomContents.get(changedPomPath);
+        if (oldPomBytes == null) {
+            // New POM (didn't exist in base), mark all dependents as affected
+            if (logger.isDebugEnabled()) {
+                logger.debug("New parent/BOM POM: {}, marking all dependents as affected", key(project));
+            }
+            ctx.affected.add(project);
+            ctx.affected.addAll(dependents);
+            if (ctx.explain) {
+                addEvidence(ctx.evidence, project, "new pom " + changedPomPath);
+                for (MavenProject dependent : dependents) {
+                    addEvidence(ctx.evidence, dependent, "new pom " + changedPomPath);
+                }
+            }
+            return;
+        }
+
+        // Look up old effective model (built once at start)
+        Model oldEffectiveModel = ctx.oldEffectiveModels.get(changedPomPath);
+        if (oldEffectiveModel == null) {
+            // Cannot build effective model, be conservative
+            if (logger.isWarnEnabled()) {
+                logger.warn(
+                        "Cannot build effective model for old {}, marking all dependents as affected", key(project));
+            }
+            ctx.affected.add(project);
+            ctx.affected.addAll(dependents);
+            return;
+        }
+
+        try {
+            analyzeParentPomChange(project, oldPomBytes, oldEffectiveModel, dependents, ctx);
+        } catch (Exception e) {
+            // If we can't parse the old POM, be conservative and mark all dependents
+            logger.warn(
+                    "Cannot parse old POM for {}, marking all dependents as affected: {}",
+                    key(project),
+                    e.getMessage());
+            ctx.affected.add(project);
+            ctx.affected.addAll(dependents);
+            if (ctx.explain) {
+                addEvidence(ctx.evidence, project, "unparseable old pom " + changedPomPath);
+                for (MavenProject dependent : dependents) {
+                    addEvidence(ctx.evidence, dependent, "unparseable old pom " + changedPomPath);
+                }
+            }
+        }
+    }
+
     private void analyzeParentPomChange(
             MavenProject parentProject,
             byte[] oldPomBytes,
+            Model oldEffectiveModel,
             List<MavenProject> dependentProjects,
-            Path reactorRoot,
-            Set<MavenProject> affected,
-            Map<MavenProject, Set<String>> evidence,
-            Set<String> allChangedManagedDepGAs,
-            Set<String> allChangedManagedPluginGAs,
-            Set<String> allChangedProperties,
-            long maxResourceFileSize,
-            boolean explain)
+            AnalysisContext ctx)
             throws IOException, XmlPullParserException {
 
+        // Raw models for parentSelfAffected checks (packaging, direct deps, etc.)
         MavenXpp3Reader reader = new MavenXpp3Reader();
         Model oldModel = reader.read(new ByteArrayInputStream(oldPomBytes));
         Model newModel = parentProject.getOriginalModel();
@@ -335,69 +472,52 @@ class PomChangeAnalyzer {
             parentSelfAffected = true;
         }
 
-        // Find changed properties
-        Set<String> changedProperties = diffProperties(oldModel.getProperties(), newModel.getProperties());
+        // Use effective models for property and managed dep/plugin diffs.
+        // Effective models have properties interpolated and profiles merged.
+        Model newEffectiveModel = ctx.newEffectiveModels.getOrDefault(
+                ctx.reactorRoot
+                        .toAbsolutePath()
+                        .normalize()
+                        .relativize(parentProject
+                                .getFile()
+                                .toPath()
+                                .toAbsolutePath()
+                                .normalize())
+                        .toString()
+                        .replace('\\', '/'),
+                parentProject.getModel());
+        Set<String> changedProperties =
+                diffProperties(oldEffectiveModel.getProperties(), newEffectiveModel.getProperties());
 
-        // Find changed managed dependencies (by groupId:artifactId)
-        Set<String> changedManagedDeps = diffDependencyManagement(oldModel, newModel);
+        // Diff managed deps/plugins at parent level for transitive dependency tracking.
+        // These GAs go into changedManagedDepGAs/changedManagedPluginGAs for
+        // computeTransitivelyAffected — even if no direct child uses a managed dep,
+        // it could be pulled in transitively by an external dependency.
+        // Only report modifications/removals, not brand-new entries (issue #131).
+        Set<String> changedManagedDeps =
+                diffDependencies(getManagedDependencies(oldEffectiveModel), getManagedDependencies(newEffectiveModel));
+        Set<String> changedManagedPlugins =
+                diffPlugins(getManagedPlugins(oldEffectiveModel), getManagedPlugins(newEffectiveModel));
 
-        // Find changed managed plugins (by groupId:artifactId)
-        Set<String> changedManagedPlugins = diffPluginManagement(oldModel, newModel);
+        ctx.allChangedManagedDepGAs.addAll(changedManagedDeps);
+        ctx.allChangedManagedPluginGAs.addAll(changedManagedPlugins);
 
-        // Analyze active profile changes (inactive profile changes are ignored)
+        // Check active profile direct deps/plugins for parentSelfAffected
         Set<String> activeProfileIds = getActiveProfileIds(parentProject);
-        parentSelfAffected = parentSelfAffected
-                || analyzeProfileChanges(
-                        oldModel,
-                        newModel,
-                        activeProfileIds,
-                        changedProperties,
-                        changedManagedDeps,
-                        changedManagedPlugins);
+        parentSelfAffected = parentSelfAffected || analyzeProfileChanges(oldModel, newModel, activeProfileIds);
 
-        // Collect all changed properties (after profile analysis has augmented the set)
-        allChangedProperties.addAll(changedProperties);
+        // Collect all changed properties
+        ctx.allChangedProperties.addAll(changedProperties);
 
         if (parentSelfAffected) {
-            affected.add(parentProject);
-            if (explain) {
+            ctx.affected.add(parentProject);
+            if (ctx.explain) {
                 addEvidence(
-                        evidence,
+                        ctx.evidence,
                         parentProject,
                         "pom " + parentProject.getFile().getName() + " direct content changed");
             }
         }
-
-        // Resolve property indirection: if a managed dep/plugin uses a changed property
-        // in its version (e.g. <version>${spring.version}</version>), it's effectively changed
-        // even though the raw XML string didn't change
-        if (!changedProperties.isEmpty()) {
-            augmentWithPropertyReferences(changedProperties, changedManagedDeps, getManagedDependencies(oldModel));
-            augmentWithPropertyReferences(changedProperties, changedManagedDeps, getManagedDependencies(newModel));
-            augmentWithPluginPropertyReferences(changedProperties, changedManagedPlugins, getManagedPlugins(oldModel));
-            augmentWithPluginPropertyReferences(changedProperties, changedManagedPlugins, getManagedPlugins(newModel));
-            // Also check active profile-level managed deps/plugins for property indirection
-            for (Profile profile : safeProfiles(oldModel)) {
-                if (activeProfileIds.contains(profile.getId())) {
-                    augmentWithPropertyReferences(
-                            changedProperties, changedManagedDeps, getProfileManagedDependencies(profile));
-                    augmentWithPluginPropertyReferences(
-                            changedProperties, changedManagedPlugins, getProfileManagedPlugins(profile));
-                }
-            }
-            for (Profile profile : safeProfiles(newModel)) {
-                if (activeProfileIds.contains(profile.getId())) {
-                    augmentWithPropertyReferences(
-                            changedProperties, changedManagedDeps, getProfileManagedDependencies(profile));
-                    augmentWithPluginPropertyReferences(
-                            changedProperties, changedManagedPlugins, getProfileManagedPlugins(profile));
-                }
-            }
-        }
-
-        // Collect all changed managed GAs for transitive dependency and plugin checking
-        allChangedManagedDepGAs.addAll(changedManagedDeps);
-        allChangedManagedPluginGAs.addAll(changedManagedPlugins);
 
         if (changedProperties.isEmpty() && changedManagedDeps.isEmpty() && changedManagedPlugins.isEmpty()) {
             logger.debug("No inherited changes in {}", key(parentProject));
@@ -411,40 +531,25 @@ class PomChangeAnalyzer {
                 changedManagedDeps,
                 changedManagedPlugins);
 
-        // Check each dependent (child or BOM importer) to see if it's affected
+        Path absReactorRoot = ctx.reactorRoot.toAbsolutePath().normalize();
+
+        // Check each dependent (child or BOM importer) for impact from changed
+        // managed deps, managed plugins, properties, and filtered resources.
         for (MavenProject child : dependentProjects) {
-            if (affected.contains(child)) {
+            if (ctx.affected.contains(child)) {
                 continue;
             }
 
             boolean childAffected = false;
 
-            // Check if child POM references any changed property
-            if (!changedProperties.isEmpty()) {
-                String childPomText = readPomText(child);
-                if (childPomText != null) {
-                    for (String prop : changedProperties) {
-                        if (childPomText.contains("${" + prop + "}")) {
-                            logger.debug("Child {} references changed property {}", key(child), prop);
-                            if (explain) {
-                                addEvidence(evidence, child, "property " + prop);
-                            }
-                            childAffected = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
             // Check if child uses any changed managed dependency
-            if (!childAffected && !changedManagedDeps.isEmpty()) {
-                Model childRawModel = child.getOriginalModel();
-                for (Dependency dep : childRawModel.getDependencies()) {
+            if (!changedManagedDeps.isEmpty()) {
+                for (Dependency dep : child.getOriginalModel().getDependencies()) {
                     String ga = dep.getGroupId() + ":" + dep.getArtifactId();
                     if (changedManagedDeps.contains(ga)) {
                         logger.debug("Child {} uses changed managed dependency {}", key(child), ga);
-                        if (explain) {
-                            addEvidence(evidence, child, "managed dep " + ga);
+                        if (ctx.explain) {
+                            addEvidence(ctx.evidence, child, "managed dep " + ga);
                         }
                         childAffected = true;
                         break;
@@ -459,8 +564,8 @@ class PomChangeAnalyzer {
                     String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
                     if (changedManagedPlugins.contains(ga)) {
                         logger.debug("Child {} uses changed managed plugin {}", key(child), ga);
-                        if (explain) {
-                            addEvidence(evidence, child, "managed plugin " + ga);
+                        if (ctx.explain) {
+                            addEvidence(ctx.evidence, child, "managed plugin " + ga);
                         }
                         childAffected = true;
                         break;
@@ -468,13 +573,43 @@ class PomChangeAnalyzer {
                 }
             }
 
-            // Check if child has filtered resources referencing changed properties
+            // Compare child's effective dependencies and plugins (old vs new).
+            // This catches property changes that flow into plugin configurations,
+            // dependency scopes, exclusions, or any other effective model difference
+            // not covered by the GA-level managed dep/plugin checks above.
+            if (!childAffected) {
+                childAffected = hasEffectiveChanges(child, absReactorRoot, ctx);
+            }
+
+            // Fallback: check if child POM text references any changed property.
+            // Effective model comparison may not be available for all children
+            // (e.g. when old effective models can't be built), so the text search
+            // provides a safety net for property-driven changes.
+            if (!childAffected && !changedProperties.isEmpty()) {
+                String childPomText = readPomText(child);
+                if (childPomText != null) {
+                    for (String prop : changedProperties) {
+                        if (childPomText.contains("${" + prop + "}")) {
+                            logger.debug("Child {} references changed property {}", key(child), prop);
+                            if (ctx.explain) {
+                                addEvidence(ctx.evidence, child, "property " + prop);
+                            }
+                            childAffected = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Check if child has filtered resources referencing changed properties.
+            // Filtered resources are outside the POM model — effective model comparison
+            // cannot detect property substitutions in resource files.
             if (!childAffected
                     && !changedProperties.isEmpty()
-                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, maxResourceFileSize)) {
+                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, ctx.maxResourceFileSize)) {
                 logger.debug("Child {} has filtered resources referencing changed properties", key(child));
-                if (explain) {
-                    addEvidence(evidence, child, "filtered resources referencing changed properties");
+                if (ctx.explain) {
+                    addEvidence(ctx.evidence, child, "filtered resources referencing changed properties");
                 }
                 childAffected = true;
             }
@@ -483,30 +618,19 @@ class PomChangeAnalyzer {
                 if (logger.isDebugEnabled()) {
                     logger.debug("Child {} is DIRECTLY AFFECTED by parent {} change", key(child), key(parentProject));
                 }
-                affected.add(child);
-                // If the affected child has managed deps/plugins referencing the changed
-                // property (e.g. it's a BOM), propagate those GAs so transitive consumers
-                // are detected.
-                if (!changedProperties.isEmpty()) {
-                    augmentWithPropertyReferences(
-                            changedProperties,
-                            allChangedManagedDepGAs,
-                            getManagedDependencies(child.getOriginalModel()));
-                    augmentWithPluginPropertyReferences(
-                            changedProperties, allChangedManagedPluginGAs, getManagedPlugins(child.getOriginalModel()));
-                }
+                ctx.affected.add(child);
+                // Propagate managed dep/plugin version changes through affected child BOMs
+                propagateEffectiveManagedChanges(child, absReactorRoot, ctx);
             } else {
                 if (logger.isDebugEnabled()) {
-                    logger.debug(
-                            "Child {} is NOT affected by parent {} change (no property ref, no managed dep/plugin use, no filtered resources)",
-                            key(child),
-                            key(parentProject));
+                    logger.debug("Child {} is NOT affected by parent {} change", key(child), key(parentProject));
                 }
             }
         }
+
         int affectedCount = 0;
         for (MavenProject dep : dependentProjects) {
-            if (affected.contains(dep)) {
+            if (ctx.affected.contains(dep)) {
                 affectedCount++;
             }
         }
@@ -520,17 +644,99 @@ class PomChangeAnalyzer {
     }
 
     /**
-     * Analyze changes in active profiles between old and new POM models.
-     * Returns true if the parent itself is affected (direct deps or plugins changed).
-     * Accumulates property, managed dep, and managed plugin changes into the provided sets.
+     * Propagate effective dependency/plugin changes through an affected child.
+     * If the child's effective deps or plugins changed (e.g. due to an inherited
+     * property change or managed version bump), the changed GAs are added to the
+     * global sets for transitive dependency/plugin checking.
      */
-    private boolean analyzeProfileChanges(
-            Model oldModel,
-            Model newModel,
-            Set<String> activeProfileIds,
-            Set<String> changedProperties,
-            Set<String> changedManagedDeps,
-            Set<String> changedManagedPlugins) {
+    private void propagateEffectiveManagedChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
+        Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
+        String childRelPath = absReactorRoot.relativize(childPomPath).toString().replace('\\', '/');
+        Model oldChildEffective = ctx.oldEffectiveModels.get(childRelPath);
+        Model newChildEffective = ctx.newEffectiveModels.get(childRelPath);
+        if (oldChildEffective == null || newChildEffective == null) {
+            return;
+        }
+
+        // Effective dependencies: propagate changed GAs
+        Set<String> childChangedDeps =
+                diffDependencies(oldChildEffective.getDependencies(), newChildEffective.getDependencies());
+        if (!childChangedDeps.isEmpty()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Child {} propagates changed effective deps: {}", key(child), childChangedDeps);
+            }
+            ctx.allChangedManagedDepGAs.addAll(childChangedDeps);
+        }
+
+        // Effective plugins: propagate changed GAs
+        Set<String> childChangedPlugins =
+                diffPlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
+        if (!childChangedPlugins.isEmpty()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Child {} propagates changed effective plugins: {}", key(child), childChangedPlugins);
+            }
+            ctx.allChangedManagedPluginGAs.addAll(childChangedPlugins);
+        }
+
+        // Managed dependencies: propagate changed GAs (important for BOMs that provide
+        // managed deps to other modules — version changes must be tracked for transitive checking)
+        Set<String> childChangedManagedDeps =
+                diffDependencies(getManagedDependencies(oldChildEffective), getManagedDependencies(newChildEffective));
+        if (!childChangedManagedDeps.isEmpty()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Child {} propagates changed managed deps: {}", key(child), childChangedManagedDeps);
+            }
+            ctx.allChangedManagedDepGAs.addAll(childChangedManagedDeps);
+        }
+
+        // Managed plugins: propagate changed GAs
+        Set<String> childChangedManagedPlugins =
+                diffPlugins(getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective));
+        if (!childChangedManagedPlugins.isEmpty()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Child {} propagates changed managed plugins: {}", key(child), childChangedManagedPlugins);
+            }
+            ctx.allChangedManagedPluginGAs.addAll(childChangedManagedPlugins);
+        }
+    }
+
+    /**
+     * Check if a child's effective plugins changed between old and new models.
+     * This catches property changes that flow into plugin configurations (source
+     * versions, execution phases, etc.) — changes not covered by GA-level matching.
+     * <p>
+     * Only plugins are compared here, not dependencies. Dependency changes from
+     * properties are covered by the GA matching + property text search fallback,
+     * and effective dep comparison would conflict with issue #131 (brand-new managed
+     * deps resolving for the first time look like version changes: null → version).
+     */
+    private boolean hasEffectiveChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
+        Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
+        String childRelPath = absReactorRoot.relativize(childPomPath).toString().replace('\\', '/');
+        Model oldChildEffective = ctx.oldEffectiveModels.get(childRelPath);
+        Model newChildEffective = ctx.newEffectiveModels.get(childRelPath);
+        if (oldChildEffective == null || newChildEffective == null) {
+            return false;
+        }
+
+        Set<String> changedPlugins =
+                diffPlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
+        if (!changedPlugins.isEmpty()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Child {} has changed effective plugins: {}", key(child), changedPlugins);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Analyze changes in active profiles between old and new raw POM models.
+     * Returns true if the parent itself is affected (direct deps or plugins changed
+     * in an active profile). Property, managed dep, and managed plugin changes are
+     * handled by the effective model comparison and do not need accumulation here.
+     */
+    private boolean analyzeProfileChanges(Model oldModel, Model newModel, Set<String> activeProfileIds) {
 
         boolean selfAffected = false;
 
@@ -546,53 +752,36 @@ class PomChangeAnalyzer {
         for (String profileId : activeProfileIds) {
             Profile oldProfile = oldProfiles.get(profileId);
             Profile newProfile = newProfiles.get(profileId);
-
-            if (oldProfile == null && newProfile == null) {
-                continue;
-            }
-
-            if (oldProfile == null || newProfile == null) {
-                // Profile added or removed while active
-                logger.debug("Active profile {} was {}", profileId, oldProfile == null ? "added" : "removed");
-                if (newProfile != null) {
-                    changedProperties.addAll(diffProperties(null, newProfile.getProperties()));
-                    changedManagedDeps.addAll(diffDependencies(List.of(), getProfileManagedDependencies(newProfile)));
-                    changedManagedPlugins.addAll(diffPlugins(List.of(), getProfileManagedPlugins(newProfile)));
-                    if (!newProfile.getDependencies().isEmpty()
-                            || !getProfilePlugins(newProfile).isEmpty()) {
-                        selfAffected = true;
-                    }
-                } else {
-                    changedProperties.addAll(diffProperties(oldProfile.getProperties(), null));
-                    changedManagedDeps.addAll(diffDependencies(getProfileManagedDependencies(oldProfile), List.of()));
-                    changedManagedPlugins.addAll(diffPlugins(getProfileManagedPlugins(oldProfile), List.of()));
-                    if (!oldProfile.getDependencies().isEmpty()
-                            || !getProfilePlugins(oldProfile).isEmpty()) {
-                        selfAffected = true;
-                    }
-                }
-                continue;
-            }
-
-            // Both exist — diff them
-            changedProperties.addAll(diffProperties(oldProfile.getProperties(), newProfile.getProperties()));
-            changedManagedDeps.addAll(diffDependencies(
-                    getProfileManagedDependencies(oldProfile), getProfileManagedDependencies(newProfile)));
-            changedManagedPlugins.addAll(
-                    diffPlugins(getProfileManagedPlugins(oldProfile), getProfileManagedPlugins(newProfile)));
-
-            if (!equalDependencyLists(oldProfile.getDependencies(), newProfile.getDependencies())) {
-                logger.debug("Direct dependencies changed in active profile {}", profileId);
-                selfAffected = true;
-            }
-
-            if (!equalPluginLists(getProfilePlugins(oldProfile), getProfilePlugins(newProfile))) {
-                logger.debug("Direct plugins changed in active profile {}", profileId);
+            if (isProfileSelfAffected(oldProfile, newProfile, profileId)) {
                 selfAffected = true;
             }
         }
 
         return selfAffected;
+    }
+
+    private boolean isProfileSelfAffected(Profile oldProfile, Profile newProfile, String profileId) {
+        if (oldProfile == null && newProfile == null) {
+            return false;
+        }
+        if (oldProfile == null || newProfile == null) {
+            // Profile added or removed while active
+            logger.debug("Active profile {} was {}", profileId, oldProfile == null ? "added" : "removed");
+            Profile existing = oldProfile != null ? oldProfile : newProfile;
+            return !existing.getDependencies().isEmpty()
+                    || !getProfilePlugins(existing).isEmpty();
+        }
+        // Both exist — check if direct deps or plugins changed
+        boolean affected = false;
+        if (!equalDependencyLists(oldProfile.getDependencies(), newProfile.getDependencies())) {
+            logger.debug("Direct dependencies changed in active profile {}", profileId);
+            affected = true;
+        }
+        if (!equalPluginLists(getProfilePlugins(oldProfile), getProfilePlugins(newProfile))) {
+            logger.debug("Direct plugins changed in active profile {}", profileId);
+            affected = true;
+        }
+        return affected;
     }
 
     private Set<String> getActiveProfileIds(MavenProject project) {
@@ -626,28 +815,6 @@ class PomChangeAnalyzer {
         return changed;
     }
 
-    Set<String> diffDependencyManagement(Model oldModel, Model newModel) {
-        List<Dependency> oldDeps = oldModel.getDependencyManagement() != null
-                ? oldModel.getDependencyManagement().getDependencies()
-                : new ArrayList<Dependency>();
-        List<Dependency> newDeps = newModel.getDependencyManagement() != null
-                ? newModel.getDependencyManagement().getDependencies()
-                : new ArrayList<Dependency>();
-        return diffDependencies(oldDeps, newDeps);
-    }
-
-    Set<String> diffPluginManagement(Model oldModel, Model newModel) {
-        List<Plugin> oldPlugins =
-                oldModel.getBuild() != null && oldModel.getBuild().getPluginManagement() != null
-                        ? oldModel.getBuild().getPluginManagement().getPlugins()
-                        : new ArrayList<Plugin>();
-        List<Plugin> newPlugins =
-                newModel.getBuild() != null && newModel.getBuild().getPluginManagement() != null
-                        ? newModel.getBuild().getPluginManagement().getPlugins()
-                        : new ArrayList<Plugin>();
-        return diffPlugins(oldPlugins, newPlugins);
-    }
-
     private Set<String> diffDependencies(List<Dependency> oldDeps, List<Dependency> newDeps) {
         Set<String> changed = new LinkedHashSet<>();
         Map<String, Dependency> oldMap = new LinkedHashMap<>();
@@ -659,17 +826,15 @@ class PomChangeAnalyzer {
             newMap.put(dependencyKey(d), d);
         }
 
+        // Only report modifications and removals — not brand-new entries (issue #131).
+        // New managed deps/plugins cannot affect existing modules; the dependency tree
+        // resolution naturally handles any downstream impact.
         for (Map.Entry<String, Dependency> e : oldMap.entrySet()) {
             Dependency newDep = newMap.get(e.getKey());
             if (newDep == null || !equalDependency(e.getValue(), newDep)) {
                 // Report at GA level: downstream module matching resolves dependencies by GA,
                 // so any change to a managed GA (regardless of classifier/type variant) should
                 // flag all modules depending on that GA.
-                changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
-            }
-        }
-        for (Map.Entry<String, Dependency> e : newMap.entrySet()) {
-            if (!oldMap.containsKey(e.getKey())) {
                 changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
             }
         }
@@ -700,15 +865,11 @@ class PomChangeAnalyzer {
             newMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
         }
 
+        // Only report modifications and removals — not brand-new entries (issue #131).
         for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
             Plugin newPlugin = newMap.get(e.getKey());
             if (newPlugin == null || !equalPlugin(e.getValue(), newPlugin)) {
                 changed.add(e.getKey());
-            }
-        }
-        for (String ga : newMap.keySet()) {
-            if (!oldMap.containsKey(ga)) {
-                changed.add(ga);
             }
         }
         return changed;
@@ -718,10 +879,26 @@ class PomChangeAnalyzer {
         return Objects.equals(a.getGroupId(), b.getGroupId())
                 && Objects.equals(a.getArtifactId(), b.getArtifactId())
                 && Objects.equals(a.getVersion(), b.getVersion())
-                && Objects.equals(a.getScope(), b.getScope())
-                && Objects.equals(a.getType(), b.getType())
+                && Objects.equals(normalizeScope(a.getScope()), normalizeScope(b.getScope()))
+                && Objects.equals(normalizeType(a.getType()), normalizeType(b.getType()))
                 && Objects.equals(a.getClassifier(), b.getClassifier())
                 && Objects.equals(String.valueOf(a.isOptional()), String.valueOf(b.isOptional()));
+    }
+
+    /**
+     * Normalize dependency scope: Maven defaults null scope to "compile".
+     * The DefaultModelBuilder normalizes this, but raw parsed models may leave it null.
+     */
+    private static String normalizeScope(String scope) {
+        return scope == null ? "compile" : scope;
+    }
+
+    /**
+     * Normalize dependency type: Maven defaults null type to "jar".
+     * The DefaultModelBuilder normalizes this, but raw parsed models may leave it null.
+     */
+    private static String normalizeType(String type) {
+        return type == null ? "jar" : type;
     }
 
     private boolean equalPlugin(Plugin a, Plugin b) {
@@ -968,6 +1145,15 @@ class PomChangeAnalyzer {
         return new ArrayList<>();
     }
 
+    /**
+     * Returns the effective plugins from an effective model.
+     * On effective models, getBuild().getPlugins() already contains the merged result
+     * of direct plugins + pluginManagement-resolved plugins.
+     */
+    private List<Plugin> getEffectivePlugins(Model model) {
+        return getPlugins(model);
+    }
+
     private List<Dependency> getManagedDependencies(Model model) {
         if (model.getDependencyManagement() != null
                 && model.getDependencyManagement().getDependencies() != null) {
@@ -990,23 +1176,6 @@ class PomChangeAnalyzer {
         return profiles != null ? profiles : List.of();
     }
 
-    private List<Dependency> getProfileManagedDependencies(Profile profile) {
-        if (profile.getDependencyManagement() != null
-                && profile.getDependencyManagement().getDependencies() != null) {
-            return profile.getDependencyManagement().getDependencies();
-        }
-        return List.of();
-    }
-
-    private List<Plugin> getProfileManagedPlugins(Profile profile) {
-        if (profile.getBuild() != null
-                && profile.getBuild().getPluginManagement() != null
-                && profile.getBuild().getPluginManagement().getPlugins() != null) {
-            return profile.getBuild().getPluginManagement().getPlugins();
-        }
-        return List.of();
-    }
-
     private List<Plugin> getProfilePlugins(Profile profile) {
         if (profile.getBuild() != null && profile.getBuild().getPlugins() != null) {
             return profile.getBuild().getPlugins();
@@ -1014,62 +1183,181 @@ class PomChangeAnalyzer {
         return List.of();
     }
 
-    private void augmentWithPropertyReferences(
-            Set<String> changedProperties, Set<String> changedGAs, List<Dependency> dependencies) {
-        for (Dependency dep : dependencies) {
-            String ga = dep.getGroupId() + ":" + dep.getArtifactId();
-            if (!changedGAs.contains(ga) && referencesAnyProperty(dep, changedProperties)) {
-                logger.debug("Managed dependency {} references changed property -> adding to changedManagedDepGAs", ga);
-                changedGAs.add(ga);
+    /**
+     * Build old effective models for all reactor POMs by reconstructing the old POM hierarchy
+     * in a temporary directory. Changed POMs use their old content from git; unchanged POMs
+     * use their current content. This is done ONCE at the start of analysis.
+     * <p>
+     * The effective models handle property interpolation, parent inheritance, and profile
+     * activation — eliminating the need for manual property-to-managed-dep chasing.
+     */
+    Map<String, Model> buildEffectiveModels(
+            Map<String, byte[]> oldPomContents,
+            List<MavenProject> allProjects,
+            Path reactorRoot,
+            ModelResolutionContext resolutionCtx) {
+        if (oldPomContents.isEmpty()) {
+            return Map.of();
+        }
+
+        Path tempDir = null;
+        try {
+            tempDir = createSecureTempDirectory("scalpel-old-poms-");
+            Path absRoot = reactorRoot.toAbsolutePath().normalize();
+
+            // Reconstruct old POM hierarchy: changed POMs get old bytes,
+            // unchanged POMs get their current content.
+            reconstructPomHierarchy(tempDir, absRoot, allProjects, oldPomContents);
+
+            // Build effective models for all reactor POMs from the temp directory
+            org.apache.maven.model.building.ModelBuilder modelBuilder = new DefaultModelBuilderFactory().newInstance();
+            Map<String, Model> result = new LinkedHashMap<>();
+
+            for (MavenProject project : allProjects) {
+                Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
+                Path relativePom = absRoot.relativize(pomPath);
+                String relPath = relativePom.toString().replace('\\', '/');
+                Path tempPomFile = tempDir.resolve(relativePom);
+
+                Model model = buildSingleEffectiveModel(modelBuilder, tempPomFile, relPath, project, resolutionCtx);
+                if (model != null) {
+                    result.put(relPath, model);
+                }
+            }
+
+            return result;
+        } catch (IOException e) {
+            logger.warn("Cannot create temp directory for old POM models: {}", e.getMessage());
+            return Map.of();
+        } finally {
+            if (tempDir != null) {
+                deleteRecursive(tempDir);
             }
         }
     }
 
-    private void augmentWithPluginPropertyReferences(
-            Set<String> changedProperties, Set<String> changedGAs, List<Plugin> plugins) {
-        for (Plugin plugin : plugins) {
-            String ga = plugin.getGroupId() + ":" + plugin.getArtifactId();
-            if (!changedGAs.contains(ga) && referencesAnyProperty(plugin, changedProperties)) {
-                logger.debug("Managed plugin {} references changed property -> adding to changedManagedPluginGAs", ga);
-                changedGAs.add(ga);
+    private void reconstructPomHierarchy(
+            Path tempDir, Path absRoot, List<MavenProject> allProjects, Map<String, byte[]> oldPomContents)
+            throws IOException {
+        for (MavenProject project : allProjects) {
+            Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
+            Path relativePom = absRoot.relativize(pomPath);
+            Path tempPomFile = tempDir.resolve(relativePom);
+            Files.createDirectories(tempPomFile.getParent());
+            String relPath = relativePom.toString().replace('\\', '/');
+            byte[] oldBytes = oldPomContents.get(relPath);
+            if (oldBytes != null) {
+                Files.write(tempPomFile, oldBytes);
+            } else {
+                Files.copy(pomPath, tempPomFile);
             }
         }
     }
 
-    private boolean referencesAnyProperty(Dependency dep, Set<String> properties) {
-        for (String prop : properties) {
-            String ref = "${" + prop + "}";
-            if (containsRef(dep.getVersion(), ref)
-                    || containsRef(dep.getGroupId(), ref)
-                    || containsRef(dep.getArtifactId(), ref)
-                    || containsRef(dep.getScope(), ref)
-                    || containsRef(dep.getType(), ref)
-                    || containsRef(dep.getClassifier(), ref)) {
-                return true;
+    private Model buildSingleEffectiveModel(
+            org.apache.maven.model.building.ModelBuilder modelBuilder,
+            Path tempPomFile,
+            String relPath,
+            MavenProject project,
+            ModelResolutionContext resolutionCtx) {
+        try {
+            DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
+            request.setPomFile(tempPomFile.toFile());
+            request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
+
+            // Use the real Maven resolver when a repository session is available,
+            // so external parents and BOM imports resolve from the local repository cache.
+            // Plugin processing stays disabled: lifecycle defaults and plugin management
+            // injection depend on reactor state that the temp-dir model lacks, and would
+            // create false diffs against the live model from project.getModel().
+            if (resolutionCtx.repoSession() != null) {
+                request.setModelResolver(new ProjectModelResolver(
+                        resolutionCtx.repoSession(),
+                        null, // no request trace needed
+                        repositorySystem,
+                        remoteRepositoryManager,
+                        resolutionCtx.remoteRepositories() != null ? resolutionCtx.remoteRepositories() : List.of(),
+                        ProjectBuildingRequest.RepositoryMerging.POM_DOMINANT,
+                        null)); // no reactor model pool — we use temp dir files
+            } else {
+                // Fallback for tests without a live Maven session
+                request.setModelResolver(OFFLINE_MODEL_RESOLVER);
             }
+            request.setProcessPlugins(false);
+
+            // Pass system and user properties so interpolation and
+            // property-activated profiles work correctly
+            if (resolutionCtx.systemProperties() != null) {
+                request.setSystemProperties(resolutionCtx.systemProperties());
+            }
+            if (resolutionCtx.userProperties() != null) {
+                request.setUserProperties(resolutionCtx.userProperties());
+            }
+
+            // Activate the same profiles as the current build
+            List<String> activeProfileIds = new ArrayList<>();
+            if (project.getActiveProfiles() != null) {
+                for (Profile profile : project.getActiveProfiles()) {
+                    activeProfileIds.add(profile.getId());
+                }
+            }
+            if (!activeProfileIds.isEmpty()) {
+                request.setActiveProfileIds(activeProfileIds);
+            }
+
+            ModelBuildingResult buildResult = modelBuilder.build(request);
+            return buildResult.getEffectiveModel();
+        } catch (ModelBuildingException e) {
+            // Resolution may still fail for some artifacts; try to use partial result
+            if (e.getResult() != null && e.getResult().getEffectiveModel() != null) {
+                logger.debug("Partial effective model for old {}: {}", relPath, e.getMessage());
+                return e.getResult().getEffectiveModel();
+            }
+            logger.debug("Cannot build effective model for old {}: {}", relPath, e.getMessage());
+            return null;
+        } catch (Exception e) {
+            // Catch resolver errors (NPE from corrupt repos, connectivity issues, etc.)
+            logger.debug("Cannot build effective model for old {}: {}", relPath, e.getMessage());
+            return null;
         }
-        return false;
     }
 
-    private boolean referencesAnyProperty(Plugin plugin, Set<String> properties) {
-        for (String prop : properties) {
-            String ref = "${" + prop + "}";
-            if (containsRef(plugin.getVersion(), ref)
-                    || containsRef(plugin.getGroupId(), ref)
-                    || containsRef(plugin.getArtifactId(), ref)) {
-                return true;
-            }
-            // Check plugin configuration
-            if (plugin.getConfiguration() != null
-                    && containsRef(plugin.getConfiguration().toString(), ref)) {
-                return true;
-            }
+    /**
+     * Creates a temp directory with owner-only permissions on POSIX systems.
+     * Falls back to default permissions on non-POSIX systems (Windows).
+     */
+    @SuppressWarnings("java:S5443") // False positive: Windows default temp dirs are already user-scoped via ACLs
+    private static Path createSecureTempDirectory(String prefix) throws IOException {
+        try {
+            FileAttribute<Set<PosixFilePermission>> attr = PosixFilePermissions.asFileAttribute(Set.of(
+                    PosixFilePermission.OWNER_READ,
+                    PosixFilePermission.OWNER_WRITE,
+                    PosixFilePermission.OWNER_EXECUTE));
+            return Files.createTempDirectory(prefix, attr);
+        } catch (UnsupportedOperationException e) {
+            // Non-POSIX filesystem (e.g. Windows) — fall back to default permissions
+            return Files.createTempDirectory(prefix);
         }
-        return false;
     }
 
-    private static boolean containsRef(String value, String ref) {
-        return value != null && value.contains(ref);
+    private void deleteRecursive(Path dir) {
+        try {
+            Files.walkFileTree(dir, new SimpleFileVisitor<Path>() {
+                @Override
+                public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+                    Files.delete(file);
+                    return FileVisitResult.CONTINUE;
+                }
+
+                @Override
+                public FileVisitResult postVisitDirectory(Path d, IOException exc) throws IOException {
+                    Files.delete(d);
+                    return FileVisitResult.CONTINUE;
+                }
+            });
+        } catch (IOException e) {
+            logger.debug("Cannot clean up temp directory {}: {}", dir, e.getMessage());
+        }
     }
 
     private Set<MavenProject> findParentProjects(List<MavenProject> allProjects) {

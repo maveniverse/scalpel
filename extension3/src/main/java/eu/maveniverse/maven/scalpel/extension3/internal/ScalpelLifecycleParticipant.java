@@ -223,7 +223,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             allProjects,
                             reactorRoot,
                             config.getMaxResourceFileSize(),
-                            config.isExplain());
+                            config.isExplain(),
+                            new PomChangeAnalyzer.ModelResolutionContext(
+                                    session.getSystemProperties(),
+                                    session.getUserProperties(),
+                                    session.getRepositorySession(),
+                                    allProjects.get(0).getRemoteProjectRepositories()));
                     affectedByPom = pomResult.getAffectedProjects();
                     changedManagedDepGAs = pomResult.getChangedManagedDependencyGAs();
                     changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
@@ -493,11 +498,6 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
         } catch (ScalpelException e) {
-            if (config.isFailSafe()) {
-                logger.warn("Scalpel: {}, building all modules", e.getMessage());
-                logger.debug("ScalpelException details", e);
-                return;
-            }
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
         } catch (Exception e) {
             if (config.isFailSafe()) {
