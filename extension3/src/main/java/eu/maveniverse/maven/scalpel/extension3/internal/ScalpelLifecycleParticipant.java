@@ -1260,6 +1260,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             List<String> lines = new ArrayList<>();
             for (MavenProject project : affectedModules) {
                 String relPath = relativePath(reactorRoot, project);
+                if (relPath.isEmpty()) {
+                    // The reactor root's relative path is the empty string; represent it as
+                    // "." so an affected root stays visible to CI consumers instead of
+                    // disappearing as a blank (or skipped) line (#84).
+                    relPath = ".";
+                }
                 if (!isSafeImpactedLogPath(relPath)) {
                     // The log is one path per line, consumed by CI shell scripts ($(cat ...),
                     // xargs); a module directory name is PR-author-controlled, so a path outside

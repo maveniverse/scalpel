@@ -184,8 +184,10 @@ are not restricted to a safe character set. Keep them quoted end-to-end when fee
 commands:
 
 ```bash
-# Safe: jq emits one path per line; consume it with a quoted read loop
-jq -r '.affectedModules[].path' target/scalpel-report.json |
+# Safe: filter to the same character set as the impacted log, then a quoted read loop.
+# The filter matters: jq -r emits embedded newlines raw, so without it a path value
+# containing a newline would be split into two entries by the read loop.
+jq -r '.affectedModules[].path | select(test("^[A-Za-z0-9._/-]+$"))' target/scalpel-report.json |
   while IFS= read -r module; do build_module "$module"; done
 ```
 
