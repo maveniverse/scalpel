@@ -18,6 +18,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -1736,6 +1737,38 @@ class PomChangeAnalyzerTest {
                 analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.isEmpty(), "Unmatched POM path should not affect any module");
+    }
+
+    @Test
+    void analyzeChanges_unmatchedPomCollectedInResult() throws Exception {
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+
+        Set<String> changedPoms = new LinkedHashSet<>();
+        changedPoms.add("nonexistent/pom.xml");
+        changedPoms.add("also-missing/pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertEquals(
+                List.of("nonexistent/pom.xml", "also-missing/pom.xml"),
+                result.getUnmatchedPomPaths(),
+                "Unmatched changed POM paths should be exposed on the Result");
+        assertTrue(result.getAffectedProjects().isEmpty(), "Unmatched POM paths should not affect any module");
+    }
+
+    @Test
+    void analyzeChanges_matchedPomsLeaveUnmatchedListEmpty() throws Exception {
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+
+        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(result.getUnmatchedPomPaths().isEmpty(), "All changed POMs matched a reactor project");
     }
 
     // --- Import-scope BOM detection tests ---

@@ -498,6 +498,31 @@ class ScalpelReportTest {
     }
 
     @Test
+    void toJson_unmatchedPomPathsIncludedWhenSet() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("gated-module/pom.xml"))
+                .unmatchedPomPaths(List.of("gated-module/pom.xml"))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"unmatchedPomPaths\": [\"gated-module/pom.xml\"]"));
+    }
+
+    @Test
+    void toJson_unmatchedPomPathsOmittedWhenEmpty() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/pom.xml"))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("unmatchedPomPaths"));
+    }
+
+    @Test
     void jsonSchema_isOnClasspath() throws IOException {
         try (InputStream is =
                 getClass().getResourceAsStream("/eu/maveniverse/maven/scalpel/core/scalpel-report-v2.schema.json")) {

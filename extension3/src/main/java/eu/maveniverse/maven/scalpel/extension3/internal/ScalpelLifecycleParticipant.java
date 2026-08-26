@@ -129,6 +129,15 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // Detect changes
             ChangeDetectionResult result = scalpelCore.detectChanges(reactorRoot, config, allPomPaths);
             if (result == null) {
+                if (config.isModeReport()) {
+                    String skipReason = scalpelCore.getLastDetectionSkipReason();
+                    if (skipReason != null) {
+                        writeStatusReport(config, reactorRoot, "skipped", skipReason);
+                    } else {
+                        writeStatusReport(
+                                config, reactorRoot, "failed", "change detection did not run (see build log)");
+                    }
+                }
                 return;
             }
 
@@ -137,6 +146,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 if (config.isBuildAllIfNoChanges()) {
                     logger.info("Scalpel: No changes detected, building all modules (buildAllIfNoChanges=true)");
                 }
+                if (config.isModeReport()) {
+                    writeStatusReport(config, reactorRoot, "skipped", "no changes detected");
+                }
                 return;
             }
 
@@ -144,6 +156,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Check disable triggers (bail out entirely if any changed file matches)
             if (matchesDisableTrigger(changedFiles, config)) {
+                if (config.isModeReport()) {
+                    writeStatusReport(config, reactorRoot, "skipped", "disabled by disableTriggers match");
+                }
                 return;
             }
 
@@ -151,6 +166,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             changedFiles = filterExcludedPaths(changedFiles, config);
             if (changedFiles.isEmpty()) {
                 logger.info("Scalpel: All changed files excluded by path filters, building all modules");
+                if (config.isModeReport()) {
+                    writeStatusReport(config, reactorRoot, "skipped", "all changed files excluded by path filters");
+                }
                 return;
             }
 
@@ -195,6 +213,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedPluginGAs = new LinkedHashSet<>();
             Set<String> changedProperties = new LinkedHashSet<>();
             Map<MavenProject, Set<String>> pomEvidence = Map.of();
+            Set<String> unmatchedPomPaths = new LinkedHashSet<>();
             if (!pomChanges.isEmpty()) {
                 logger.debug("POM changes detected: {}", pomChanges);
                 try {
@@ -210,10 +229,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     changedManagedPluginGAs = pomResult.getChangedManagedPluginGAs();
                     changedProperties = pomResult.getChangedProperties();
                     pomEvidence = pomResult.getEvidence();
+                    unmatchedPomPaths.addAll(pomResult.getUnmatchedPomPaths());
                 } catch (Exception e) {
                     if (config.isFailSafe()) {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
                         logger.debug("POM analysis error details", e);
+                        if (config.isModeReport()) {
+                            writeFailedStatusReport(config, reactorRoot, "error analyzing POM changes");
+                        }
                         return;
                     } else {
                         throw new MavenExecutionException("Scalpel: Error analyzing POM changes", e);
@@ -384,6 +407,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         reactorRoot,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
+                                .unmatchedPomPaths(unmatchedPomPaths)
                                 .directlyAffected(directlyAffected)
                                 .affectedBySource(affectedBySource)
                                 .testOnlyBySource(sourceResult.getTestOnlyAffected())
@@ -448,11 +472,19 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
         } catch (ScalpelException e) {
+            if (config.isFailSafe()) {
+                logger.warn("Scalpel: {}, building all modules", e.getMessage());
+                logger.debug("ScalpelException details", e);
+                return;
+            }
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
         } catch (Exception e) {
             if (config.isFailSafe()) {
                 logger.warn("Scalpel: Unexpected error, building all modules: {}", e.getMessage());
                 logger.debug("Unexpected error details", e);
+                if (config.isModeReport()) {
+                    writeFailedStatusReport(config, reactorRoot, "unexpected error: " + e.getMessage());
+                }
                 return;
             }
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
@@ -979,7 +1011,56 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Files.write(logPath, lines, StandardCharsets.UTF_8);
             logger.info("Scalpel: Impacted modules written to {}", config.getImpactedLog());
         } catch (IOException e) {
-            throw new MavenExecutionException("Scalpel: Failed to write impacted log", e);
+            handleWriteFailure(config, "Failed to write impacted log", e);
+        }
+    }
+
+    /**
+     * Honours failSafe on report/log write failures: with failSafe=true the build continues with a
+     * warning, otherwise the write failure fails the build as before.
+     */
+    private void handleWriteFailure(ScalpelConfiguration config, String message, IOException e)
+            throws MavenExecutionException {
+        if (config.isFailSafe()) {
+            logger.warn("Scalpel: {} (failSafe=true, continuing build): {}", message, e.toString());
+        } else {
+            throw new MavenExecutionException("Scalpel: " + message, e);
+        }
+    }
+
+    /**
+     * Overwrites the configured reportFile with a minimal failed-status document so a previous
+     * run's report cannot be mistaken for current results by CI. Only called on failSafe bail-out
+     * paths; write failures here are logged and swallowed (the build continues by design).
+     */
+    private void writeFailedStatusReport(ScalpelConfiguration config, Path reactorRoot, String reason) {
+        writeStatusReport(config, reactorRoot, "failed", reason);
+    }
+
+    /**
+     * Overwrites the configured reportFile with a minimal status-only document ("failed" for
+     * bail-outs, "skipped" for deliberate non-analysis paths) so a previous run's report cannot
+     * be mistaken for current results by CI. Write failures are logged and swallowed (the build
+     * continues by design).
+     */
+    private void writeStatusReport(ScalpelConfiguration config, Path reactorRoot, String status, String reason) {
+        String baseBranch = config.getBaseBranch();
+        try {
+            ScalpelReport report = ScalpelReport.builder()
+                    .baseBranch(baseBranch != null ? baseBranch : "(unconfigured)")
+                    .status(status)
+                    .reason(reason)
+                    .fullBuildTriggered(true)
+                    .build();
+            report.writeToFile(reactorRoot, config.getReportFile());
+            logger.warn(
+                    "Scalpel: Analysis did not complete (status={}, reason={}), report at {} overwritten",
+                    status,
+                    reason,
+                    config.getReportFile());
+        } catch (Exception e) {
+            // Status reports must never fail the build; that is their entire job.
+            logger.warn("Scalpel: Could not overwrite report with {} status: {}", status, e.toString());
         }
     }
 
@@ -996,7 +1077,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.info("Scalpel: Report written to {}", config.getReportFile());
         } catch (IOException e) {
-            throw new MavenExecutionException("Scalpel: Failed to write report", e);
+            handleWriteFailure(config, "Failed to write report", e);
         }
     }
 
@@ -1008,7 +1089,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 .changedFiles(ctx.changedFiles)
                 .changedProperties(ctx.changedProperties)
                 .changedManagedDependencies(ctx.changedManagedDepGAs)
-                .changedManagedPlugins(ctx.changedManagedPluginGAs);
+                .changedManagedPlugins(ctx.changedManagedPluginGAs)
+                .unmatchedPomPaths(ctx.unmatchedPomPaths);
 
         logger.debug(
                 "Building report: {} directly affected, {} transitively affected, trim result has {} upstream / {} downstream / {} downstream-test",
@@ -1028,7 +1110,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.info("Scalpel: Report written to {}", config.getReportFile());
         } catch (IOException e) {
-            throw new MavenExecutionException("Scalpel: Failed to write report", e);
+            handleWriteFailure(config, "Failed to write report", e);
         }
     }
 

@@ -1,0 +1,82 @@
+name-template: 'Scalpel $RESOLVED_VERSION'
+tag-template: '$RESOLVED_VERSION'
+
+categories:
+  - title: '🐛 Bug Fixes'
+    labels:
+      - 'bug'
+  - title: '🚀 Enhancements'
+    labels:
+      - 'enhancement'
+  - title: '📖 Documentation'
+    labels:
+      - 'documentation'
+  - title: '🧰 Maintenance'
+    labels:
+      - 'maintenance'
+      - 'dependencies'
+      - 'github_actions'
+      - 'java'
+
+autolabeler:
+  - label: 'bug'
+    branch:
+      - '/fix\/.+/'
+    title:
+      - '/fix/i'
+  - label: 'enhancement'
+    branch:
+      - '/feature\/.+/'
+  - label: 'documentation'
+    files:
+      - '*.md'
+      - 'docs/**'
+  - label: 'maintenance'
+    branch:
+      - '/chore\/.+/'
+      - '/quick-fix\/.+/'
+    title:
+      - '/chore/i'
+  - label: 'github_actions'
+    files:
+      - '.github/workflows/**'
+      - '.github/**/*.yml'
+  - label: 'java'
+    files:
+      - '**/*.java'
+      - 'pom.xml'
+      - '**/pom.xml'
+
+exclude-labels:
+  - 'duplicate'
+  - 'invalid'
+  - 'wontfix'
+  - 'question'
+
+change-template: '- $TITLE (#$NUMBER) @$AUTHOR'
+change-title-escapes: '\<*_&'
+
+version-resolver:
+  major:
+    labels:
+      - 'major'
+  minor:
+    labels:
+      - 'minor'
+      - 'enhancement'
+  patch:
+    labels:
+      - 'bug'
+      - 'maintenance'
+      - 'dependencies'
+      - 'github_actions'
+      - 'java'
+      - 'documentation'
+  default: patch
+
+template: |
+  ## What's Changed
+
+  $CHANGES
+
+  **Full Changelog**: https://github.com/$OWNER/$REPOSITORY/compare/$PREVIOUS_TAG...$RESOLVED_VERSION

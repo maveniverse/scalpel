@@ -58,13 +58,14 @@ class PomChangeAnalyzer {
         private final Set<String> changedManagedPluginGAs;
         private final Set<String> changedProperties;
         private final Map<MavenProject, Set<String>> evidence;
+        private final List<String> unmatchedPomPaths;
 
         Result(
                 Set<MavenProject> affectedProjects,
                 Set<String> changedManagedDependencyGAs,
                 Set<String> changedManagedPluginGAs,
                 Set<String> changedProperties) {
-            this(affectedProjects, changedManagedDependencyGAs, changedManagedPluginGAs, changedProperties, Map.of());
+            this(affectedProjects, changedManagedDependencyGAs, changedManagedPluginGAs, changedProperties, Map.of(), List.of());
         }
 
         Result(
@@ -72,12 +73,14 @@ class PomChangeAnalyzer {
                 Set<String> changedManagedDependencyGAs,
                 Set<String> changedManagedPluginGAs,
                 Set<String> changedProperties,
-                Map<MavenProject, Set<String>> evidence) {
+                Map<MavenProject, Set<String>> evidence,
+                List<String> unmatchedPomPaths) {
             this.affectedProjects = affectedProjects;
             this.changedManagedDependencyGAs = changedManagedDependencyGAs;
             this.changedManagedPluginGAs = changedManagedPluginGAs;
             this.changedProperties = changedProperties;
             this.evidence = evidence;
+            this.unmatchedPomPaths = unmatchedPomPaths;
         }
 
         Set<MavenProject> getAffectedProjects() {
@@ -102,6 +105,10 @@ class PomChangeAnalyzer {
          */
         Map<MavenProject, Set<String>> getEvidence() {
             return evidence;
+        }
+
+        List<String> getUnmatchedPomPaths() {
+            return unmatchedPomPaths;
         }
     }
 
@@ -150,6 +157,7 @@ class PomChangeAnalyzer {
         Set<String> allChangedManagedDepGAs = new LinkedHashSet<>();
         Set<String> allChangedManagedPluginGAs = new LinkedHashSet<>();
         Set<String> allChangedProperties = new LinkedHashSet<>();
+        List<String> unmatchedPomPaths = new ArrayList<>();
 
         // Build a map of relative POM path -> MavenProject
         Map<String, MavenProject> projectByPomPath = new LinkedHashMap<>();
@@ -168,6 +176,7 @@ class PomChangeAnalyzer {
         for (String changedPomPath : changedPomPaths) {
             MavenProject project = projectByPomPath.get(changedPomPath);
             if (project == null) {
+                unmatchedPomPaths.add(changedPomPath);
                 logger.debug("Changed POM {} does not match any reactor project, skipping", changedPomPath);
                 continue;
             }
@@ -233,6 +242,13 @@ class PomChangeAnalyzer {
             }
         }
 
+        if (!unmatchedPomPaths.isEmpty()) {
+            logger.warn(
+                    "Scalpel: {} changed POM(s) match no reactor project (profile-gated, excluded by -pl, "
+                            + "or module removed); their changes are ignored: {}",
+                    unmatchedPomPaths.size(),
+                    unmatchedPomPaths);
+        }
         logger.debug(
                 "POM change analysis complete: {} affected modules, changedProperties={}, changedManagedDeps={}, changedManagedPlugins={}",
                 affected.size(),
@@ -240,7 +256,7 @@ class PomChangeAnalyzer {
                 allChangedManagedDepGAs,
                 allChangedManagedPluginGAs);
         return new Result(
-                affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties, evidence);
+                affected, allChangedManagedDepGAs, allChangedManagedPluginGAs, allChangedProperties, evidence, unmatchedPomPaths);
     }
 
     private static void addEvidence(Map<MavenProject, Set<String>> evidence, MavenProject project, String item) {

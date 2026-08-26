@@ -21,6 +21,7 @@ import static org.mockito.Mockito.when;
 
 import eu.maveniverse.maven.scalpel.core.ChangeDetectionResult;
 import eu.maveniverse.maven.scalpel.core.ScalpelCore;
+import eu.maveniverse.maven.scalpel.core.ScalpelException;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
@@ -2490,6 +2491,111 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(json.contains("\"fullBuildTriggered\": true"), "Full build should be triggered");
     }
 
+    /**
+     * Issue #89: with scalpel.failSafe=true, an unwritable reportFile must not fail the build.
+     * "target" is created as a regular file so that target/scalpel-report.json cannot be written.
+     */
+    @Test
+    void reportMode_failSafeTrue_unwritableReportFile_doesNotThrow() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "true");
+        // Make the report location unwritable: "target" exists as a regular file
+        Files.write(root.resolve("target"), new byte[0]);
+
+        participant.afterProjectsRead(session);
+    }
+
+    @Test
+    void reportMode_failSafeFalse_unwritableReportFile_throws() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "false");
+        Files.write(root.resolve("target"), new byte[0]);
+
+        assertThrows(org.apache.maven.MavenExecutionException.class, () -> participant.afterProjectsRead(session));
+    }
+
+    /**
+     * Issue #89: when analysis bails out (detectChanges returns null under failSafe), a previous
+     * run's report must be overwritten with a failed-status document, not left stale for CI.
+     */
+    @Test
+    void reportMode_failSafeBailout_overwritesStaleReport() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        // Stale report from a previous successful run
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        Files.createDirectories(reportFile.getParent());
+        Files.write(reportFile, "STALE-REPORT".getBytes(StandardCharsets.UTF_8));
+
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "true");
+
+        participant.afterProjectsRead(session);
+
+        assertTrue(Files.exists(reportFile), "Report file should still exist (overwritten, not deleted)");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"failed\""), "Overwritten report should carry failed status");
+        assertFalse(json.contains("STALE-REPORT"), "Stale content must not survive the bail-out");
+    }
+
     @Test
     void reportMode_nullDetectionResultSkipsProcessing() throws Exception {
         Path root = tempDir.resolve("project");
@@ -2515,9 +2621,212 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        // No report should be written when detection returns null
+        // Analysis bailed out: a failed-status report must be written so no stale data survives
         Path reportFile = root.resolve("target/scalpel-report.json");
-        assertFalse(Files.exists(reportFile), "Report file should not be created when detection returns null");
+        assertTrue(Files.exists(reportFile), "Failed-status report should be written when detection returns null");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"failed\""), "Report should carry failed status");
+        assertFalse(modulePresent(json, "module-a"), "No module analysis should be present");
+    }
+
+    /**
+     * Issue #89: with no changes detected, the stale report from a previous run must be
+     * overwritten with a skipped-status document, not left in place for CI.
+     */
+    @Test
+    void reportMode_noChanges_overwritesStaleReportWithSkippedStatus() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        Files.createDirectories(reportFile.getParent());
+        Files.write(reportFile, "STALE-REPORT".getBytes(StandardCharsets.UTF_8));
+
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(new LinkedHashSet<>(), new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        assertTrue(Files.exists(reportFile), "Report file should still exist (overwritten, not deleted)");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Overwritten report should carry skipped status");
+        assertTrue(json.contains("no changes detected"), "Overwritten report should carry accurate reason");
+        assertFalse(json.contains("STALE-REPORT"), "Stale content must not survive the bail-out");
+    }
+
+    /**
+     * Issue #89: when every changed file is excluded by path filters, the stale report from a
+     * previous run must be overwritten with a skipped-status document, not left in place for CI.
+     */
+    @Test
+    void reportMode_allPathsExcluded_overwritesStaleReportWithSkippedStatus() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        Files.createDirectories(reportFile.getParent());
+        Files.write(reportFile, "STALE-REPORT".getBytes(StandardCharsets.UTF_8));
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("docs/guide.md");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.excludePaths", "docs/**");
+
+        participant.afterProjectsRead(session);
+
+        assertTrue(Files.exists(reportFile), "Report file should still exist (overwritten, not deleted)");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Overwritten report should carry skipped status");
+        assertTrue(
+                json.contains("all changed files excluded by path filters"),
+                "Overwritten report should carry accurate reason");
+        assertFalse(json.contains("STALE-REPORT"), "Stale content must not survive the bail-out");
+    }
+
+    /**
+     * Issue #89: when detection was deliberately disabled (disableOnBranch/disableOnBaseBranch),
+     * the status document must say skipped with that reason, not failed.
+     */
+    @Test
+    void reportMode_disabledByBranch_writesSkippedStatus() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.getLastDetectionSkipReason()).thenReturn("disabled by disableOnBranch");
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Status report should be written when detection is disabled");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Deliberate disable should be reported as skipped");
+        assertTrue(json.contains("disabled by disableOnBranch"), "Reason should name the disabling config");
+        assertFalse(json.contains("\"status\": \"failed\""), "Deliberate disable must not be labelled failed");
+    }
+
+    /**
+     * Review #137: baseBranch may be null (no explicit config, no CI environment) when detection
+     * bails out; the status report must still be written with a placeholder instead of crashing
+     * the build with IllegalStateException from the report builder.
+     */
+    @Test
+    void reportMode_failSafeBailout_nullBaseBranch_writesStatusReportWithPlaceholder() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.getLastDetectionSkipReason()).thenReturn("no base branch configured");
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().remove("scalpel.baseBranch");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "true");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Status report must be written even without a base branch");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Bail-out with skip reason should be reported as skipped");
+        assertTrue(
+                json.contains("no base branch configured"), "Overwritten report should carry the actual skip reason");
+        assertTrue(json.contains("(unconfigured)"), "Placeholder base branch should be recorded");
+    }
+
+    /**
+     * Review #137: "not a git repository" is a skip (detection deliberately did not run), not a
+     * failure; the status document must say skipped with that reason.
+     */
+    @Test
+    void reportMode_notAGitRepository_writesSkippedStatusWithReason() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.getLastDetectionSkipReason()).thenReturn("not a git repository");
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Status report should be written when detection skips");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\": \"skipped\""), "Not-a-git-repo should be reported as skipped");
+        assertTrue(json.contains("not a git repository"), "Reason should name the skip condition");
+        assertFalse(json.contains("\"status\": \"failed\""), "Skip condition must not be labelled failed");
     }
 
     @Test
@@ -2717,6 +3026,70 @@ class ScalpelLifecycleParticipantTest {
         // failSafe=true → should not throw, just return (build all)
         Path reportFile = root.resolve("target/scalpel-report.json");
         assertFalse(Files.exists(reportFile));
+    }
+
+    @Test
+    void scalpelException_failSafeTrue_buildsAll() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        // ScalpelCore throws ScalpelException (e.g. merge-base unavailable with failSafe=false in core,
+        // but the lifecycle participant should still respect its own failSafe check)
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenThrow(new ScalpelException("Could not find merge base between origin/main and HEAD"));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "true");
+
+        // Should not throw — failSafe=true should catch ScalpelException gracefully
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertFalse(Files.exists(reportFile));
+    }
+
+    @Test
+    void scalpelException_failSafeDisabled_throws() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenThrow(new ScalpelException("Could not find merge base between origin/main and HEAD"));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "false");
+
+        // Should throw MavenExecutionException when failSafe is disabled
+        assertThrows(
+                MavenExecutionException.class,
+                () -> participant.afterProjectsRead(session),
+                "Should throw MavenExecutionException when ScalpelException occurs with failSafe disabled");
     }
 
     @Test

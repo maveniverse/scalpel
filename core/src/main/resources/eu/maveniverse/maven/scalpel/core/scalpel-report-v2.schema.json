@@ -59,6 +59,11 @@
       "items": { "type": "string" },
       "description": "Coordinates (groupId:artifactId) of managed plugins whose version or configuration changed in the root POM."
     },
+    "unmatchedPomPaths": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Optional. Git-relative paths of changed POMs that match no reactor project (profile-gated modules or modules excluded via -pl). Their changes are ignored by Scalpel. Present only when non-empty."
+    },
     "excludedUpstreamCount": {
       "type": "integer",
       "minimum": 0,
@@ -68,6 +73,15 @@
       "type": "array",
       "items": { "$ref": "#/$defs/affectedModule" },
       "description": "Modules affected by the changeset, with reasons and optional metadata."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["failed", "skipped"],
+      "description": "Present only on status-only documents written when analysis did not complete: 'failed' for error/failSafe bail-outs, 'skipped' for deliberate non-analysis paths (e.g. no changes detected, disabled by disableOnBranch/disableOnBaseBranch/disableTriggers, or all changed files excluded by path filters)."
+    },
+    "reason": {
+      "type": "string",
+      "description": "Human-readable explanation accompanying an optional status field (e.g. 'no changes detected')."
     }
   },
   "$defs": {

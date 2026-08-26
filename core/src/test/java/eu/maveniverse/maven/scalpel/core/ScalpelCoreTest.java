@@ -273,6 +273,66 @@ class ScalpelCoreTest {
         }
     }
 
+    /**
+     * Detector whose findMergeBase returns null (simulating graceful degradation
+     * when the merge-base is unreachable, e.g. shallow clone).
+     */
+    private static final GitChangeDetector MERGE_BASE_NULL_DETECTOR = new GitChangeDetector() {
+        @Override
+        public ObjectId findMergeBase(Repository repository, String baseBranch, String head) {
+            return null;
+        }
+    };
+
+    @Test
+    void detectChanges_mergeBaseUnavailable_failSafe_returnsNull() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            Files.write(tempDir.resolve("new.txt"), "world".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("new.txt").call();
+            git.commit().setMessage("change").call();
+
+            ScalpelCore core = new ScalpelCore(MERGE_BASE_NULL_DETECTOR);
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            sys.setProperty("scalpel.failSafe", "true");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
+
+            assertNull(result, "failSafe should return null (build all) when merge-base is unavailable");
+        }
+    }
+
+    @Test
+    void detectChanges_mergeBaseUnavailable_failSafeDisabled_throwsScalpelException() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            Files.write(tempDir.resolve("new.txt"), "world".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("new.txt").call();
+            git.commit().setMessage("change").call();
+
+            ScalpelCore core = new ScalpelCore(MERGE_BASE_NULL_DETECTOR);
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            sys.setProperty("scalpel.failSafe", "false");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            assertThrows(
+                    ScalpelException.class,
+                    () -> core.detectChanges(tempDir, config, Set.of()),
+                    "Should throw when merge-base is unavailable and failSafe is disabled");
+        }
+    }
+
     private static final GitChangeDetector THROWING_DETECTOR = new GitChangeDetector() {
         @Override
         public ObjectId findMergeBase(Repository repository, String baseBranch, String head) {
