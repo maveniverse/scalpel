@@ -30,7 +30,7 @@ Three lines explain that:
   guess and lets the build proceed unchanged.
 
 Also check for unknown-key warnings such as
-`Unknown configuration key 'scalpel.fullBuildTrigger'. Did you mean 'scalpel.fullBuildTriggers'?`
+`Scalpel: Unknown configuration key 'scalpel.fullBuildTrigger'. Did you mean 'scalpel.fullBuildTriggers'?`
 (WARN). A typo'd property name is ignored otherwise; this warning is how you catch it.
 
 ## Why did Scalpel build everything?
@@ -218,8 +218,8 @@ put it in the build set (`Scalpel explain: BUILD com.example:module-b because: .
 Two places give a per-module answer:
 
 * The JSON report (`target/scalpel-report.json` by default): a module that was left out of the
-  build appears in `skippedModules` with `"reason": "NOT_AFFECTED"`. The report is written in
-  `trim` and `report` modes; `skip-tests` mode does not write one.
+  build appears in `skippedModules` with `"reason": "NOT_AFFECTED"`. The report is written only
+  in `report` mode; `trim` and `skip-tests` modes do not write one.
 * Explain mode: `mvn verify -Dscalpel.explain=true` logs one line per reactor module:
   `Scalpel explain: SKIP com.example:module-c (not affected by changeset)`.
 
@@ -274,7 +274,7 @@ comparison outcome per module
 
 Note the flip side: when the old POM cannot be read or parsed, Scalpel is conservative and
 marks the module and all its dependents as affected (`Cannot parse old POM for
-com.example:parent, marking all dependents as affected`). That is a deliberate
+com.example:parent, marking all dependents as affected: <error>`). That is a deliberate
 over-approximation, not evidence that your change was meaningful.
 
 ### The upstream change was test-only
@@ -346,8 +346,8 @@ report as the `evidence` array.
 
 ### The JSON report
 
-Written to `target/scalpel-report.json` (configurable via `scalpel.reportFile`) in `trim` and
-`report` modes. Fields that answer the two questions:
+Written to `target/scalpel-report.json` (configurable via `scalpel.reportFile`) only in
+`report` mode. Fields that answer the two questions:
 
 | Field | Answers |
 |-------|---------|
