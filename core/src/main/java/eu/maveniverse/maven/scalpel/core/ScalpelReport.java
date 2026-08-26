@@ -50,6 +50,8 @@ public final class ScalpelReport {
     public static final String CATEGORY_TRANSITIVE = "TRANSITIVE";
 
     private final String baseBranch;
+    private final String status;
+    private final String reason;
     private final boolean fullBuildTriggered;
     private final String triggerFile;
     private final List<String> changedFiles;
@@ -61,6 +63,8 @@ public final class ScalpelReport {
 
     private ScalpelReport(
             String baseBranch,
+            String status,
+            String reason,
             boolean fullBuildTriggered,
             String triggerFile,
             List<String> changedFiles,
@@ -70,6 +74,8 @@ public final class ScalpelReport {
             List<AffectedModule> affectedModules,
             int excludedUpstreamCount) {
         this.baseBranch = baseBranch;
+        this.status = status;
+        this.reason = reason;
         this.fullBuildTriggered = fullBuildTriggered;
         this.triggerFile = triggerFile;
         this.changedFiles = changedFiles;
@@ -205,6 +211,12 @@ public final class ScalpelReport {
                 .append(jsonString(Version.version()))
                 .append(",\n");
         sb.append("  \"baseBranch\": ").append(jsonString(baseBranch)).append(",\n");
+        if (status != null) {
+            sb.append("  \"status\": ").append(jsonString(status)).append(",\n");
+        }
+        if (reason != null) {
+            sb.append("  \"reason\": ").append(jsonString(reason)).append(",\n");
+        }
         sb.append("  \"fullBuildTriggered\": ").append(fullBuildTriggered).append(",\n");
         sb.append("  \"triggerFile\": ").append(jsonString(triggerFile)).append(",\n");
         sb.append("  \"changedFiles\": ").append(jsonStringArray(changedFiles)).append(",\n");
@@ -322,6 +334,8 @@ public final class ScalpelReport {
 
     public static class Builder {
         private String baseBranch;
+        private String status;
+        private String reason;
         private boolean fullBuildTriggered;
         private String triggerFile;
         private final List<String> changedFiles = new ArrayList<>();
@@ -333,6 +347,16 @@ public final class ScalpelReport {
 
         public Builder baseBranch(String baseBranch) {
             this.baseBranch = baseBranch;
+            return this;
+        }
+
+        public Builder status(String status) {
+            this.status = status;
+            return this;
+        }
+
+        public Builder reason(String reason) {
+            this.reason = reason;
             return this;
         }
 
@@ -382,6 +406,8 @@ public final class ScalpelReport {
             }
             return new ScalpelReport(
                     baseBranch,
+                    status,
+                    reason,
                     fullBuildTriggered,
                     triggerFile,
                     changedFiles,
