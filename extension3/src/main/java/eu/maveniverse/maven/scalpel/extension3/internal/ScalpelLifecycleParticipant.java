@@ -634,6 +634,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         logger.debug(
                 "Computing transitively affected modules: comparing old vs new dependency trees for {} non-direct modules",
                 allProjects.size() - directlyAffected.size());
+        // First pass: compare effective models and dependency trees directly
         for (MavenProject project : allProjects) {
             if (directlyAffected.contains(project)) {
                 continue;
@@ -651,6 +652,53 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 transitivelyAffected.put(project, match.reasons);
                 if (explain) {
                     transitiveEvidence.put(project, match.evidence);
+                }
+            }
+        }
+
+        // Second pass: propagate through reactor dependencies.
+        // When resolving "old" dependency trees, Maven's reactor always provides the current
+        // (new) version of reactor siblings.  So a module whose POM didn't change but depends
+        // on an affected reactor module will have identical old/new trees — the first pass
+        // misses it.  Fix: if a module's dependency tree contains the GA of any affected
+        // reactor module, it is transitively affected because rebuilding that upstream module
+        // will change its output artifacts.
+        Set<String> affectedGAs = new LinkedHashSet<>();
+        for (MavenProject p : directlyAffected) {
+            affectedGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+        }
+        for (MavenProject p : transitivelyAffected.keySet()) {
+            affectedGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+        }
+        boolean propagated = true;
+        while (propagated) {
+            propagated = false;
+            for (MavenProject project : allProjects) {
+                if (directlyAffected.contains(project) || transitivelyAffected.containsKey(project)) {
+                    continue;
+                }
+                DependencyResolutionResult depResult = resolveProjectDependencies(project, session, collectCache);
+                if (depResult == null || depResult.getDependencyGraph() == null) {
+                    continue;
+                }
+                Map<String, String> depScopes = collectDependencyScopes(depResult.getDependencyGraph());
+                for (Map.Entry<String, String> dep : depScopes.entrySet()) {
+                    if (affectedGAs.contains(dep.getKey())) {
+                        List<String> reasons = new ArrayList<>();
+                        if ("test".equals(dep.getValue())) {
+                            reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
+                        } else {
+                            reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
+                        }
+                        transitivelyAffected.put(project, reasons);
+                        affectedGAs.add(project.getGroupId() + ":" + project.getArtifactId());
+                        if (explain) {
+                            transitiveEvidence.put(
+                                    project, List.of("depends on affected reactor module " + dep.getKey()));
+                        }
+                        propagated = true;
+                        break;
+                    }
                 }
             }
         }
