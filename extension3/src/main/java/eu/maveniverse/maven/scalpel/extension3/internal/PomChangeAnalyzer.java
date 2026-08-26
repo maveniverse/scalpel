@@ -839,8 +839,11 @@ class PomChangeAnalyzer {
         }
 
         for (Map.Entry<String, String> e : oldVersions.entrySet()) {
-            String newVersion = newVersions.get(e.getKey());
-            if (newVersion == null || !Objects.equals(e.getValue(), newVersion)) {
+            if (!newVersions.containsKey(e.getKey())) {
+                // Plugin removed in new model
+                changed.add(e.getKey());
+            } else if (!Objects.equals(e.getValue(), newVersions.get(e.getKey()))) {
+                // Version changed (including null → non-null or vice versa)
                 changed.add(e.getKey());
             }
         }
