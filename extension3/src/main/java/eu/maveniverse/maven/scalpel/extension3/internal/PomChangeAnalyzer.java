@@ -421,6 +421,8 @@ class PomChangeAnalyzer {
         // computeTransitivelyAffected — even if no direct child uses a managed dep,
         // it could be pulled in transitively by an external dependency.
         // Only report modifications/removals, not brand-new entries (issue #131).
+        // Note: child-level impact uses effective dependency comparison (hasEffectiveChanges)
+        // rather than GA matching against these sets — see the child analysis loop below.
         Set<String> changedManagedDeps =
                 diffDependencies(getManagedDependencies(oldEffectiveModel), getManagedDependencies(newEffectiveModel));
         Set<String> changedManagedPlugins =
@@ -446,22 +448,22 @@ class PomChangeAnalyzer {
             }
         }
 
-        if (changedProperties.isEmpty() && changedManagedDeps.isEmpty() && changedManagedPlugins.isEmpty()) {
-            logger.debug("No inherited changes in {}", key(parentProject));
-            return;
+        if (!changedProperties.isEmpty() || !changedManagedDeps.isEmpty() || !changedManagedPlugins.isEmpty()) {
+            logger.debug(
+                    "Parent {} has inherited changes: properties={}, managedDeps={}, managedPlugins={}",
+                    key(parentProject),
+                    changedProperties,
+                    changedManagedDeps,
+                    changedManagedPlugins);
         }
-
-        logger.debug(
-                "Parent {} has inherited changes: properties={}, managedDeps={}, managedPlugins={}",
-                key(parentProject),
-                changedProperties,
-                changedManagedDeps,
-                changedManagedPlugins);
 
         Path absReactorRoot = ctx.reactorRoot.toAbsolutePath().normalize();
 
-        // Check each dependent (child or BOM importer) for impact from changed
-        // managed deps, managed plugins, properties, and filtered resources.
+        // Check each dependent (child or BOM importer) for impact.
+        // Primary detection: compare effective dependencies and plugins (the resolved
+        // dependency tree, not managed dependency declarations). This catches managed
+        // dep version changes that actually affect the module's build, without false
+        // positives from managed deps the module doesn't use (issue #131).
         for (MavenProject child : dependentProjects) {
             if (ctx.affected.contains(child)) {
                 continue;
@@ -469,12 +471,23 @@ class PomChangeAnalyzer {
 
             boolean childAffected = false;
 
-            // Check if child uses any changed managed dependency
-            if (!changedManagedDeps.isEmpty()) {
+            // PRIMARY: Compare effective dependencies and plugins (old vs new).
+            // The effective model has dependencyManagement versions injected into
+            // <dependencies>, so this detects managed version changes that flow
+            // into the module's actual dependency tree.
+            if (!childAffected) {
+                childAffected = hasEffectiveChanges(child, absReactorRoot, ctx);
+            }
+
+            // FALLBACK: GA matching for managed deps when effective models are
+            // incomplete (e.g. old model couldn't fully resolve parent/BOM hierarchy,
+            // or profile-activated managed deps weren't merged). The check only fires
+            // when effective dep comparison found nothing, providing a safety net.
+            if (!childAffected && !changedManagedDeps.isEmpty()) {
                 for (Dependency dep : child.getOriginalModel().getDependencies()) {
                     String ga = dep.getGroupId() + ":" + dep.getArtifactId();
                     if (changedManagedDeps.contains(ga)) {
-                        logger.debug("Child {} uses changed managed dependency {}", key(child), ga);
+                        logger.debug("Child {} uses changed managed dependency {} (GA fallback)", key(child), ga);
                         if (ctx.explain) {
                             addEvidence(ctx.evidence, child, "managed dep " + ga);
                         }
@@ -484,7 +497,11 @@ class PomChangeAnalyzer {
                 }
             }
 
-            // Check if child uses any changed managed plugin
+            // Managed plugin GA matching (fallback for processPlugins=false).
+            // Old effective models are built with processPlugins=false to avoid
+            // false diffs from lifecycle default injection, so pluginManagement
+            // is NOT applied to plugin declarations — effective plugin comparison
+            // alone cannot detect managed plugin version changes.
             if (!childAffected && !changedManagedPlugins.isEmpty()) {
                 Model childRawModel = child.getOriginalModel();
                 for (Plugin plugin : getPlugins(childRawModel)) {
@@ -498,14 +515,6 @@ class PomChangeAnalyzer {
                         break;
                     }
                 }
-            }
-
-            // Compare child's effective dependencies and plugins (old vs new).
-            // This catches property changes that flow into plugin configurations,
-            // dependency scopes, exclusions, or any other effective model difference
-            // not covered by the GA-level managed dep/plugin checks above.
-            if (!childAffected) {
-                childAffected = hasEffectiveChanges(child, absReactorRoot, ctx);
             }
 
             // Fallback: check if child POM text references any changed property.
@@ -628,14 +637,18 @@ class PomChangeAnalyzer {
     }
 
     /**
-     * Check if a child's effective plugins changed between old and new models.
-     * This catches property changes that flow into plugin configurations (source
-     * versions, execution phases, etc.) — changes not covered by GA-level matching.
+     * Check if a child's effective dependencies or plugins changed between old and new models.
+     * Compares the resolved dependency tree (effective dependencies) rather than managed
+     * dependency declarations — a module is only affected if its actual build inputs change,
+     * not merely because an unused managed dependency was added or modified (issue #131).
      * <p>
-     * Only plugins are compared here, not dependencies. Dependency changes from
-     * properties are covered by the GA matching + property text search fallback,
-     * and effective dep comparison would conflict with issue #131 (brand-new managed
-     * deps resolving for the first time look like version changes: null → version).
+     * dependencyManagement versions ARE injected into dependencies during model building
+     * (even with processPlugins=false), so the effective dependency comparison correctly
+     * detects managed version changes that flow into the module's actual dependency tree.
+     * <p>
+     * Plugin comparison uses the existing diff (modifications/removals only) because old
+     * effective models are built with processPlugins=false, preventing full plugin management
+     * resolution; managed plugin matching is handled separately in the caller as a fallback.
      */
     private boolean hasEffectiveChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
         Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
@@ -646,11 +659,34 @@ class PomChangeAnalyzer {
             return false;
         }
 
+        // Compare effective dependencies (the resolved dependency list, not managed deps).
+        // dependencyManagement versions are injected into <dependencies> during model
+        // building (even with processPlugins=false), so this catches managed dep version
+        // changes that affect the module's actual dependency tree.
+        Set<String> changedDeps =
+                diffEffectiveDependencies(oldChildEffective.getDependencies(), newChildEffective.getDependencies());
+        if (!changedDeps.isEmpty()) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Child {} has changed effective dependencies: {}", key(child), changedDeps);
+            }
+            if (ctx.explain) {
+                for (String ga : changedDeps) {
+                    addEvidence(ctx.evidence, child, "effective dep " + ga);
+                }
+            }
+            return true;
+        }
+
         Set<String> changedPlugins =
                 diffPlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
         if (!changedPlugins.isEmpty()) {
             if (logger.isDebugEnabled()) {
                 logger.debug("Child {} has changed effective plugins: {}", key(child), changedPlugins);
+            }
+            if (ctx.explain) {
+                for (String ga : changedPlugins) {
+                    addEvidence(ctx.evidence, child, "effective plugin " + ga);
+                }
             }
             return true;
         }
@@ -762,6 +798,39 @@ class PomChangeAnalyzer {
                 // Report at GA level: downstream module matching resolves dependencies by GA,
                 // so any change to a managed GA (regardless of classifier/type variant) should
                 // flag all modules depending on that GA.
+                changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Diff two dependency lists reporting all changes (additions, modifications, removals).
+     * Unlike {@link #diffDependencies} which only reports modifications/removals for managed
+     * dependency tracking, this reports every difference — appropriate for comparing effective
+     * dependency trees where any change (including new dependencies) indicates a build impact.
+     */
+    private Set<String> diffEffectiveDependencies(List<Dependency> oldDeps, List<Dependency> newDeps) {
+        Set<String> changed = new LinkedHashSet<>();
+        Map<String, Dependency> oldMap = new LinkedHashMap<>();
+        for (Dependency d : oldDeps) {
+            oldMap.put(dependencyKey(d), d);
+        }
+        Map<String, Dependency> newMap = new LinkedHashMap<>();
+        for (Dependency d : newDeps) {
+            newMap.put(dependencyKey(d), d);
+        }
+
+        // Modifications and removals
+        for (Map.Entry<String, Dependency> e : oldMap.entrySet()) {
+            Dependency newDep = newMap.get(e.getKey());
+            if (newDep == null || !equalDependency(e.getValue(), newDep)) {
+                changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
+            }
+        }
+        // Additions
+        for (Map.Entry<String, Dependency> e : newMap.entrySet()) {
+            if (!oldMap.containsKey(e.getKey())) {
                 changed.add(e.getValue().getGroupId() + ":" + e.getValue().getArtifactId());
             }
         }

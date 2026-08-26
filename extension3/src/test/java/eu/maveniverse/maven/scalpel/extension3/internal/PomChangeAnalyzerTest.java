@@ -1463,9 +1463,9 @@ class PomChangeAnalyzerTest {
     @Test
     void analyzeChanges_newManagedDepUsedByOneModule_notIncludedInDownstream() throws Exception {
         // Parent adds a NEW managed dep (lib-new) and one child uses it.
-        // Brand-new managed deps are excluded from change analysis (issue #131) — even
-        // if a child references the GA, the dep is new (not modified) so it should not
-        // trigger a rebuild. The dependency tree handles actual resolution changes.
+        // The child whose effective dependency tree changes (version resolved by the new
+        // managed dep) IS affected — its build inputs change. But modules that do NOT
+        // use lib-new are unaffected (issue #131).
         Path root = setupReactorRoot();
 
         String parentPomXml = """
@@ -1537,15 +1537,12 @@ class PomChangeAnalyzerTest {
         MavenProject moduleA = projects.get(1);
         MavenProject moduleB = projects.get(2);
 
-        assertFalse(
+        assertTrue(
                 result.getAffectedProjects().contains(moduleA),
-                "module-a uses lib-new but it's brand new (not modified), should NOT be affected");
+                "module-a uses lib-new and its effective dependency version changes, should be affected");
         assertFalse(
                 result.getAffectedProjects().contains(moduleB),
                 "module-b does not use lib-new, should NOT be affected");
-        assertFalse(
-                result.getChangedManagedDependencyGAs().contains("com.example:lib-new"),
-                "lib-new is brand new (not a modification), should NOT be in changedManagedDependencyGAs");
     }
 
     @Test

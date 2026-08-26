@@ -3769,8 +3769,9 @@ class ScalpelLifecycleParticipantTest {
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         String block = extractModuleBlock(json, "module-x");
         assertTrue(
-                block != null && block.contains("property foo.version"),
-                "module-x evidence must name the changed property, block was: " + block);
+                block != null
+                        && (block.contains("effective dep org.example:lib") || block.contains("property foo.version")),
+                "module-x evidence must name the changed dependency or property, block was: " + block);
         assertFalse(modulePresent(json, "module-y"), "module-y does not reference the property, must not be affected");
     }
 
