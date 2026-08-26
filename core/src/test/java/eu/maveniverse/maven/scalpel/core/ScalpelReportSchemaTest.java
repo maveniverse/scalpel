@@ -216,14 +216,17 @@ class ScalpelReportSchemaTest {
 
     private static List<String> moduleReasonsEnum() {
         Map<String, Object> affectedModule = cast(defs().get("affectedModule"), "$defs.affectedModule");
-        Map<String, Object> reasons = cast(affectedModule.get("reasons"), "affectedModule.reasons");
-        return cast(reasons.get("enum"), "affectedModule.reasons.enum");
+        Map<String, Object> properties = cast(affectedModule.get("properties"), "affectedModule.properties");
+        Map<String, Object> reasons = cast(properties.get("reasons"), "affectedModule.properties.reasons");
+        Map<String, Object> items = cast(reasons.get("items"), "affectedModule.properties.reasons.items");
+        return cast(items.get("enum"), "affectedModule.properties.reasons.items.enum");
     }
 
     private static List<String> skippedModuleReasonsEnum() {
         Map<String, Object> skippedModule = cast(defs().get("skippedModule"), "$defs.skippedModule");
-        Map<String, Object> reason = cast(skippedModule.get("reason"), "skippedModule.reason");
-        return cast(reason.get("enum"), "skippedModule.reason.enum");
+        Map<String, Object> properties = cast(skippedModule.get("properties"), "skippedModule.properties");
+        Map<String, Object> reason = cast(properties.get("reason"), "skippedModule.properties.reason");
+        return cast(reason.get("enum"), "skippedModule.properties.reason.enum");
     }
 
     @SuppressWarnings("unchecked")
