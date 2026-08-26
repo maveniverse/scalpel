@@ -56,34 +56,43 @@ public final class ScalpelReport {
     public static final String CATEGORY_TRANSITIVE = "TRANSITIVE";
 
     private final String baseBranch;
+    private final String status;
+    private final String reason;
     private final boolean fullBuildTriggered;
     private final String triggerFile;
     private final List<String> changedFiles;
     private final List<String> changedProperties;
     private final List<String> changedManagedDependencies;
     private final List<String> changedManagedPlugins;
+    private final List<String> unmatchedPomPaths;
     private final List<AffectedModule> affectedModules;
     private final List<SkippedModule> skippedModules;
     private final int excludedUpstreamCount;
 
     private ScalpelReport(
             String baseBranch,
+            String status,
+            String reason,
             boolean fullBuildTriggered,
             String triggerFile,
             List<String> changedFiles,
             List<String> changedProperties,
             List<String> changedManagedDependencies,
             List<String> changedManagedPlugins,
+            List<String> unmatchedPomPaths,
             List<AffectedModule> affectedModules,
             List<SkippedModule> skippedModules,
             int excludedUpstreamCount) {
         this.baseBranch = baseBranch;
+        this.status = status;
+        this.reason = reason;
         this.fullBuildTriggered = fullBuildTriggered;
         this.triggerFile = triggerFile;
         this.changedFiles = changedFiles;
         this.changedProperties = changedProperties;
         this.changedManagedDependencies = changedManagedDependencies;
         this.changedManagedPlugins = changedManagedPlugins;
+        this.unmatchedPomPaths = unmatchedPomPaths;
         this.affectedModules = affectedModules;
         this.skippedModules = skippedModules;
         this.excludedUpstreamCount = excludedUpstreamCount;
@@ -248,6 +257,12 @@ public final class ScalpelReport {
                 .append(jsonString(Version.version()))
                 .append(",\n");
         sb.append("  \"baseBranch\": ").append(jsonString(baseBranch)).append(",\n");
+        if (status != null) {
+            sb.append("  \"status\": ").append(jsonString(status)).append(",\n");
+        }
+        if (reason != null) {
+            sb.append("  \"reason\": ").append(jsonString(reason)).append(",\n");
+        }
         sb.append("  \"fullBuildTriggered\": ").append(fullBuildTriggered).append(",\n");
         sb.append("  \"triggerFile\": ").append(jsonString(triggerFile)).append(",\n");
         sb.append("  \"changedFiles\": ").append(jsonStringArray(changedFiles)).append(",\n");
@@ -260,6 +275,11 @@ public final class ScalpelReport {
         sb.append("  \"changedManagedPlugins\": ")
                 .append(jsonStringArray(changedManagedPlugins))
                 .append(",\n");
+        if (unmatchedPomPaths != null && !unmatchedPomPaths.isEmpty()) {
+            sb.append("  \"unmatchedPomPaths\": ")
+                    .append(jsonStringArray(unmatchedPomPaths))
+                    .append(",\n");
+        }
         sb.append("  \"excludedUpstreamCount\": ").append(excludedUpstreamCount).append(",\n");
         sb.append("  \"affectedModules\": ");
         if (affectedModules.isEmpty()) {
@@ -386,18 +406,31 @@ public final class ScalpelReport {
 
     public static class Builder {
         private String baseBranch;
+        private String status;
+        private String reason;
         private boolean fullBuildTriggered;
         private String triggerFile;
         private final List<String> changedFiles = new ArrayList<>();
         private final List<String> changedProperties = new ArrayList<>();
         private final List<String> changedManagedDependencies = new ArrayList<>();
         private final List<String> changedManagedPlugins = new ArrayList<>();
+        private final List<String> unmatchedPomPaths = new ArrayList<>();
         private final List<AffectedModule> affectedModules = new ArrayList<>();
         private final List<SkippedModule> skippedModules = new ArrayList<>();
         private int excludedUpstreamCount;
 
         public Builder baseBranch(String baseBranch) {
             this.baseBranch = baseBranch;
+            return this;
+        }
+
+        public Builder status(String status) {
+            this.status = status;
+            return this;
+        }
+
+        public Builder reason(String reason) {
+            this.reason = reason;
             return this;
         }
 
@@ -431,6 +464,11 @@ public final class ScalpelReport {
             return this;
         }
 
+        public Builder unmatchedPomPaths(Collection<String> paths) {
+            this.unmatchedPomPaths.addAll(paths);
+            return this;
+        }
+
         public Builder addAffectedModule(AffectedModule module) {
             this.affectedModules.add(module);
             return this;
@@ -452,12 +490,15 @@ public final class ScalpelReport {
             }
             return new ScalpelReport(
                     baseBranch,
+                    status,
+                    reason,
                     fullBuildTriggered,
                     triggerFile,
                     changedFiles,
                     changedProperties,
                     changedManagedDependencies,
                     changedManagedPlugins,
+                    unmatchedPomPaths,
                     affectedModules,
                     skippedModules,
                     excludedUpstreamCount);
