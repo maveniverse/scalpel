@@ -68,6 +68,126 @@ import org.eclipse.aether.repository.RemoteRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * Analyzes POM changes between a base branch and the current working tree to determine
+ * which reactor modules are <em>directly affected</em> by those changes.
+ *
+ * <h2>Overview</h2>
+ *
+ * Given a set of changed POM paths (from {@code git diff}), this class determines which
+ * reactor modules need to be rebuilt.  The core idea is to compare <em>effective models</em>
+ * — fully interpolated, inheritance-merged Maven models — between the old (base branch) and
+ * new (current) states, so that changes are evaluated in terms of their actual build impact
+ * rather than raw POM text diffs.
+ *
+ * <h2>Algorithm</h2>
+ *
+ * <h3>Phase 1 — Build effective models (symmetric)</h3>
+ *
+ * Before analyzing any individual POM change, the analyzer builds effective models for
+ * <em>every</em> reactor module in both old and new states:
+ * <ul>
+ *   <li><b>Old state:</b> Changed POMs use their content from the base branch (read from
+ *       git); unchanged POMs use their current content.  The entire POM hierarchy is
+ *       reconstructed in a temp directory so the {@link ModelBuilder} can resolve parent
+ *       inheritance, BOM imports, and property interpolation correctly.</li>
+ *   <li><b>New state:</b> Built from the current POM files on disk.</li>
+ *   <li><b>Same ModelBuilder:</b> Both sides use the same {@link ModelBuilder} instance
+ *       with the same configuration, ensuring lifecycle default plugin versions are
+ *       identical and won't produce false positives.</li>
+ *   <li><b>Reactor-aware resolution:</b> A {@link ReactorFirstModelResolver} resolves
+ *       parent and BOM import POMs from the reactor first (temp dir for old, current files
+ *       for new), falling back to the repository system for external parents.</li>
+ * </ul>
+ *
+ * The resulting {@code Map<String, Model>} (keyed by relative POM path) captures the fully
+ * resolved state of every module — properties interpolated, profiles merged, dependency
+ * management versions injected, plugin management applied.
+ *
+ * <h3>Phase 2 — Classify each changed POM</h3>
+ *
+ * Each changed POM is classified as either a <b>leaf module</b> or a <b>parent/BOM</b>:
+ *
+ * <h4>Leaf module (no dependents in the reactor)</h4>
+ * The module itself is marked as directly affected.  No further analysis needed — if its
+ * POM changed, it needs rebuilding.
+ *
+ * <h4>Parent or BOM POM (has children or BOM importers)</h4>
+ * The parent POM itself may or may not need rebuilding, and each dependent (child or BOM
+ * importer) is evaluated independently.  The analysis proceeds in layers:
+ *
+ * <ol>
+ *   <li><b>Parent self-impact</b> (raw model comparison):
+ *       <ul>
+ *         <li>Packaging changed</li>
+ *         <li>Direct dependencies changed (not managed)</li>
+ *         <li>Direct plugins changed (not managed)</li>
+ *         <li>Source/test/script source directories changed</li>
+ *         <li>Repositories or plugin repositories changed</li>
+ *         <li>Active profile direct deps/plugins changed</li>
+ *       </ul>
+ *       Any of these marks the parent project itself as affected.</li>
+ *
+ *   <li><b>Effective dependency/plugin comparison</b> (per dependent):
+ *       <ul>
+ *         <li>Old vs new <em>effective dependencies</em> — the dependency list after
+ *             dependencyManagement versions have been injected.  A managed version bump
+ *             (e.g. jackson 2.17→2.18 in the BOM) shows up here only for modules that
+ *             actually declare that dependency.  Modules that don't use the managed
+ *             dependency see no diff and are <em>not</em> affected (issue #131).</li>
+ *         <li>Old vs new <em>effective plugin versions</em> — version-only comparison
+ *             (configuration/execution diffs are ignored since the parent POM is already
+ *             in the changeset).</li>
+ *       </ul></li>
+ *
+ *   <li><b>Property reference fallback</b> (per dependent):
+ *       If the effective model comparison didn't flag the dependent, a text search checks
+ *       whether the child POM references any changed property via {@code ${prop}}.  This
+ *       is a safety net for cases where the effective model couldn't be built or where
+ *       property changes affect non-dependency POM elements (e.g. {@code <finalName>}).</li>
+ *
+ *   <li><b>Filtered resource scan</b> (per dependent):
+ *       If the child has filtered resources ({@code <filtering>true</filtering>}), those
+ *       files are scanned for references to changed properties.  Filtered resources live
+ *       outside the POM model, so effective model comparison cannot detect them.</li>
+ * </ol>
+ *
+ * <h2>Output</h2>
+ *
+ * The {@link Result} carries:
+ * <ul>
+ *   <li>{@code affectedProjects} — the set of directly affected modules</li>
+ *   <li>{@code oldEffectiveModels} / {@code newEffectiveModels} — the full effective model
+ *       maps, so the caller ({@link ScalpelLifecycleParticipant}) can perform its own
+ *       downstream analysis: resolving old vs new dependency trees, comparing effective
+ *       plugins for non-directly-affected modules, and propagating effects through reactor
+ *       dependencies</li>
+ *   <li>{@code changedProperties} — union of all changed properties across all parent POMs</li>
+ *   <li>{@code evidence} — per-module explanation of why it was marked affected (explain mode)</li>
+ * </ul>
+ *
+ * <h2>Design decisions</h2>
+ *
+ * <ul>
+ *   <li><b>No "changed managed dependency GA" sets for decision-making.</b>  Earlier versions
+ *       tracked which managed dependency GAs changed and cross-referenced them against module
+ *       dependency trees.  This caused false positives when a BOM added a brand-new managed
+ *       dependency that no module used (issue #131).  The current approach compares effective
+ *       models directly — a module is only affected if its actual resolved dependencies or
+ *       plugins change.</li>
+ *   <li><b>Symmetric model building.</b>  Both old and new effective models are built by the
+ *       same standalone {@link ModelBuilder} to avoid false positives from lifecycle default
+ *       plugin version differences between the standalone builder and Maven's live reactor.</li>
+ *   <li><b>Managed dep diffs still computed for logging and reporting.</b>  The
+ *       {@code diffDependencies} and {@code diffManagedPluginVersions} methods are still
+ *       called on managed deps/plugins at the parent level, but only for debug logging.
+ *       The report's {@code changedManagedDependencies} field is derived from effective
+ *       models by the caller, not used for build decisions.</li>
+ * </ul>
+ *
+ * @see ScalpelLifecycleParticipant#afterProjectsRead — consumes the Result and performs
+ *      transitive analysis (dependency tree resolution, reactor dependency propagation)
+ */
 @Singleton
 @Named
 class PomChangeAnalyzer {

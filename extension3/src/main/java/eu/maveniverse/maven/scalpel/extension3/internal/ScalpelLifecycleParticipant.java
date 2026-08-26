@@ -613,6 +613,34 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         return null;
     }
 
+    /**
+     * Determine which non-directly-affected modules are <em>transitively</em> affected
+     * by changes in the reactor.  Uses a two-pass algorithm:
+     *
+     * <h4>Pass 1 — Effective model and dependency tree comparison</h4>
+     * For each non-directly-affected module, compare old vs new effective models:
+     * <ul>
+     *   <li><b>Effective plugins:</b> diff plugin versions from the fully-interpolated
+     *       models.  A managed plugin version bump that flows into this module's effective
+     *       plugin list triggers {@code MANAGED_PLUGIN}.</li>
+     *   <li><b>Resolved dependency tree:</b> resolve the module's dependency tree twice —
+     *       once from the old effective model, once from the current project — and diff the
+     *       (GA → version) maps.  A version difference triggers {@code TRANSITIVE_DEPENDENCY}
+     *       or {@code TRANSITIVE_DEPENDENCY_TEST} depending on scope.</li>
+     * </ul>
+     *
+     * <h4>Pass 2 — Reactor dependency propagation</h4>
+     * Pass 1 misses modules whose dependency tree changed only <em>transitively through
+     * reactor siblings</em>.  When resolving "old" dependency trees, Maven's reactor always
+     * provides the current (new) version of reactor siblings, so a module that depends on an
+     * affected reactor module will have identical old/new trees.
+     * <p>
+     * To catch this, pass 2 collects the GAs of all affected modules (directly + from pass 1)
+     * and checks each remaining module's dependency tree for those GAs.  If found, the module
+     * is transitively affected because rebuilding the upstream reactor module will change its
+     * output artifacts.  This propagates iteratively to a fixed point to handle chains
+     * (A → B → C where only A's POM changed).
+     */
     private Map<MavenProject, List<String>> computeTransitivelyAffected(
             List<MavenProject> allProjects,
             Set<MavenProject> directlyAffected,
