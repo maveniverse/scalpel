@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
+import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -33,6 +34,7 @@ import org.apache.maven.model.Profile;
 import org.apache.maven.model.Resource;
 import org.apache.maven.project.MavenProject;
 import org.eclipse.aether.RepositorySystem;
+import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.impl.RemoteRepositoryManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,12 +47,50 @@ class PomChangeAnalyzerTest {
 
     private PomChangeAnalyzer analyzer;
 
+    /** Default resolution context with a mock session — used by all tests that don't need real artifact resolution. */
+    private final PomChangeAnalyzer.ModelResolutionContext defaultResolutionCtx =
+            new PomChangeAnalyzer.ModelResolutionContext(
+                    new Properties(), new Properties(), mock(RepositorySystemSession.class), List.of());
+
     @TempDir
     Path tempDir;
 
     @BeforeEach
     void setUp() {
         analyzer = new PomChangeAnalyzer(mock(RepositorySystem.class), mock(RemoteRepositoryManager.class));
+    }
+
+    /** Convenience wrapper: calls analyzeChanges with default explain=true and the default mock resolution context. */
+    private PomChangeAnalyzer.Result analyzeChanges(
+            Set<String> changedPomPaths,
+            Map<String, byte[]> oldPomContents,
+            List<MavenProject> allProjects,
+            Path reactorRoot) {
+        return analyzer.analyzeChanges(
+                changedPomPaths,
+                oldPomContents,
+                allProjects,
+                reactorRoot,
+                ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE,
+                true,
+                defaultResolutionCtx);
+    }
+
+    /** Convenience wrapper with custom maxResourceFileSize. */
+    private PomChangeAnalyzer.Result analyzeChanges(
+            Set<String> changedPomPaths,
+            Map<String, byte[]> oldPomContents,
+            List<MavenProject> allProjects,
+            Path reactorRoot,
+            long maxResourceFileSize) {
+        return analyzer.analyzeChanges(
+                changedPomPaths,
+                oldPomContents,
+                allProjects,
+                reactorRoot,
+                maxResourceFileSize,
+                true,
+                defaultResolutionCtx);
     }
 
     // --- diffProperties tests ---
@@ -115,7 +155,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("module-a/pom.xml", readFile(moduleA.getFile()));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.contains(moduleA), "Leaf module with changed POM should be affected");
         assertEquals(1, affected.size(), "Only the leaf module should be affected");
@@ -148,7 +188,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleA = projects.get(1);
         MavenProject moduleB = projects.get(2);
@@ -189,7 +229,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleB = projects.get(2);
         assertTrue(affected.contains(moduleB), "module-b uses managed dep com.example:lib-x and should be affected");
@@ -222,7 +262,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.isEmpty(), "Cosmetic parent POM change should not affect any module");
     }
@@ -237,7 +277,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertEquals(3, affected.size(), "New parent POM should mark parent + all children");
     }
@@ -266,7 +306,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getChangedProperties().contains("dep.version"), "Changed properties should include dep.version");
@@ -304,7 +344,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getChangedManagedDependencyGAs().contains("org.springframework:spring-core"),
@@ -347,7 +387,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleB = projects.get(2);
         assertTrue(
@@ -394,7 +434,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         MavenProject moduleB = projects.get(2);
         assertTrue(
@@ -482,7 +522,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(2)),
@@ -561,7 +601,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.isEmpty(), "Inactive profile change should not affect any module");
     }
@@ -642,7 +682,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(2)),
@@ -687,7 +727,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -869,7 +909,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(result.getAffectedProjects().isEmpty(), description);
     }
@@ -1000,7 +1040,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(
                 affected.contains(moduleB),
@@ -1086,7 +1126,7 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertFalse(
                 affected.contains(moduleB),
@@ -1153,7 +1193,7 @@ class PomChangeAnalyzerTest {
 
         String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
 
-        Set<MavenProject> affected = analyzer.analyzeChanges(
+        Set<MavenProject> affected = analyzeChanges(
                         Set.of("pom.xml"),
                         Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
                         projects,
@@ -1226,7 +1266,7 @@ class PomChangeAnalyzerTest {
         String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
 
         // Use a custom small limit (1000 bytes) so the 2000-byte file exceeds it
-        Set<MavenProject> affected = analyzer.analyzeChanges(
+        Set<MavenProject> affected = analyzeChanges(
                         Set.of("pom.xml"),
                         Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
                         projects,
@@ -1301,7 +1341,7 @@ class PomChangeAnalyzerTest {
         String oldParentPom = parentPomXml.replace("<app.version>2.0</app.version>", "<app.version>1.0</app.version>");
 
         // Use a small limit so the file would exceed it IF it weren't binary
-        Set<MavenProject> affected = analyzer.analyzeChanges(
+        Set<MavenProject> affected = analyzeChanges(
                         Set.of("pom.xml"),
                         Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
                         projects,
@@ -1401,7 +1441,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject moduleA = projects.get(1);
         MavenProject moduleB = projects.get(2);
@@ -1492,7 +1532,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject moduleA = projects.get(1);
         MavenProject moduleB = projects.get(2);
@@ -1582,7 +1622,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getChangedManagedDependencyGAs().contains("com.example:lib-x"),
@@ -1665,7 +1705,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject moduleA = projects.get(1);
         MavenProject moduleB = projects.get(2);
@@ -1694,7 +1734,7 @@ class PomChangeAnalyzerTest {
         // Intentionally no entry for "pom.xml" (null = new file)
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.contains(projects.get(0)), "Parent should be affected");
         assertTrue(affected.contains(projects.get(1)), "module-a should be affected (new parent POM)");
@@ -1770,7 +1810,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         // Parent should be self-affected because the removed profile had direct dependencies
         assertTrue(
@@ -1836,7 +1876,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -1853,7 +1893,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.contains(projects.get(1)), "module-a should be affected");
         assertFalse(affected.contains(projects.get(2)), "module-b should NOT be affected");
@@ -1908,7 +1948,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -1963,7 +2003,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -2016,7 +2056,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(projects.get(0)),
@@ -2033,7 +2073,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
 
         Set<MavenProject> affected =
-                analyzer.analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
 
         assertTrue(affected.isEmpty(), "Unmatched POM path should not affect any module");
     }
@@ -2048,7 +2088,7 @@ class PomChangeAnalyzerTest {
         changedPoms.add("also-missing/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertEquals(
                 List.of("nonexistent/pom.xml", "also-missing/pom.xml"),
@@ -2065,7 +2105,7 @@ class PomChangeAnalyzerTest {
         Set<String> changedPoms = Set.of("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(result.getUnmatchedPomPaths().isEmpty(), "All changed POMs matched a reactor project");
     }
@@ -2101,7 +2141,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject moduleA = projects.get(2);
         MavenProject moduleB = projects.get(3);
@@ -2144,7 +2184,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(result.getAffectedProjects().isEmpty(), "Cosmetic BOM change should not affect any module");
     }
@@ -2186,7 +2226,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject moduleA = projects.get(2);
         assertTrue(
@@ -2319,7 +2359,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         // BOM is directly affected because it references ${lib.version} in its managed dep version
         assertTrue(
@@ -2419,7 +2459,7 @@ class PomChangeAnalyzerTest {
         String oldParentPom = parentPomXml.replace(
                 "<compiler.version>3.12.0</compiler.version>", "<compiler.version>3.11.0</compiler.version>");
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(
+        PomChangeAnalyzer.Result result = analyzeChanges(
                 Set.of("pom.xml"), Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)), projects, root);
 
         assertTrue(
@@ -2441,7 +2481,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         // No entry for bom/pom.xml = new file
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         MavenProject bom = projects.get(1);
         MavenProject moduleA = projects.get(2);
@@ -2611,7 +2651,7 @@ class PomChangeAnalyzerTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
-        PomChangeAnalyzer.Result result = analyzer.analyzeChanges(changedPoms, oldPoms, projects, root);
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         assertTrue(
                 result.getAffectedProjects().contains(moduleB),

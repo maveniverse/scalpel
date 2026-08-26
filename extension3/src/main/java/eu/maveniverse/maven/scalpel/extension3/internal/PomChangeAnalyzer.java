@@ -48,10 +48,7 @@ import org.apache.maven.model.building.DefaultModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingException;
 import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingResult;
-import org.apache.maven.model.building.ModelSource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
-import org.apache.maven.model.resolution.ModelResolver;
-import org.apache.maven.model.resolution.UnresolvableModelException;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectBuildingRequest;
 import org.apache.maven.project.ProjectModelResolver;
@@ -71,45 +68,6 @@ class PomChangeAnalyzer {
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final RepositorySystem repositorySystem;
     private final RemoteRepositoryManager remoteRepositoryManager;
-
-    /**
-     * Fallback resolver for tests without a live Maven session.
-     * Rejects all resolution with {@link UnresolvableModelException};
-     * Maven's {@link org.apache.maven.model.building.DefaultModelBuilder}
-     * requires a non-null resolver even when processing is minimal.
-     */
-    private static final ModelResolver OFFLINE_MODEL_RESOLVER = new ModelResolver() {
-        @Override
-        public ModelSource resolveModel(String g, String a, String v) throws UnresolvableModelException {
-            throw new UnresolvableModelException("offline", g, a, v);
-        }
-
-        @Override
-        public ModelSource resolveModel(org.apache.maven.model.Parent parent) throws UnresolvableModelException {
-            throw new UnresolvableModelException(
-                    "offline", parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
-        }
-
-        @Override
-        public ModelSource resolveModel(Dependency dep) throws UnresolvableModelException {
-            throw new UnresolvableModelException("offline", dep.getGroupId(), dep.getArtifactId(), dep.getVersion());
-        }
-
-        @Override
-        public void addRepository(Repository repository) {
-            // No-op: offline resolver does not track repositories
-        }
-
-        @Override
-        public void addRepository(Repository repository, boolean replace) {
-            // No-op: offline resolver does not track repositories
-        }
-
-        @Override
-        public ModelResolver newCopy() {
-            return this;
-        }
-    };
 
     @Inject
     PomChangeAnalyzer(RepositorySystem repositorySystem, RemoteRepositoryManager remoteRepositoryManager) {
@@ -232,37 +190,6 @@ class PomChangeAnalyzer {
      * The changed managed dependency and plugin GAs are also returned so callers can check
      * transitive dependency trees and effective plugins for additional affected modules.
      */
-    public Result analyzeChanges(
-            Set<String> changedPomPaths,
-            Map<String, byte[]> oldPomContents,
-            List<MavenProject> allProjects,
-            Path reactorRoot) {
-        return analyzeChanges(
-                changedPomPaths,
-                oldPomContents,
-                allProjects,
-                reactorRoot,
-                ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE,
-                true,
-                new ModelResolutionContext(null, null, null, null));
-    }
-
-    public Result analyzeChanges(
-            Set<String> changedPomPaths,
-            Map<String, byte[]> oldPomContents,
-            List<MavenProject> allProjects,
-            Path reactorRoot,
-            long maxResourceFileSize) {
-        return analyzeChanges(
-                changedPomPaths,
-                oldPomContents,
-                allProjects,
-                reactorRoot,
-                maxResourceFileSize,
-                true,
-                new ModelResolutionContext(null, null, null, null));
-    }
-
     public Result analyzeChanges(
             Set<String> changedPomPaths,
             Map<String, byte[]> oldPomContents,
@@ -1265,24 +1192,18 @@ class PomChangeAnalyzer {
             request.setPomFile(tempPomFile.toFile());
             request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
 
-            // Use the real Maven resolver when a repository session is available,
-            // so external parents and BOM imports resolve from the local repository cache.
+            // Resolve external parents and BOM imports from the local repository cache.
             // Plugin processing stays disabled: lifecycle defaults and plugin management
             // injection depend on reactor state that the temp-dir model lacks, and would
             // create false diffs against the live model from project.getModel().
-            if (resolutionCtx.repoSession() != null) {
-                request.setModelResolver(new ProjectModelResolver(
-                        resolutionCtx.repoSession(),
-                        null, // no request trace needed
-                        repositorySystem,
-                        remoteRepositoryManager,
-                        resolutionCtx.remoteRepositories() != null ? resolutionCtx.remoteRepositories() : List.of(),
-                        ProjectBuildingRequest.RepositoryMerging.POM_DOMINANT,
-                        null)); // no reactor model pool — we use temp dir files
-            } else {
-                // Fallback for tests without a live Maven session
-                request.setModelResolver(OFFLINE_MODEL_RESOLVER);
-            }
+            request.setModelResolver(new ProjectModelResolver(
+                    resolutionCtx.repoSession(),
+                    null, // no request trace needed
+                    repositorySystem,
+                    remoteRepositoryManager,
+                    resolutionCtx.remoteRepositories() != null ? resolutionCtx.remoteRepositories() : List.of(),
+                    ProjectBuildingRequest.RepositoryMerging.POM_DOMINANT,
+                    null)); // no reactor model pool — we use temp dir files
             request.setProcessPlugins(false);
 
             // Pass system and user properties so interpolation and
