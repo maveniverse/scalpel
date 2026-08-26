@@ -194,8 +194,13 @@ e.g. `"no changes detected"`). Both fields are absent from normal full reports.
 new enum values; consumers must tolerate both (ignore unknown fields, treat unrecognized enum
 values as unknown). A version bump is required when a change breaks such consumers: removing
 or renaming a field, changing a field's type, making an optional field required, or removing
-an enum value. Reports are validated against the checked-in schema by
-`core`'s unit tests, so the schema cannot silently drift from what the code emits.
+an enum value that the schema ever declared and could have been emitted; removing an enum
+value that no released schema ever carried and that the code no longer emits (such as the
+never-emitted `UPSTREAM_DEPENDENCY` removed from the v2 enum in this change) does not break
+any consumer and needs no bump. Reports are validated against the checked-in schema by
+`core`'s unit tests, guarding required fields and enum values against drift in both
+directions; a newly emitted *optional* field still requires a deliberate schema edit, which
+the drift guard surfaces through the enum and required-field checks.
 
 **Affected module reasons:**
 
