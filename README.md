@@ -188,6 +188,7 @@ consumers may need to handle.
 | `POM_CHANGE` | This module's POM is affected by a POM change (property, dependency, or plugin) |
 | `TRANSITIVE_DEPENDENCY` | A changed managed dependency reaches this module transitively (compile/runtime scope) |
 | `TRANSITIVE_DEPENDENCY_TEST` | A changed managed dependency reaches this module transitively via test scope only |
+| `TRANSITIVE_DEPENDENCY_UNRESOLVED` | Dependency resolution failed; conservatively treated as affected (genuine transitive change vs resolution failure is indistinguishable) |
 | `MANAGED_PLUGIN` | This module uses a plugin whose managed version changed |
 | `UPSTREAM_DEPENDENCY` | *(deprecated)* Included as an upstream dependency (via `alsoMake`) |
 | `DOWNSTREAM_DEPENDENT` | Included as a downstream dependent (via `alsoMakeDependents`) |

@@ -42,6 +42,7 @@ public final class ScalpelReport {
     public static final String REASON_TEST_CHANGE = "TEST_CHANGE";
     public static final String REASON_DOWNSTREAM_TEST = "DOWNSTREAM_TEST";
     public static final String REASON_TRANSITIVE_DEPENDENCY_TEST = "TRANSITIVE_DEPENDENCY_TEST";
+    public static final String REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED = "TRANSITIVE_DEPENDENCY_UNRESOLVED";
     public static final String REASON_EXCLUDED_DOWNSTREAM = "EXCLUDED_DOWNSTREAM";
 
     /**

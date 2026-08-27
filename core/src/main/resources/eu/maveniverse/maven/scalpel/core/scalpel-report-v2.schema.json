@@ -74,12 +74,11 @@
       "items": { "$ref": "#/$defs/affectedModule" },
       "description": "Modules affected by the changeset, with reasons and optional metadata."
     },
-<<<<<<< HEAD
     "skippedModules": {
       "type": "array",
       "items": { "$ref": "#/$defs/skippedModule" },
       "description": "Optional (added without a version bump per the optional-fields policy): reactor modules left out of the build set, each with the reason it was judged safe to skip. Present only when at least one module was skipped."
-=======
+    },
     "status": {
       "type": "string",
       "enum": ["failed", "skipped"],
@@ -88,7 +87,6 @@
     "reason": {
       "type": "string",
       "description": "Human-readable explanation accompanying an optional status field (e.g. 'no changes detected')."
->>>>>>> origin/main
     }
   },
   "$defs": {
@@ -118,6 +116,7 @@
               "POM_CHANGE",
               "TRANSITIVE_DEPENDENCY",
               "TRANSITIVE_DEPENDENCY_TEST",
+              "TRANSITIVE_DEPENDENCY_UNRESOLVED",
               "MANAGED_PLUGIN",
               "UPSTREAM_DEPENDENCY",
               "DOWNSTREAM_DEPENDENT",

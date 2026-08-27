@@ -457,8 +457,11 @@ class ScalpelLifecycleParticipantTest {
 
         assertTrue(moduleHasReason(json, "module-a", "POM_CHANGE"), "module-a should have POM_CHANGE reason");
         assertTrue(
-                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY"),
+                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY_UNRESOLVED"),
                 "module-e with total resolution failure should be conservatively marked as affected");
+        assertFalse(
+                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY"),
+                "module-e should NOT have TRANSITIVE_DEPENDENCY reason (only TRANSITIVE_DEPENDENCY_UNRESOLVED)");
     }
 
     @Test
@@ -568,8 +571,11 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
                 "module-b depends on changed module-a and should be transitively affected");
         assertTrue(
-                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY"),
+                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY_UNRESOLVED"),
                 "module-e with missing models and failed resolution should be conservatively marked as affected");
+        assertFalse(
+                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY"),
+                "module-e should NOT have TRANSITIVE_DEPENDENCY reason (only TRANSITIVE_DEPENDENCY_UNRESOLVED)");
     }
 
     @Test

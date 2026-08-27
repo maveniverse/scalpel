@@ -57,6 +57,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     private static final String MAVEN_TEST_SKIP = "maven.test.skip";
     private static final String SKIP_TESTS = "skipTests";
     private static final String GLOB_PREFIX = "glob:";
+    private static final String UNRESOLVED_GA = "(unresolved)";
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final ScalpelCore scalpelCore;
@@ -717,7 +718,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 "Cannot resolve dependencies of {} while propagating changes, conservatively marking as affected",
                                 key(project));
                         List<String> reasons = new ArrayList<>();
-                        reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
+                        reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED);
                         transitivelyAffected.put(project, reasons);
                         affectedGAs.add(project.getGroupId() + ":" + project.getArtifactId());
                         if (explain) {
@@ -811,7 +812,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         ChangedDependencyMatch depMatch =
                 findChangedDependencyInTree(project, oldModel, session, collectCache, oldCollectCache);
         if (depMatch != null) {
-            if ("test".equals(depMatch.scope)) {
+            if (UNRESOLVED_GA.equals(depMatch.ga)) {
+                reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED);
+            } else if ("test".equals(depMatch.scope)) {
                 reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
             } else {
                 reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
@@ -1083,7 +1086,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // changed so the module is treated as affected (and its tests are not
             // skipped downstream). A redundant rebuild is safer than a green build
             // on untested code.
-            return new ChangedDependencyMatch("(unresolved)", "compile");
+            return new ChangedDependencyMatch(UNRESOLVED_GA, "compile");
         }
 
         // Resolve old dependency tree from old effective model
@@ -1091,7 +1094,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 resolveModelDependencies(oldEffectiveModel, project, session, oldCollectCache);
         if (oldResult == null || oldResult.getDependencyGraph() == null) {
             // Conservative: same posture when the old tree cannot be resolved.
-            return new ChangedDependencyMatch("(unresolved)", "compile");
+            return new ChangedDependencyMatch(UNRESOLVED_GA, "compile");
         }
 
         // Collect (GA → version) from both trees and diff
