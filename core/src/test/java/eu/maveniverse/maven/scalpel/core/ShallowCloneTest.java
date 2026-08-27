@@ -10,9 +10,11 @@ package eu.maveniverse.maven.scalpel.core;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -219,5 +221,89 @@ class ShallowCloneTest {
             System.setErr(originalErr);
         }
         return buffer.toString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void realShallowClone_missingObjectBeyondBoundaryEmitsShallowGuidance() throws Exception {
+        // Source repo with three commits pushed to a bare remote
+        Path srcDir = tempDir.resolve("src");
+        Path remoteDir = tempDir.resolve("remote.git");
+        org.eclipse.jgit.lib.ObjectId[] commitIds = new org.eclipse.jgit.lib.ObjectId[3];
+        try (Git git = Git.init()
+                .setDirectory(srcDir.toFile())
+                .setInitialBranch("main")
+                .call()) {
+            for (int i = 1; i <= 3; i++) {
+                write(srcDir, "f" + i + ".txt", "v" + i);
+                git.add().addFilepattern("f" + i + ".txt").call();
+                git.commit().setMessage("commit " + i).call();
+                // Capture each commit's SHA for later use
+                commitIds[i - 1] = git.getRepository().resolve("HEAD");
+            }
+        }
+        try (Git remote = Git.init()
+                        .setBare(true)
+                        .setDirectory(remoteDir.toFile())
+                        .call();
+                Git src = Git.open(srcDir.toFile())) {
+            src.push()
+                    .setRemote(remoteDir.toUri().toString())
+                    .setRefSpecs(new org.eclipse.jgit.transport.RefSpec("refs/heads/main:refs/heads/main"))
+                    .call();
+        }
+
+        // Real depth-limited clone
+        Path cloneDir = tempDir.resolve("clone");
+        try (Git clone = Git.cloneRepository()
+                        .setDepth(1)
+                        .setBranchesToClone(java.util.List.of("refs/heads/main"))
+                        .setBranch("refs/heads/main")
+                        .setURI(remoteDir.toUri().toString())
+                        .setDirectory(cloneDir.toFile())
+                        .call();
+                Repository repository = clone.getRepository()) {
+
+            GitChangeDetector detector = new GitChangeDetector();
+
+            // Test readFileAtCommit with a pre-clone commit SHA (beyond the shallow boundary)
+            // This should emit shallow guidance before propagating MissingObjectException
+            org.eclipse.jgit.errors.MissingObjectException ex = assertThrows(
+                    org.eclipse.jgit.errors.MissingObjectException.class,
+                    () -> detector.readFileAtCommit(repository, commitIds[0], "f1.txt"),
+                    "readFileAtCommit on a pre-clone commit SHA should throw MissingObjectException");
+            assertTrue(
+                    ex.getMessage().contains("Missing") || ex.getMessage().contains(commitIds[0].getName()),
+                    "exception should indicate missing object");
+
+            // Now wrap in captureErr to assert the shallow guidance was logged
+            String logged = captureErr(() -> {
+                try {
+                    detector.readFileAtCommit(repository, commitIds[0], "f1.txt");
+                } catch (IOException ignored) {
+                }
+            });
+            assertTrue(
+                    logged.contains("Repository is shallow"),
+                    "MissingObjectException on a shallow repo should emit shallow cause, got: " + logged);
+            assertTrue(
+                    logged.contains("fetch-depth: 0") || logged.contains("--unshallow"),
+                    "MissingObjectException on a shallow repo should name the fix, got: " + logged);
+
+            // Test findMergeBase with a pre-clone commit passed as base branch
+            // When repository.resolve() handles a full SHA string for a missing object,
+            // parseCommit inside findMergeBase will throw MissingObjectException
+            String loggedMergeBase = captureErr(() -> {
+                try {
+                    detector.findMergeBase(repository, commitIds[0].getName(), "HEAD");
+                } catch (IOException ignored) {
+                }
+            });
+            assertTrue(
+                    loggedMergeBase.contains("Repository is shallow"),
+                    "findMergeBase MissingObjectException should emit shallow cause, got: " + loggedMergeBase);
+            assertTrue(
+                    loggedMergeBase.contains("fetch-depth: 0") || loggedMergeBase.contains("--unshallow"),
+                    "findMergeBase MissingObjectException should name the fix, got: " + loggedMergeBase);
+        }
     }
 }
