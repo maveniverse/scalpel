@@ -15,7 +15,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.DirectoryStream;
+import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +25,7 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -1350,24 +1351,83 @@ class PomChangeAnalyzer {
         return false;
     }
 
+    private static final int MAX_RESOURCE_WALK_DEPTH = 32;
+    private static final int MAX_RESOURCE_WALK_FILES = 10_000;
+
     private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
-        List<Path> stack = new ArrayList<>();
-        stack.add(dir);
-        while (!stack.isEmpty()) {
-            Path current = stack.remove(stack.size() - 1);
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(current)) {
-                for (Path entry : stream) {
-                    if (Files.isDirectory(entry)) {
-                        stack.add(entry);
-                    } else if (Files.isRegularFile(entry) && checkFileForPropertyRefs(entry, refs)) {
-                        return true;
-                    }
-                }
-            } catch (IOException e) {
-                // Skip unreadable directories
-            }
+        // Does not follow symbolic links: a symlink could loop forever or point
+        // outside the module (leaking file content into the analysis)
+        int[] visitedEntries = new int[1];
+        boolean[] budgetExceeded = new boolean[1];
+        boolean[] depthTruncated = new boolean[1];
+        boolean[] foundRef = new boolean[1];
+        try {
+            Files.walkFileTree(
+                    dir, EnumSet.noneOf(FileVisitOption.class), MAX_RESOURCE_WALK_DEPTH, new SimpleFileVisitor<>() {
+                        @Override
+                        public FileVisitResult preVisitDirectory(Path d, BasicFileAttributes attrs) {
+                            if (++visitedEntries[0] > MAX_RESOURCE_WALK_FILES) {
+                                // Conservative: treat budget overruns as potentially affected
+                                budgetExceeded[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            return FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                            // Count every entry, including symlinks and directories, so the
+                            // budget cannot be bypassed by unvisited entry kinds
+                            if (++visitedEntries[0] > MAX_RESOURCE_WALK_FILES) {
+                                // Conservative: treat budget overruns as potentially affected
+                                budgetExceeded[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            if (attrs.isDirectory()) {
+                                // Without FOLLOW_LINKS this only happens for directories at the
+                                // depth limit, which cannot be descended into: their content is
+                                // unknown, so fail toward affected
+                                logger.warn(
+                                        "Filtered resource scan of {} reached the max walk depth ({})."
+                                                + " Module will be conservatively marked as affected.",
+                                        file,
+                                        MAX_RESOURCE_WALK_DEPTH);
+                                depthTruncated[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            if (attrs.isSymbolicLink()) {
+                                return FileVisitResult.CONTINUE;
+                            }
+                            if (checkFileForPropertyRefs(file, refs)) {
+                                foundRef[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            return FileVisitResult.CONTINUE;
+                        }
+                    });
+        } catch (IOException e) {
+            // Conservative: an unreadable directory during the walk means we cannot
+            // know whether it contains a property reference, so treat as affected
+            logger.warn("Cannot walk filtered resource directory {}: {}", dir, e.getMessage());
+            return true;
         }
-        return false;
+        if (budgetExceeded[0]) {
+            logger.warn(
+                    "Filtered resource scan of {} exceeded the entry visit budget ({})."
+                            + " Module will be conservatively marked as affected.",
+                    dir,
+                    MAX_RESOURCE_WALK_FILES);
+            return true;
+        }
+        if (depthTruncated[0]) {
+            logger.warn(
+                    "Filtered resource scan of {} stopped at the max walk depth ({})."
+                            + " Module will be conservatively marked as affected.",
+                    dir,
+                    MAX_RESOURCE_WALK_DEPTH);
+            return true;
+        }
+        return foundRef[0];
     }
 
     private boolean checkFileForPropertyRefs(Path entry, List<String> refs) {
