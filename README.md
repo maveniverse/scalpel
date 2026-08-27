@@ -8,6 +8,9 @@ Scalpel is a Maven core extension that detects which modules in a multi-module r
 a git changeset. It can trim the reactor to only build affected modules, skip tests on unaffected modules,
 or produce a JSON report of affected modules for consumption by CI scripts.
 
+If Scalpel's behaviour surprises you (it built everything, or it skipped a module you expected
+to be built), see the [Troubleshooting Guide](docs/troubleshooting.md).
+
 ## How It Works
 
 Scalpel hooks into Maven's lifecycle via `AbstractMavenLifecycleParticipant.afterProjectsRead()` and performs
