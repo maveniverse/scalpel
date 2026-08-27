@@ -230,8 +230,10 @@ when propagating changes to downstream modules:
 - **POM or resource changes**: treated like main source changes — all dependents are included.
 
 This dramatically reduces unnecessary builds. For example, in Apache Camel, `camel-core` has ~500
-regular dependents but only ~23 test-jar dependents. A change to a test base class in `camel-core`
-triggers testing of only those 23 modules instead of all 500+.
+transitive dependents but only ~25 modules declaring a `test-jar` dependency on it. A change to a
+test base class in `camel-core` triggers testing of only those 25 modules instead of all ~500
+(measured on Camel main @ `384a00a8`, 2026-08-27: 52 direct, 518 transitive, 25 test-jar consumers;
+reproduce with `grep -r --include=pom.xml -l 'test-jar'` and a graph walk over the reactor POMs).
 
 Test-jar dependencies are declared in Maven as:
 
@@ -561,7 +563,8 @@ child modules with `<filtering>true</filtering>` reference that property in thei
 **Source-set-aware propagation.** When only test sources (`src/test/**`) change in a module,
 Scalpel does not rebuild downstream modules that depend on the production artifact. Only modules
 with a `<type>test-jar</type>` dependency are affected. In Apache Camel, this reduces a
-`camel-core` test change from ~500 downstream modules to ~23.
+`camel-core` test change from ~500 downstream modules to ~25 (measured 2026-08-27, see the
+test-jar section above for the reproduction).
 
 **Skip-tests mode.** Scalpel offers `mode=skip-tests`, which builds all modules but only runs
 tests on affected ones. GIB has no equivalent — it either includes or excludes modules from the
