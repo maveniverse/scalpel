@@ -18,8 +18,10 @@ import java.util.List;
 public final class ScalpelReport {
 
     /**
-     * Report schema version. Bump this whenever the report JSON structure changes
-     * (new fields, removed fields, or semantic changes to existing fields).
+     * Report schema version. Bump this on breaking changes only: removing or renaming fields,
+     * changing a field's type, making an optional field required, or removing enum values.
+     * Adding optional fields (and new enum values consumers must tolerate) does not bump the
+     * version; see the compatibility policy in the README's Report Format section.
      * <p>
      * v1 → v2: added {@code category}, {@code sourceSet}, {@code excludedUpstreamCount},
      *           {@code testsSkipped}, {@code testsSkippedReason}.
@@ -31,13 +33,6 @@ public final class ScalpelReport {
     public static final String REASON_TRANSITIVE_DEPENDENCY = "TRANSITIVE_DEPENDENCY";
     public static final String REASON_MANAGED_PLUGIN = "MANAGED_PLUGIN";
     public static final String REASON_FORCE_BUILD = "FORCE_BUILD";
-    /**
-     * @deprecated Upstream modules are no longer included in report mode (see #39).
-     *             They are build-order prerequisites, not genuinely affected modules.
-     */
-    @Deprecated
-    public static final String REASON_UPSTREAM_DEPENDENCY = "UPSTREAM_DEPENDENCY";
-
     public static final String REASON_DOWNSTREAM_DEPENDENT = "DOWNSTREAM_DEPENDENT";
     public static final String REASON_TEST_CHANGE = "TEST_CHANGE";
     public static final String REASON_DOWNSTREAM_TEST = "DOWNSTREAM_TEST";

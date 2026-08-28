@@ -21,7 +21,7 @@
     "version": {
       "type": "string",
       "const": "2",
-      "description": "Report schema version. '2' indicates the v2 format with category, sourceSet, excludedUpstreamCount, testsSkipped, and testsSkippedReason fields."
+      "description": "Report schema version. '2' indicates the v2 format with category, sourceSet, excludedUpstreamCount, testsSkipped, and testsSkippedReason fields, plus the optional fields added within v2 under the compatibility policy: status, reason, unmatchedPomPaths, skippedModules, and evidence."
     },
     "scalpelVersion": {
       "type": "string",
@@ -118,7 +118,6 @@
               "TRANSITIVE_DEPENDENCY_TEST",
               "TRANSITIVE_DEPENDENCY_UNRESOLVED",
               "MANAGED_PLUGIN",
-              "UPSTREAM_DEPENDENCY",
               "DOWNSTREAM_DEPENDENT",
               "DOWNSTREAM_TEST",
               "FORCE_BUILD"

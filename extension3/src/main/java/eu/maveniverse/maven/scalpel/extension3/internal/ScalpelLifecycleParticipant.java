@@ -11,6 +11,7 @@ import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.keys;
 import static java.util.Objects.requireNonNull;
 
+import eu.maveniverse.maven.scalpel.core.BoundedRegexMatcher;
 import eu.maveniverse.maven.scalpel.core.ChangeDetectionResult;
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import eu.maveniverse.maven.scalpel.core.ScalpelCore;
@@ -31,7 +32,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.regex.PatternSyntaxException;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -65,6 +65,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     private final PomChangeAnalyzer pomChangeAnalyzer;
     private final ReactorTrimmer reactorTrimmer;
     private final ProjectDependenciesResolver dependenciesResolver;
+    private final BoundedRegexMatcher regexMatcher = new BoundedRegexMatcher();
 
     @Inject
     public ScalpelLifecycleParticipant(
@@ -1618,13 +1619,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private String matchesForceBuild(MavenProject project, List<String> patterns) {
         for (String pattern : patterns) {
-            try {
-                if (project.getArtifactId().matches(pattern)) {
-                    logger.debug("Scalpel: Force-including module {} (matches {})", key(project), pattern);
-                    return pattern;
-                }
-            } catch (PatternSyntaxException e) {
-                logger.warn("Scalpel: Invalid regex pattern '{}' in forceBuildModules: {}", pattern, e.getMessage());
+            // artifactId is PR-author-controlled input (including length): match through the
+            // cached, input-bounded matcher, never String.matches()
+            if (regexMatcher.matches(project.getArtifactId(), pattern, "forceBuildModules", logger)) {
+                logger.debug("Scalpel: Force-including module {} (matches {})", key(project), pattern);
+                return pattern;
             }
         }
         return null;

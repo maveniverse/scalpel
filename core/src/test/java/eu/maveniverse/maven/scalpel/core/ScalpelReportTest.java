@@ -520,8 +520,8 @@ class ScalpelReportTest {
         assertEquals(
                 expected,
                 normalised,
-                "Report JSON structure has changed — update the golden file and "
-                        + "bump REPORT_VERSION if the schema changed.");
+                "Report JSON structure has changed: update the golden file, and bump "
+                        + "REPORT_VERSION if the change is not an optional additive field.");
     }
 
     @Test

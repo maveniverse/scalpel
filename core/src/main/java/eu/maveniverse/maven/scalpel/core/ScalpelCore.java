@@ -14,7 +14,6 @@ import java.nio.file.Path;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.PatternSyntaxException;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -31,6 +30,7 @@ public class ScalpelCore {
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final GitChangeDetector gitChangeDetector;
+    private final BoundedRegexMatcher regexMatcher = new BoundedRegexMatcher();
 
     /**
      * Human-readable reason when the last {@link #detectChanges} invocation deliberately skipped
@@ -199,12 +199,7 @@ public class ScalpelCore {
     }
 
     private boolean matchesSafely(String value, String pattern, String configKey) {
-        try {
-            return value.matches(pattern);
-        } catch (PatternSyntaxException e) {
-            logger.warn("Scalpel: Invalid regex pattern '{}' in {}: {}", pattern, configKey, e.getMessage());
-            return false;
-        }
+        return regexMatcher.matches(value, pattern, configKey, logger);
     }
 
     private Repository openRepository(Path reactorRoot) throws IOException {

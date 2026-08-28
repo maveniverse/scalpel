@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -23,7 +24,9 @@ import eu.maveniverse.maven.scalpel.core.ChangeDetectionResult;
 import eu.maveniverse.maven.scalpel.core.ScalpelCore;
 import eu.maveniverse.maven.scalpel.core.ScalpelException;
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -1615,6 +1618,97 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(Files.exists(reportFile));
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         assertTrue(moduleHasReason(json, "module-b", "FORCE_BUILD"), "module-b should have FORCE_BUILD reason");
+    }
+
+    @Test
+    void reportMode_forceBuildModulesArtifactIdOverLimit_skipsMatchAndWarnsOnce() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // artifactId is fully PR-controlled (module directory name stays short:
+        // filesystems cap file names at 255 bytes, artifactIds have no such cap)
+        String longArtifactId = "m".repeat(300);
+        String longModuleDir = "long-module";
+
+        String parentPom = simpleParentPom("module-a", longModuleDir);
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String longModulePom = simpleChildPom(longArtifactId);
+        writePom(root, longModuleDir + "/pom.xml", longModulePom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject longModule =
+                createProject("com.example", longArtifactId, "1.0", root, longModuleDir + "/pom.xml", longModulePom);
+        longModule.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, longModule);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        // two patterns that would both match the over-long artifactId without an input cap
+        session.getSystemProperties().setProperty("scalpel.forceBuildModules", "zz-never,.*");
+
+        String err = captureStderr(() -> assertDoesNotThrow(() -> participant.afterProjectsRead(session)));
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertFalse(
+                moduleHasReason(json, longArtifactId, "FORCE_BUILD"),
+                "an over-limit artifactId must not be force-included, even against '.*'");
+        assertTrue(err.contains("forceBuildModules"), "the cap WARN must name the config key but stderr was: " + err);
+        assertEquals(
+                1,
+                countOccurrences(err, "character limit"),
+                "one cap WARN per over-long input, not one per pattern; stderr was: " + err);
+    }
+
+    @Test
+    void reportMode_forceBuildModulesEmptyProperty_noForceIncludes() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        // empty-string variant must behave as unset (no patterns, no matching, no failure)
+        session.getSystemProperties().setProperty("scalpel.forceBuildModules", "");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertFalse(moduleHasReason(json, "module-b", "FORCE_BUILD"), "no FORCE_BUILD expected with an empty list");
     }
 
     @Test
@@ -4358,6 +4452,32 @@ class ScalpelLifecycleParticipantTest {
     private boolean moduleHasReason(String json, String artifactId, String reason) {
         String block = extractModuleBlock(json, artifactId);
         return block != null && block.contains("\"" + reason + "\"");
+    }
+
+    /**
+     * Runs the action with System.err captured (slf4j-simple writes to stderr)
+     * and returns everything that was written during its execution.
+     */
+    private String captureStderr(Runnable action) {
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        try {
+            action.run();
+        } finally {
+            System.setErr(originalErr);
+        }
+        return captured.toString(StandardCharsets.UTF_8);
+    }
+
+    private int countOccurrences(String haystack, String needle) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = haystack.indexOf(needle, idx)) >= 0) {
+            count++;
+            idx += needle.length();
+        }
+        return count;
     }
 
     private boolean moduleHasAnySourceSet(String json, String artifactId) {
