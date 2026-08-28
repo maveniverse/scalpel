@@ -418,16 +418,23 @@ class PomChangeAnalyzer {
         // Parent/BOM POM changed: analyze what actually changed
         byte[] oldPomBytes = ctx.oldPomContents.get(changedPomPath);
         if (oldPomBytes == null) {
-            // New POM (didn't exist in base), mark all dependents as affected
+            // No base content: either a genuinely new POM or one skipped for exceeding
+            // scalpel.maxResourceFileSize (the git-side WARN names it); both fail toward affected
             if (logger.isDebugEnabled()) {
-                logger.debug("New parent/BOM POM: {}, marking all dependents as affected", key(project));
+                logger.debug(
+                        "No base content for parent/BOM POM {} (new or oversize-skipped), marking all dependents as affected",
+                        key(project));
             }
             ctx.affected.add(project);
             ctx.affected.addAll(dependents);
             if (ctx.explain) {
-                addEvidence(ctx.evidence, project, "new pom " + changedPomPath);
+                addEvidence(
+                        ctx.evidence, project, "no base content for " + changedPomPath + " (new or oversize-skipped)");
                 for (MavenProject dependent : dependents) {
-                    addEvidence(ctx.evidence, dependent, "new pom " + changedPomPath);
+                    addEvidence(
+                            ctx.evidence,
+                            dependent,
+                            "no base content for " + changedPomPath + " (new or oversize-skipped)");
                 }
             }
             return;
