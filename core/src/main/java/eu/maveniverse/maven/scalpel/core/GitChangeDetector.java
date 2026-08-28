@@ -89,9 +89,10 @@ public class GitChangeDetector {
             logger.debug("Merge base between {} and {}: {}", baseBranch, head, mergeBase.getName());
             return mergeBase.getId();
         } catch (MissingObjectException e) {
+            warnIfShallow(repository, baseBranch, head);
             logger.warn(
                     "Cannot compute merge base between {} and {}: commit history is incomplete"
-                            + " (shallow clone or missing objects). {}",
+                            + " (missing object). {}",
                     baseBranch,
                     head,
                     e.getMessage());
@@ -164,6 +165,9 @@ public class GitChangeDetector {
                 loader.copyTo(out);
                 return out.toByteArray();
             }
+        } catch (MissingObjectException e) {
+            warnIfShallow(repository, commitId.getName(), path);
+            throw e;
         }
     }
 
