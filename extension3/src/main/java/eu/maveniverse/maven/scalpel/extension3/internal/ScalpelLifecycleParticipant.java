@@ -57,6 +57,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     private static final String MAVEN_TEST_SKIP = "maven.test.skip";
     private static final String SKIP_TESTS = "skipTests";
     private static final String GLOB_PREFIX = "glob:";
+    private static final String UNRESOLVED_GA = "(unresolved)";
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final ScalpelCore scalpelCore;
@@ -707,6 +708,27 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 }
                 DependencyResolutionResult depResult = resolveProjectDependencies(project, session, collectCache);
                 if (depResult == null || depResult.getDependencyGraph() == null) {
+                    if (!affectedGAs.isEmpty()) {
+                        // Conservative: dependency resolution failed while there are
+                        // affected reactor modules whose impact could reach this one
+                        // through the unresolvable graph. Treat the module as affected
+                        // instead of silently dropping it. When nothing is affected
+                        // there is no impact the failure could hide, so skipping is
+                        // correct.
+                        logger.warn(
+                                "Cannot resolve dependencies of {} while propagating changes, conservatively marking as affected",
+                                key(project));
+                        List<String> reasons = new ArrayList<>();
+                        reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED);
+                        transitivelyAffected.put(project, reasons);
+                        affectedGAs.add(project.getGroupId() + ":" + project.getArtifactId());
+                        if (explain) {
+                            transitiveEvidence.put(
+                                    project,
+                                    List.of("dependency resolution failed; conservatively treated as affected"));
+                        }
+                        propagated = true;
+                    }
                     continue;
                 }
                 Map<String, String> depScopes = collectDependencyScopes(depResult.getDependencyGraph());
@@ -791,7 +813,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         ChangedDependencyMatch depMatch =
                 findChangedDependencyInTree(project, oldModel, session, collectCache, oldCollectCache);
         if (depMatch != null) {
-            if ("test".equals(depMatch.scope)) {
+            if (UNRESOLVED_GA.equals(depMatch.ga)) {
+                reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED);
+            } else if ("test".equals(depMatch.scope)) {
                 reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST);
             } else {
                 reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY);
@@ -1059,14 +1083,19 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         // Resolve new (current) dependency tree
         DependencyResolutionResult newResult = resolveProjectDependencies(project, session, collectCache);
         if (newResult == null || newResult.getDependencyGraph() == null) {
-            return null;
+            // Conservative: when the current tree cannot be resolved at all, assume it
+            // changed so the module is treated as affected (and its tests are not
+            // skipped downstream). A redundant rebuild is safer than a green build
+            // on untested code.
+            return new ChangedDependencyMatch(UNRESOLVED_GA, "compile");
         }
 
         // Resolve old dependency tree from old effective model
         DependencyResolutionResult oldResult =
                 resolveModelDependencies(oldEffectiveModel, project, session, oldCollectCache);
         if (oldResult == null || oldResult.getDependencyGraph() == null) {
-            return null;
+            // Conservative: same posture when the old tree cannot be resolved.
+            return new ChangedDependencyMatch(UNRESOLVED_GA, "compile");
         }
 
         // Collect (GA → version) from both trees and diff
@@ -1126,11 +1155,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             request.setResolutionFilter(COLLECT_ONLY_FILTER);
             result = dependenciesResolver.resolve(request);
         } catch (DependencyResolutionException e) {
-            result = e.getResult();
-            if (result == null) {
-                logger.debug("Cannot collect dependencies for {}: {}", key(project), e.getMessage());
-                return null;
-            }
+            // Conservative: even when the exception carries a partial result, its
+            // dependency graph may be incomplete — a missing subtree could silently
+            // omit the very dependency that changed, making the old/new diff conclude
+            // "no change" when the module IS affected.  Discard the partial result
+            // so callers take the conservative "changed" / UNRESOLVED path.
+            logger.warn(
+                    "Cannot collect dependencies for {}, conservatively treating module as affected: {}",
+                    key(project),
+                    e.getMessage());
+            return null;
         }
         cache.put(project, result);
         return result;
@@ -1159,11 +1193,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             request.setResolutionFilter(COLLECT_ONLY_FILTER);
             result = dependenciesResolver.resolve(request);
         } catch (DependencyResolutionException e) {
-            result = e.getResult();
-            if (result == null) {
-                logger.debug("Cannot collect old dependencies for {}: {}", key(currentProject), e.getMessage());
-                return null;
-            }
+            // Conservative: same posture as resolveProjectDependencies — discard
+            // partial results to avoid silently missing changes in an incomplete graph.
+            logger.warn(
+                    "Cannot collect old dependencies for {}, conservatively treating module as affected: {}",
+                    key(currentProject),
+                    e.getMessage());
+            return null;
         }
         cache.put(currentProject, result);
         return result;

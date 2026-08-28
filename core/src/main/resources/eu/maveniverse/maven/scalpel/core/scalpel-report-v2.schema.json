@@ -116,6 +116,7 @@
               "POM_CHANGE",
               "TRANSITIVE_DEPENDENCY",
               "TRANSITIVE_DEPENDENCY_TEST",
+              "TRANSITIVE_DEPENDENCY_UNRESOLVED",
               "MANAGED_PLUGIN",
               "DOWNSTREAM_DEPENDENT",
               "DOWNSTREAM_TEST",
