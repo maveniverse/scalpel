@@ -125,10 +125,11 @@ is published alongside the code. The current version is **2**.
   "baseBranch": "origin/main",
   "fullBuildTriggered": false,
   "triggerFile": null,
-  "changedFiles": ["module-a/src/main/java/Foo.java", "module-b/src/test/java/BarTest.java"],
+  "changedFiles": ["module-a/src/main/java/Foo.java", "module-b/src/test/java/BarTest.java", "gated-module/pom.xml"],
   "changedProperties": [],
   "changedManagedDependencies": [],
   "changedManagedPlugins": [],
+  "unmatchedPomPaths": ["gated-module/pom.xml"],
   "excludedUpstreamCount": 0,
   "affectedModules": [
     {
@@ -137,7 +138,8 @@ is published alongside the code. The current version is **2**.
       "path": "module-a",
       "reasons": ["SOURCE_CHANGE"],
       "category": "DIRECT",
-      "sourceSet": "main"
+      "sourceSet": "main",
+      "evidence": ["module-a/src/main/java/Foo.java"]
     },
     {
       "groupId": "com.example",
@@ -156,9 +158,25 @@ is published alongside the code. The current version is **2**.
       "testsSkipped": true,
       "testsSkippedReason": "EXCLUDED_DOWNSTREAM"
     }
+  ],
+  "skippedModules": [
+    {
+      "groupId": "com.example",
+      "artifactId": "module-d",
+      "path": "module-d",
+      "reason": "NOT_AFFECTED"
+    }
   ]
 }
 ```
+
+**Optional fields:** `unmatchedPomPaths` lists changed POMs that match no reactor project
+(profile-gated or `-pl`-excluded modules; their changes are ignored, with a warning).
+`skippedModules` enumerates reactor modules left out of the build set, each with the reason
+it was judged safe to skip (`NOT_AFFECTED`); it makes a green trimmed build reviewable.
+`evidence` on a module entry lists the specific inputs behind that module's decision (a
+changed file path, `property <name>`, `managed dep <ga>`, `managed plugin <ga>`, `downstream
+of <ga>`) and is emitted only with `-Dscalpel.explain=true`. All three are omitted when empty.
 
 **Status-only reports:** when analysis does not complete (failSafe bail-out, unexpected
 error) or is deliberately skipped (no changes detected, disabled by
@@ -172,12 +190,20 @@ e.g. `"no changes detected"`). Both fields are absent from normal full reports.
 
 | Version | Changes |
 |---------|---------|
-| `2` | Added `category`, `sourceSet`, `excludedUpstreamCount`, `testsSkipped`, `testsSkippedReason` |
+| `2` | Added `category`, `sourceSet`, `excludedUpstreamCount`, `testsSkipped`, `testsSkippedReason`. Later additive (no bump): `status`, `reason` (#137), `unmatchedPomPaths` (#138), `skippedModules` (#139), `evidence` (#142) |
 | `1` | Initial schema |
 
-**Compatibility:** new optional fields may be added within a major version. Consumers
-should ignore unknown fields. A version bump signals structural changes that existing
-consumers may need to handle.
+**Compatibility policy:** within a schema version, Scalpel may add new *optional* fields and
+new enum values; consumers must tolerate both (ignore unknown fields, treat unrecognized enum
+values as unknown). A version bump is required when a change breaks such consumers: removing
+or renaming a field, changing a field's type, making an optional field required, or removing
+an enum value that the schema ever declared and could have been emitted; removing an enum
+value that no released schema ever carried and that the code no longer emits (such as the
+never-emitted `UPSTREAM_DEPENDENCY` removed from the v2 enum in this change) does not break
+any consumer and needs no bump. Reports are validated against the checked-in schema by
+`core`'s unit tests, guarding required fields and enum values against drift in both
+directions; a newly emitted *optional* field still requires a deliberate schema edit, which
+the drift guard surfaces through the enum and required-field checks.
 
 **Affected module reasons:**
 
@@ -189,10 +215,12 @@ consumers may need to handle.
 | `TRANSITIVE_DEPENDENCY` | A changed managed dependency reaches this module transitively (compile/runtime scope) |
 | `TRANSITIVE_DEPENDENCY_TEST` | A changed managed dependency reaches this module transitively via test scope only |
 | `MANAGED_PLUGIN` | This module uses a plugin whose managed version changed |
-| `UPSTREAM_DEPENDENCY` | *(deprecated)* Included as an upstream dependency (via `alsoMake`) |
 | `DOWNSTREAM_DEPENDENT` | Included as a downstream dependent (via `alsoMakeDependents`) |
 | `DOWNSTREAM_TEST` | Included as a downstream dependent via test-scoped dependency only |
 | `FORCE_BUILD` | This module was force-included via `forceBuildModules` |
+
+Upstream build-prerequisite modules are not listed with a reason; they are excluded from
+`affectedModules` and only counted in `excludedUpstreamCount` (see #39).
 
 **Affected module source sets** (present on directly affected modules with source changes):
 
@@ -216,7 +244,14 @@ consumers may need to handle.
 |-------|------|-------------|
 | `excludedUpstreamCount` | integer | *(top-level)* Number of upstream build-prerequisite modules excluded from `affectedModules` |
 | `testsSkipped` | boolean | Present and `true` when tests are skipped for this module |
-| `testsSkippedReason` | string | Why tests were skipped (e.g. `EXCLUDED_DOWNSTREAM`) |
+| `testsSkippedReason` | string | Why tests were skipped; see values below |
+| `evidence` | array of strings | Explain-mode inputs behind this module's decision (requires `-Dscalpel.explain=true`) |
+
+**Test-skip reasons** (value of `testsSkippedReason`):
+
+| Value | Description |
+|-------|-------------|
+| `EXCLUDED_DOWNSTREAM` | The module is a downstream dependent that matched `skipTestsForDownstreamModules`, so it is built without tests |
 
 ## Source-Set-Aware Downstream Propagation
 
