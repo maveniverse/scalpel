@@ -226,15 +226,7 @@ class ScalpelCoreTest {
      * and returns everything that was written during its execution.
      */
     private String captureStderr(Runnable action) {
-        PrintStream originalErr = System.err;
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
-        try {
-            action.run();
-        } finally {
-            System.setErr(originalErr);
-        }
-        return captured.toString(StandardCharsets.UTF_8);
+        return TestOutputCapture.captureStderr(action);
     }
 
     @Test
@@ -427,14 +419,6 @@ class ScalpelCoreTest {
                     new String(result.getOldPomContents().get("pom.xml"), StandardCharsets.UTF_8).contains("1.0"),
                     "old POM content must be the base-branch version");
         }
-    }
-
-    /**
-     * Runs the callable with System.err captured (slf4j-simple writes to stderr)
-     * and returns everything that was written during its execution.
-     */
-    private String captureStderr(Runnable action) {
-        return TestOutputCapture.captureStderr(action);
     }
 
     /**
