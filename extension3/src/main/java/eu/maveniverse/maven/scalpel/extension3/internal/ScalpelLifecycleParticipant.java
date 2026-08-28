@@ -1155,17 +1155,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             request.setResolutionFilter(COLLECT_ONLY_FILTER);
             result = dependenciesResolver.resolve(request);
         } catch (DependencyResolutionException e) {
-            result = e.getResult();
-            if (result == null) {
-                // Conservative: with no partial results at all we cannot conclude
-                // anything about the module's dependencies; callers treat this as
-                // "changed" and mark the module affected.
-                logger.warn(
-                        "Cannot collect dependencies for {}, conservatively treating module as affected: {}",
-                        key(project),
-                        e.getMessage());
-                return null;
-            }
+            // Conservative: even when the exception carries a partial result, its
+            // dependency graph may be incomplete — a missing subtree could silently
+            // omit the very dependency that changed, making the old/new diff conclude
+            // "no change" when the module IS affected.  Discard the partial result
+            // so callers take the conservative "changed" / UNRESOLVED path.
+            logger.warn(
+                    "Cannot collect dependencies for {}, conservatively treating module as affected: {}",
+                    key(project),
+                    e.getMessage());
+            return null;
         }
         cache.put(project, result);
         return result;
@@ -1194,16 +1193,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             request.setResolutionFilter(COLLECT_ONLY_FILTER);
             result = dependenciesResolver.resolve(request);
         } catch (DependencyResolutionException e) {
-            result = e.getResult();
-            if (result == null) {
-                // Conservative: same posture as resolveProjectDependencies; callers
-                // treat the missing old tree as "changed" and mark the module affected.
-                logger.warn(
-                        "Cannot collect old dependencies for {}, conservatively treating module as affected: {}",
-                        key(currentProject),
-                        e.getMessage());
-                return null;
-            }
+            // Conservative: same posture as resolveProjectDependencies — discard
+            // partial results to avoid silently missing changes in an incomplete graph.
+            logger.warn(
+                    "Cannot collect old dependencies for {}, conservatively treating module as affected: {}",
+                    key(currentProject),
+                    e.getMessage());
+            return null;
         }
         cache.put(currentProject, result);
         return result;

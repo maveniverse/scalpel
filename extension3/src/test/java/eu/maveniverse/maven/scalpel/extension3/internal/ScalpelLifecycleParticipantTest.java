@@ -218,7 +218,7 @@ class ScalpelLifecycleParticipantTest {
                 """;
         writePom(root, "module-d/pom.xml", moduleDPom);
 
-        // module-e: dependency resolution fails, should NOT appear in report
+        // module-e: dependency resolution fails — conservatively marked as affected
         String moduleEPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -269,7 +269,7 @@ class ScalpelLifecycleParticipantTest {
         // module-b and module-d: resolution succeeds, has commons-lang
         //   - "new" resolution (real project): commons-lang:2.0
         //   - "old" resolution (temp copy): commons-lang:1.0
-        // module-e: resolution fails with empty partial results (simulates unresolvable deps)
+        // module-e: resolution fails (partial result discarded; conservative UNRESOLVED)
         // others: resolution succeeds, no matching deps
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenAnswer(invocation -> {
@@ -348,10 +348,11 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasField(json, "module-d", "category", "TRANSITIVE"),
                 "module-d should have TRANSITIVE category (not downstream, but genuinely uses changed dep)");
 
-        // module-e should NOT be in the report (resolution failed, dep not found in partial results)
-        assertFalse(
-                modulePresent(json, "module-e"),
-                "module-e should NOT be in report (resolution failed, no matching dep in partial results)");
+        // module-e should be conservatively marked as affected (resolution failed,
+        // partial graph is discarded because it could silently omit changed dependencies)
+        assertTrue(
+                moduleHasReason(json, "module-e", "TRANSITIVE_DEPENDENCY_UNRESOLVED"),
+                "module-e with resolution failure should be conservatively marked as affected");
 
         // changedManagedDependencies should list the GA whose version changed via property
         assertTrue(
@@ -363,8 +364,9 @@ class ScalpelLifecycleParticipantTest {
     void reportMode_totalResolutionFailureMarksModuleAffected() throws Exception {
         // A module whose dependency resolution fails with NO partial result must be
         // conservatively treated as affected (issue #82: never under-build on a
-        // swallowed failure). Contrast with reportMode_includesTransitivelyAffectedModules,
-        // where a PARTIAL result with an empty graph legitimately yields no match.
+        // swallowed failure). Both total and partial failures are now treated
+        // identically — partial graphs are discarded because they could silently
+        // omit changed dependencies.
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
