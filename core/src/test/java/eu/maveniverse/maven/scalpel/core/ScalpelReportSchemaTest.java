@@ -180,6 +180,7 @@ class ScalpelReportSchemaTest {
                 ScalpelReport.REASON_POM_CHANGE,
                 ScalpelReport.REASON_TRANSITIVE_DEPENDENCY,
                 ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_TEST,
+                ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED,
                 ScalpelReport.REASON_MANAGED_PLUGIN,
                 ScalpelReport.REASON_DOWNSTREAM_DEPENDENT,
                 ScalpelReport.REASON_DOWNSTREAM_TEST,
