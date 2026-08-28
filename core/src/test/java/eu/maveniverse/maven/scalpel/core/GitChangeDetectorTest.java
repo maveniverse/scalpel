@@ -15,9 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -655,6 +653,19 @@ class GitChangeDetectorTest {
     }
 
     @Test
+    void readFileAtCommit_threeArgOverload_usesDefaultCap() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("data.txt"), "x".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("data.txt").call();
+            git.commit().setMessage("initial").call();
+            ObjectId commitId = git.getRepository().resolve("HEAD");
+            // small file reads fine through the backward-compatible 3-arg form
+            byte[] read = detector.readFileAtCommit(git.getRepository(), commitId, "data.txt");
+            assertNotNull(read, "3-arg overload must read a file under the default cap");
+        }
+    }
+
+    @Test
     void readPomFilesAtCommit_nonPositiveCap_rejected() throws Exception {
         try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
             Files.write(tempDir.resolve("pom.xml"), "<project/>".getBytes(StandardCharsets.UTF_8));
@@ -735,15 +746,7 @@ class GitChangeDetectorTest {
      * and returns everything that was written during its execution.
      */
     private String captureStderr(Runnable action) {
-        PrintStream originalErr = System.err;
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
-        try {
-            action.run();
-        } finally {
-            System.setErr(originalErr);
-        }
-        return captured.toString(StandardCharsets.UTF_8);
+        return TestOutputCapture.captureStderr(action);
     }
 
     @Test

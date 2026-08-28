@@ -166,6 +166,14 @@ public class GitChangeDetector {
      * @return the file content, or null when the path is absent at the commit or its blob
      * exceeds {@code maxFileSize}
      */
+    /**
+     * Backward-compatible overload delegating to {@link #readFileAtCommit(Repository, ObjectId, String, long)}
+     * with the documented default cap ({@code scalpel.maxResourceFileSize}, 10 MiB).
+     */
+    public byte[] readFileAtCommit(Repository repository, ObjectId commitId, String path) throws IOException {
+        return readFileAtCommit(repository, commitId, path, ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE);
+    }
+
     public byte[] readFileAtCommit(Repository repository, ObjectId commitId, String path, long maxFileSize)
             throws IOException {
         requirePositiveMaxFileSize(maxFileSize);

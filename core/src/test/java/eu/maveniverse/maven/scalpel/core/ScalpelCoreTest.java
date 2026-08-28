@@ -15,8 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayOutputStream;
-import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -436,15 +434,7 @@ class ScalpelCoreTest {
      * and returns everything that was written during its execution.
      */
     private String captureStderr(Runnable action) {
-        PrintStream originalErr = System.err;
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
-        try {
-            action.run();
-        } finally {
-            System.setErr(originalErr);
-        }
-        return captured.toString(StandardCharsets.UTF_8);
+        return TestOutputCapture.captureStderr(action);
     }
 
     /**
