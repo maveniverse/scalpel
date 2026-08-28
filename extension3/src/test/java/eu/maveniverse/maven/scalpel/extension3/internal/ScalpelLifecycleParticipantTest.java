@@ -491,7 +491,8 @@ class ScalpelLifecycleParticipantTest {
                   </dependencies>
                 </project>
                 """;
-        String newModuleAPom = oldModuleAPom.replace("<version>1.0</version>", "<version>2.0</version>");
+        String newModuleAPom = oldModuleAPom.replace(
+                "commons-lang</artifactId><version>1.0</version>", "commons-lang</artifactId><version>2.0</version>");
         writePom(root, "module-a/pom.xml", newModuleAPom);
 
         // module-b: depends on module-a (propagation marks it via the changed GA)
