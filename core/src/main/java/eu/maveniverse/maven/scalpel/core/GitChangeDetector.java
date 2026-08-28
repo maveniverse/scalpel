@@ -153,7 +153,22 @@ public class GitChangeDetector {
         return changedFiles;
     }
 
-    public byte[] readFileAtCommit(Repository repository, ObjectId commitId, String path) throws IOException {
+    /**
+     * Reads the file content at the given path in the commit's tree.
+     * <p>
+     * The blob is read only when its size does not exceed {@code maxFileSize}: an oversized
+     * blob is skipped with a WARN and {@code null} is returned, the same value used for a
+     * path absent at the commit, so callers treat it conservatively (as changed/affected)
+     * instead of loading unbounded content into memory.
+     *
+     * @param maxFileSize maximum blob size in bytes to read (the
+     * {@code scalpel.maxResourceFileSize} cap); must be positive
+     * @return the file content, or null when the path is absent at the commit or its blob
+     * exceeds {@code maxFileSize}
+     */
+    public byte[] readFileAtCommit(Repository repository, ObjectId commitId, String path, long maxFileSize)
+            throws IOException {
+        requirePositiveMaxFileSize(maxFileSize);
         try (RevWalk revWalk = new RevWalk(repository)) {
             RevCommit commit = revWalk.parseCommit(commitId);
             try (TreeWalk treeWalk = TreeWalk.forPath(repository, path, commit.getTree())) {
@@ -161,6 +176,9 @@ public class GitChangeDetector {
                     return null;
                 }
                 ObjectLoader loader = repository.open(treeWalk.getObjectId(0));
+                if (isOverSizeCap(path, loader.getSize(), maxFileSize)) {
+                    return null;
+                }
                 ByteArrayOutputStream out = new ByteArrayOutputStream();
                 loader.copyTo(out);
                 return out.toByteArray();
@@ -169,6 +187,26 @@ public class GitChangeDetector {
             warnIfShallow(repository, commitId.getName(), path);
             throw e;
         }
+    }
+
+    private static void requirePositiveMaxFileSize(long maxFileSize) {
+        if (maxFileSize <= 0) {
+            throw new IllegalArgumentException("maxFileSize must be positive, got " + maxFileSize);
+        }
+    }
+
+    private boolean isOverSizeCap(String path, long blobSize, long maxFileSize) {
+        if (blobSize > maxFileSize) {
+            logger.warn(
+                    "Skipping blob {}: size {} bytes exceeds scalpel.maxResourceFileSize ({} bytes);"
+                            + " treating the change conservatively as affected."
+                            + " Raise -Dscalpel.maxResourceFileSize to read this blob",
+                    path,
+                    blobSize,
+                    maxFileSize);
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -274,9 +312,18 @@ public class GitChangeDetector {
      * Reads multiple files at the given commit in a single TreeWalk pass.
      * Uses a PathFilterGroup so the TreeWalk only visits matching entries,
      * and shares a single ObjectReader/RevWalk across all reads.
+     * <p>
+     * Blobs larger than {@code maxFileSize} are skipped with a WARN and omitted from the
+     * result, the same treatment as a path absent at the commit: POM-change analysis then
+     * marks the module and its dependents as affected rather than loading unbounded
+     * content into memory.
+     *
+     * @param maxFileSize maximum blob size in bytes to read (the
+     * {@code scalpel.maxResourceFileSize} cap); must be positive
      */
-    public Map<String, byte[]> readPomFilesAtCommit(Repository repository, ObjectId commitId, Set<String> paths)
-            throws IOException {
+    public Map<String, byte[]> readPomFilesAtCommit(
+            Repository repository, ObjectId commitId, Set<String> paths, long maxFileSize) throws IOException {
+        requirePositiveMaxFileSize(maxFileSize);
         if (paths.isEmpty()) {
             return Map.of();
         }
@@ -295,6 +342,9 @@ public class GitChangeDetector {
                             || treeWalk.getFileMode(0) == FileMode.EXECUTABLE_FILE) {
                         String path = treeWalk.getPathString();
                         ObjectLoader loader = reader.open(treeWalk.getObjectId(0));
+                        if (isOverSizeCap(path, loader.getSize(), maxFileSize)) {
+                            continue;
+                        }
                         ByteArrayOutputStream out = new ByteArrayOutputStream();
                         loader.copyTo(out);
                         result.put(path, out.toByteArray());

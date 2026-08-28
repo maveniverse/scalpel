@@ -185,8 +185,8 @@ public class ScalpelCore {
                     changedPomPaths.add(path);
                 }
             }
-            Map<String, byte[]> oldPomContents =
-                    gitChangeDetector.readPomFilesAtCommit(repository, mergeBase, changedPomPaths);
+            Map<String, byte[]> oldPomContents = gitChangeDetector.readPomFilesAtCommit(
+                    repository, mergeBase, changedPomPaths, config.getMaxResourceFileSize());
 
             return new ChangeDetectionResult(changedFiles, oldPomContents);
         } catch (ScalpelException e) {
