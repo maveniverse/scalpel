@@ -18,6 +18,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -191,6 +192,34 @@ class ScalpelReportSchemaTest {
     @Test
     void schemaSkippedReasons_matchEmittableConstants() {
         assertEquals(List.of(ScalpelReport.SKIP_REASON_NOT_AFFECTED), skippedModuleReasonsEnum());
+    }
+
+    @Test
+    void schemaTopLevelProperties_matchEmittableFields() {
+        // The validator cannot catch a newly emitted OPTIONAL field (JSON Schema ignores
+        // undeclared instance properties by design), so this guard compares the schema's
+        // declared top-level property set against the field names toJson can emit. A new
+        // field without a matching schema edit fails here instead of drifting silently.
+        Map<String, Object> props = cast(schema.get("properties"), "schema.properties");
+        Set<String> declared = new java.util.TreeSet<>(props.keySet());
+        // Every top-level key ScalpelReport.toJson emits, in emission order:
+        Set<String> emittable = new java.util.TreeSet<>(Set.of(
+                "version",
+                "scalpelVersion",
+                "baseBranch",
+                "fullBuildTriggered",
+                "triggerFile",
+                "changedFiles",
+                "changedProperties",
+                "changedManagedDependencies",
+                "changedManagedPlugins",
+                "unmatchedPomPaths",
+                "excludedUpstreamCount",
+                "affectedModules",
+                "skippedModules",
+                "status",
+                "reason"));
+        assertEquals(emittable, declared, "schema top-level properties must exactly match the fields toJson emits");
     }
 
     // ---------------------------------------------------------------
