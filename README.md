@@ -391,6 +391,18 @@ Use `forceBuildModules` with regex patterns matching artifactIds:
 -Dscalpel.forceBuildModules=.*-it,.*-tests
 ```
 
+Patterns use full-match Java regex semantics against the module's `artifactId`. These regexes and
+`disableOnBranch`/`disableOnBaseBranch` are evaluated against input a pull request author
+influences (artifactIds, branch names), so their match cost is bounded:
+
+- patterns are compiled once per build and cached, not compiled per match attempt;
+- inputs longer than **256 characters** are never matched: the attempt is skipped, a WARN is
+  logged once per input, and the input counts as a non-match.
+
+Keep patterns linear: avoid nested quantifiers such as `(a+)+` or `(.*)*`, which can backtrack
+exponentially even against short input. The documented examples above (`.*-it`, `.*-tests`) are
+linear and safe.
+
 For scheduled/cron builds where no changes may be detected, use `buildAllIfNoChanges` to fall back
 to a full build instead of building nothing:
 
@@ -420,7 +432,10 @@ for CI systems where incremental builds should be skipped on main, release, or m
 ```
 
 Branch patterns are Java regular expressions. For `disableOnBaseBranch`, the remote prefix
-(e.g. `origin/`) is stripped before matching.
+(e.g. `origin/`) is stripped before matching. Branch names are pull-request-influenced input,
+so the same cost bounds as `forceBuildModules` apply: patterns are compiled once per build,
+inputs longer than 256 characters are skipped with a WARN (counted as a non-match), and linear
+patterns without nested quantifiers are strongly preferred.
 
 ### Selected Projects (`-pl`) Handling
 
