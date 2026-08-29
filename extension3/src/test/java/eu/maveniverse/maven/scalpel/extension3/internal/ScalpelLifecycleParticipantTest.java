@@ -5939,4 +5939,188 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(
                 moduleHasField(json, "module-a", "category", "TRANSITIVE"), "module-a should have TRANSITIVE category");
     }
+
+    // --- Phase timing and operation-count instrumentation (#99) ---
+
+    /**
+     * Scenario for the timing-instrumentation tests: the parent POM's managed-dependency
+     * version property changed (lib.version 1.0 -> 2.0 on disk, 1.0 in the git base), so a
+     * run exercises POM analysis (effective model building for old and new state) and
+     * transitive dependency resolution. module-b's resolved tree contains deep-lib, whose
+     * version moved between old and new effective models, so module-b is transitively
+     * affected. Returns the ready-to-run report-mode session; everything lives under
+     * tempDir/project.
+     */
+    private MavenSession setupManagedVersionChangeScenario() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <lib.version>2.0</lib.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>org.example</groupId>
+                      <artifactId>deep-lib</artifactId>
+                      <version>${lib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        String oldParentPom = parentPom.replace("<lib.version>2.0</lib.version>", "<lib.version>1.0</lib.version>");
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        DependencyNode newGraph = createDependencyGraph(new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "deep-lib", "jar", "2.0"), "compile"));
+        DependencyNode oldGraph = createDependencyGraph(new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("org.example", "deep-lib", "jar", "1.0"), "compile"));
+        mockDependencyResolution("module-b", newGraph, oldGraph, allProjects);
+
+        return createSimpleSession(root, allProjects, "report");
+    }
+
+    @Test
+    void analysisTimingSummary_loggedAsOneInfoLine() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
+        writePom(root, "module-b/pom.xml", simpleChildPom("module-b"));
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA =
+                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
+        moduleA.setParent(parentProject);
+        MavenProject moduleB =
+                createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", simpleChildPom("module-b"));
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        String err = captureStderr(() -> assertDoesNotThrow(() -> participant.afterProjectsRead(session)));
+
+        String summary = err.lines()
+                .filter(l -> l.contains("Scalpel: analysis took"))
+                .findFirst()
+                .orElse("");
+        assertFalse(summary.isEmpty(), "expected a timing summary line on stderr but stderr was: " + err);
+        assertTrue(
+                summary.matches(".*Scalpel: analysis took \\d+ms.*"),
+                "summary must lead with the total in millis; was: " + summary);
+        assertTrue(
+                summary.contains("moduleMapping="),
+                "summary must break down at least the moduleMapping phase; was: " + summary);
+    }
+
+    @Test
+    void analysisTimingSummary_includesOperationCounts() throws Exception {
+        MavenSession session = setupManagedVersionChangeScenario();
+
+        String err = captureStderr(() -> assertDoesNotThrow(() -> participant.afterProjectsRead(session)));
+
+        String summary = err.lines()
+                .filter(l -> l.contains("Scalpel: analysis took"))
+                .findFirst()
+                .orElse("");
+        assertFalse(summary.isEmpty(), "expected a timing summary line on stderr but stderr was: " + err);
+        assertTrue(
+                summary.contains("models="),
+                "summary must count effective models built during POM analysis; was: " + summary);
+        assertTrue(
+                summary.contains("resolves="), "summary must count dependency resolutions performed; was: " + summary);
+    }
+
+    @Test
+    void reportMode_includesTimingAndOperationFields() throws Exception {
+        MavenSession session = setupManagedVersionChangeScenario();
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = tempDir.resolve("project/target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"timings\""), "report must carry a timings object; json was: " + json);
+        assertTrue(json.contains("\"totalMillis\""), "timings must carry the analysis total");
+        assertTrue(json.contains("\"phases\""), "timings must carry the per-phase breakdown");
+        assertTrue(json.contains("\"pomAnalysis\""), "phases must include the POM analysis phase");
+        assertTrue(json.contains("\"operations\""), "report must carry an operations object");
+        assertTrue(json.contains("\"models\""), "operations must include the effective-models counter");
+    }
+
+    @Test
+    void reportMode_statusOnlyReportHasNoTimingFields() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        writePom(root, "pom.xml", simpleParentPom("module-a"));
+        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
+
+        MavenProject parentProject =
+                createProject("com.example", "parent", "1.0", root, "pom.xml", simpleParentPom("module-a"));
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA =
+                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(new LinkedHashSet<>(), new HashMap<>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "status-only report should be written");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"status\""), "expected a status-only document (no changes detected)");
+        assertFalse(
+                json.contains("\"timings\""),
+                "status-only documents must omit timings entirely (null-input rule); json was: " + json);
+        assertFalse(
+                json.contains("\"operations\""),
+                "status-only documents must omit operations entirely (null-input rule); json was: " + json);
+    }
 }

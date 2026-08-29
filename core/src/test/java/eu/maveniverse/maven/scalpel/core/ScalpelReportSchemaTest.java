@@ -193,6 +193,25 @@ class ScalpelReportSchemaTest {
         assertEquals(List.of(ScalpelReport.SKIP_REASON_NOT_AFFECTED), skippedModuleReasonsEnum());
     }
 
+    @Test
+    void schema_declaresOptionalTimingAndOperationProperties() {
+        // #99: toJson can emit a timings object (totalMillis + per-phase millis) and an
+        // operations object (named counters) next to the analysis fields. The validator
+        // ignores undeclared instance properties by design, so presence must be asserted
+        // against the schema itself or the declaration would drift.
+        Map<String, Object> props = cast(schema.get("properties"), "schema.properties");
+        assertTrue(
+                props.containsKey("timings"),
+                "schema must declare the optional 'timings' object emitted with phase timing instrumentation");
+        assertTrue(
+                props.containsKey("operations"),
+                "schema must declare the optional 'operations' object emitted with operation counters");
+        Map<String, Object> timings = cast(props.get("timings"), "schema.properties.timings");
+        Map<String, Object> timingsProps = cast(timings.get("properties"), "schema.properties.timings.properties");
+        assertTrue(timingsProps.containsKey("totalMillis"), "timings must declare totalMillis");
+        assertTrue(timingsProps.containsKey("phases"), "timings must declare the phases map");
+    }
+
     // ---------------------------------------------------------------
     // Helpers
     // ---------------------------------------------------------------

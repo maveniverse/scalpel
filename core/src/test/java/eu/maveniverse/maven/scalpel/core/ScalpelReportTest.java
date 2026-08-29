@@ -555,6 +555,23 @@ class ScalpelReportTest {
     }
 
     @Test
+    void toJson_timingFieldsOmittedWhenNotInstrumented() {
+        // #99 null-input rule: a report built without instrumentation data must not
+        // carry timings/operations keys at all (no null, no empty objects).
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE)))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("\"timings\""), "timings must be omitted when nothing was recorded");
+        assertFalse(json.contains("\"operations\""), "operations must be omitted when nothing was counted");
+    }
+
+    @Test
     void jsonSchema_isOnClasspath() throws IOException {
         try (InputStream is =
                 getClass().getResourceAsStream("/eu/maveniverse/maven/scalpel/core/scalpel-report-v2.schema.json")) {
