@@ -71,6 +71,7 @@ public class ScalpelCore {
     public ChangeDetectionResult detectChanges(
             Path reactorRoot, ScalpelConfiguration config, Set<String> allPomPaths, Timings timings)
             throws ScalpelException {
+        requireNonNull(timings, "timings");
         lastDetectionSkipReason = null;
         Repository repository;
         try {
