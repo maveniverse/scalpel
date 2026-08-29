@@ -64,6 +64,8 @@ public final class ScalpelReport {
     private final List<AffectedModule> affectedModules;
     private final List<SkippedModule> skippedModules;
     private final int excludedUpstreamCount;
+    private final Timings timings;
+    private final long totalMillis;
 
     private ScalpelReport(
             String baseBranch,
@@ -78,7 +80,9 @@ public final class ScalpelReport {
             List<String> unmatchedPomPaths,
             List<AffectedModule> affectedModules,
             List<SkippedModule> skippedModules,
-            int excludedUpstreamCount) {
+            int excludedUpstreamCount,
+            Timings timings,
+            long totalMillis) {
         this.baseBranch = baseBranch;
         this.status = status;
         this.reason = reason;
@@ -92,6 +96,8 @@ public final class ScalpelReport {
         this.affectedModules = affectedModules;
         this.skippedModules = skippedModules;
         this.excludedUpstreamCount = excludedUpstreamCount;
+        this.timings = timings;
+        this.totalMillis = totalMillis;
     }
 
     public static class AffectedModule {
@@ -328,6 +334,38 @@ public final class ScalpelReport {
             }
             sb.append("  ]");
         }
+        // Instrumentation fields (#99): emitted only when something was recorded, and
+        // each of the two objects independently, so a run with phases but no counted
+        // operations carries timings only (and vice versa).
+        if (timings != null && !timings.getPhaseNames().isEmpty()) {
+            sb.append(",\n");
+            sb.append("  \"timings\": {\n");
+            sb.append("    \"totalMillis\": ").append(totalMillis).append(",\n");
+            sb.append("    \"phases\": {");
+            boolean first = true;
+            for (String phase : timings.getPhaseNames()) {
+                if (!first) {
+                    sb.append(", ");
+                }
+                first = false;
+                sb.append(jsonString(phase)).append(": ").append(timings.getPhaseMillis(phase));
+            }
+            sb.append("}\n");
+            sb.append("  }");
+        }
+        if (timings != null && !timings.getOperationNames().isEmpty()) {
+            sb.append(",\n");
+            sb.append("  \"operations\": {");
+            boolean firstOperation = true;
+            for (String operation : timings.getOperationNames()) {
+                if (!firstOperation) {
+                    sb.append(", ");
+                }
+                firstOperation = false;
+                sb.append(jsonString(operation)).append(": ").append(timings.getOperationCount(operation));
+            }
+            sb.append("}\n");
+        }
         sb.append("\n}\n");
         return sb.toString();
     }
@@ -443,6 +481,8 @@ public final class ScalpelReport {
         private final List<AffectedModule> affectedModules = new ArrayList<>();
         private final List<SkippedModule> skippedModules = new ArrayList<>();
         private int excludedUpstreamCount;
+        private Timings timings;
+        private long totalMillis;
 
         public Builder baseBranch(String baseBranch) {
             this.baseBranch = baseBranch;
@@ -509,6 +549,18 @@ public final class ScalpelReport {
             return this;
         }
 
+        /**
+         * Attaches phase timing and operation-count instrumentation. The {@code timings} and
+         * {@code operations} objects are emitted only when {@code timings} recorded at least
+         * one phase or counted at least one operation; {@code totalMillis} is the caller's
+         * wall-clock total for the whole analysis.
+         */
+        public Builder timings(Timings timings, long totalMillis) {
+            this.timings = timings;
+            this.totalMillis = totalMillis;
+            return this;
+        }
+
         public ScalpelReport build() {
             if (baseBranch == null) {
                 throw new IllegalStateException("baseBranch is required");
@@ -526,7 +578,9 @@ public final class ScalpelReport {
                     unmatchedPomPaths,
                     affectedModules,
                     skippedModules,
-                    excludedUpstreamCount);
+                    excludedUpstreamCount,
+                    timings,
+                    totalMillis);
         }
     }
 }

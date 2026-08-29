@@ -58,6 +58,14 @@ class ScalpelReportSchemaTest {
 
     @Test
     void representativeReportWithAllOptionalFields_validatesAgainstSchema() {
+        Timings timings = new Timings();
+        timings.start(Timings.PHASE_DIFF);
+        timings.stop(Timings.PHASE_DIFF);
+        timings.increment(Timings.OP_GIT_BLOBS_READ, 2);
+        timings.increment(Timings.OP_EFFECTIVE_MODELS, 6);
+        timings.increment(Timings.OP_DEPENDENCY_RESOLVES, 4);
+        timings.increment(Timings.OP_RESOLVE_CACHE_HITS, 1);
+        timings.increment(Timings.OP_RESOURCES_VISITED, 12);
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .status("skipped")
@@ -69,6 +77,7 @@ class ScalpelReportSchemaTest {
                 .changedManagedPlugins(List.of("org.apache.maven.plugins:maven-compiler-plugin"))
                 .unmatchedPomPaths(List.of("gated-module/pom.xml"))
                 .excludedUpstreamCount(1)
+                .timings(timings, 123)
                 .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                                 "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE))
                         .category(ScalpelReport.CATEGORY_DIRECT)
@@ -165,6 +174,10 @@ class ScalpelReportSchemaTest {
                         .stream()
                         .anyMatch(e -> e.contains("WHATEVER")),
                 "unknown skipped-module reason must be rejected");
+        assertTrue(
+                validate(mutate(report, m -> m.put("timings", Map.of("totalMillis", -1L, "phases", Map.of())))).stream()
+                        .anyMatch(e -> e.contains("totalMillis")),
+                "negative totalMillis must be rejected");
     }
 
     // ---------------------------------------------------------------

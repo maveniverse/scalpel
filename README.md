@@ -166,7 +166,12 @@ is published alongside the code. The current version is **2**.
       "path": "module-d",
       "reason": "NOT_AFFECTED"
     }
-  ]
+  ],
+  "timings": {
+    "totalMillis": 123,
+    "phases": {"repoOpen": 1, "mergeBase": 8, "diff": 30, "moduleMapping": 1, "transitiveResolve": 6}
+  },
+  "operations": {"blobs": 1, "resolves": 10, "resolveCacheHits": 4}
 }
 ```
 
@@ -177,6 +182,10 @@ it was judged safe to skip (`NOT_AFFECTED`); it makes a green trimmed build revi
 `evidence` on a module entry lists the specific inputs behind that module's decision (a
 changed file path, `property <name>`, `managed dep <ga>`, `managed plugin <ga>`, `downstream
 of <ga>`) and is emitted only with `-Dscalpel.explain=true`. All three are omitted when empty.
+`timings` (`totalMillis` plus per-phase millis) and `operations` (named counters: git blobs
+read, effective models built, dependency resolutions with cache hits, resource entries
+visited) carry the same instrumentation as the one-line `Scalpel: analysis took ...` INFO
+summary; both are omitted when the analysis recorded nothing.
 
 **Status-only reports:** when analysis does not complete (failSafe bail-out, unexpected
 error) or is deliberately skipped (no changes detected, disabled by
@@ -190,7 +199,7 @@ e.g. `"no changes detected"`). Both fields are absent from normal full reports.
 
 | Version | Changes |
 |---------|---------|
-| `2` | Added `category`, `sourceSet`, `excludedUpstreamCount`, `testsSkipped`, `testsSkippedReason`. Later additive (no bump): `status`, `reason` (#137), `unmatchedPomPaths` (#138), `skippedModules` (#139), `evidence` (#142) |
+| `2` | Added `category`, `sourceSet`, `excludedUpstreamCount`, `testsSkipped`, `testsSkippedReason`. Later additive (no bump): `status`, `reason` (#137), `unmatchedPomPaths` (#138), `skippedModules` (#139), `evidence` (#142), `timings`, `operations` (#99) |
 | `1` | Initial schema |
 
 **Compatibility policy:** within a schema version, Scalpel may add new *optional* fields and

@@ -21,7 +21,7 @@
     "version": {
       "type": "string",
       "const": "2",
-      "description": "Report schema version. '2' indicates the v2 format with category, sourceSet, excludedUpstreamCount, testsSkipped, and testsSkippedReason fields, plus the optional fields added within v2 under the compatibility policy: status, reason, unmatchedPomPaths, skippedModules, and evidence."
+      "description": "Report schema version. '2' indicates the v2 format with category, sourceSet, excludedUpstreamCount, testsSkipped, and testsSkippedReason fields, plus the optional fields added within v2 under the compatibility policy: status, reason, unmatchedPomPaths, skippedModules, evidence, timings, and operations."
     },
     "scalpelVersion": {
       "type": "string",
@@ -87,6 +87,53 @@
     "reason": {
       "type": "string",
       "description": "Human-readable explanation accompanying an optional status field (e.g. 'no changes detected')."
+    },
+    "timings": {
+      "type": "object",
+      "description": "Optional (#99): phase timing instrumentation for the analysis run. Present only when at least one phase was recorded; omitted entirely (not null, not empty) from status-only documents and uninstrumented reports.",
+      "required": ["totalMillis", "phases"],
+      "properties": {
+        "totalMillis": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Wall-clock milliseconds for the whole Scalpel analysis."
+        },
+        "phases": {
+          "type": "object",
+          "description": "Milliseconds spent per phase (repoOpen, fetch, mergeBase, diff, status, readOldPoms, moduleMapping, pomAnalysis, transitiveResolve, trim, applySkipTests). Only phases that ran are present; phase names may grow additively."
+        }
+      }
+    },
+    "operations": {
+      "type": "object",
+      "description": "Optional (#99): analysis operation counters. Present only when at least one operation was counted; omitted entirely from status-only documents and uninstrumented reports.",
+      "properties": {
+        "blobs": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Git blobs read for old-POM comparison."
+        },
+        "models": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Effective POM models built (old state plus current state)."
+        },
+        "resolves": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Dependency graph resolutions performed."
+        },
+        "resolveCacheHits": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Resolutions served from the shared collect cache instead of re-resolved."
+        },
+        "resources": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Filesystem entries visited by the filtered-resource scan."
+        }
+      }
     }
   },
   "$defs": {

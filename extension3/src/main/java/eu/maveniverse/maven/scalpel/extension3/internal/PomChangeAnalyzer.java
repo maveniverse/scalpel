@@ -226,13 +226,14 @@ class PomChangeAnalyzer {
         private final Set<String> changedProperties;
         private final Map<MavenProject, Set<String>> evidence;
         private final List<String> unmatchedPomPaths;
+        private final long resourcesVisited;
 
         Result(
                 Set<MavenProject> affectedProjects,
                 Map<String, Model> oldEffectiveModels,
                 Map<String, Model> newEffectiveModels,
                 Set<String> changedProperties) {
-            this(affectedProjects, oldEffectiveModels, newEffectiveModels, changedProperties, Map.of(), List.of());
+            this(affectedProjects, oldEffectiveModels, newEffectiveModels, changedProperties, Map.of(), List.of(), 0L);
         }
 
         Result(
@@ -241,13 +242,15 @@ class PomChangeAnalyzer {
                 Map<String, Model> newEffectiveModels,
                 Set<String> changedProperties,
                 Map<MavenProject, Set<String>> evidence,
-                List<String> unmatchedPomPaths) {
+                List<String> unmatchedPomPaths,
+                long resourcesVisited) {
             this.affectedProjects = affectedProjects;
             this.oldEffectiveModels = oldEffectiveModels;
             this.newEffectiveModels = newEffectiveModels;
             this.changedProperties = changedProperties;
             this.evidence = evidence;
             this.unmatchedPomPaths = unmatchedPomPaths;
+            this.resourcesVisited = resourcesVisited;
         }
 
         Set<MavenProject> getAffectedProjects() {
@@ -277,6 +280,11 @@ class PomChangeAnalyzer {
         List<String> getUnmatchedPomPaths() {
             return unmatchedPomPaths;
         }
+
+        /** Filesystem entries visited by filtered-resource scans (instrumentation, #99). */
+        long getResourcesVisited() {
+            return resourcesVisited;
+        }
     }
 
     /**
@@ -300,6 +308,8 @@ class PomChangeAnalyzer {
         final Map<MavenProject, Set<String>> evidence = new LinkedHashMap<>();
         final Set<String> allChangedProperties = new LinkedHashSet<>();
         final List<String> unmatchedPomPaths = new ArrayList<>();
+        /** Filesystem entries visited by filtered-resource scans (instrumentation, #99). */
+        long resourcesVisited;
     }
 
     /**
@@ -386,7 +396,8 @@ class PomChangeAnalyzer {
                 ctx.newEffectiveModels,
                 ctx.allChangedProperties,
                 ctx.evidence,
-                ctx.unmatchedPomPaths);
+                ctx.unmatchedPomPaths,
+                ctx.resourcesVisited);
     }
 
     private static void addEvidence(Map<MavenProject, Set<String>> evidence, MavenProject project, String item) {
@@ -602,7 +613,7 @@ class PomChangeAnalyzer {
             // parent, not the child), so the raw-model property check above won't catch them.
             if (!childAffected
                     && !changedProperties.isEmpty()
-                    && hasFilteredResourcesWithChangedProperty(child, changedProperties)) {
+                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, ctx)) {
                 logger.debug("Child {} has filtered resources referencing changed properties", key(child));
                 if (ctx.explain) {
                     addEvidence(ctx.evidence, child, "filtered resources referencing changed properties");
@@ -1322,7 +1333,8 @@ class PomChangeAnalyzer {
      * Filtered resources live outside the POM model, so effective model comparison cannot
      * detect property substitutions in resource files.
      */
-    private boolean hasFilteredResourcesWithChangedProperty(MavenProject project, Set<String> changedProperties) {
+    private boolean hasFilteredResourcesWithChangedProperty(
+            MavenProject project, Set<String> changedProperties, AnalysisContext ctx) {
         List<String> refs = new ArrayList<>();
         for (String prop : changedProperties) {
             refs.add("${" + prop + "}");
@@ -1351,7 +1363,7 @@ class PomChangeAnalyzer {
             if (!Files.isDirectory(resourceDir)) {
                 continue;
             }
-            if (scanDirectoryForPropertyRefs(resourceDir, refs)) {
+            if (scanDirectoryForPropertyRefs(resourceDir, refs, ctx)) {
                 logger.debug(
                         "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
                 return true;
@@ -1363,9 +1375,10 @@ class PomChangeAnalyzer {
     private static final int MAX_RESOURCE_WALK_DEPTH = 32;
     private static final int MAX_RESOURCE_WALK_FILES = 10_000;
 
-    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
+    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs, AnalysisContext ctx) {
         // Does not follow symbolic links: a symlink could loop forever or point
         // outside the module (leaking file content into the analysis)
+        // Every exit path adds the entries it visited to ctx.resourcesVisited (#99).
         int[] visitedEntries = new int[1];
         boolean[] budgetExceeded = new boolean[1];
         boolean[] depthTruncated = new boolean[1];
@@ -1418,6 +1431,7 @@ class PomChangeAnalyzer {
             // Conservative: an unreadable directory during the walk means we cannot
             // know whether it contains a property reference, so treat as affected
             logger.warn("Cannot walk filtered resource directory {}: {}", dir, e.getMessage());
+            ctx.resourcesVisited += visitedEntries[0];
             return true;
         }
         if (budgetExceeded[0]) {
@@ -1426,6 +1440,7 @@ class PomChangeAnalyzer {
                             + " Module will be conservatively marked as affected.",
                     dir,
                     MAX_RESOURCE_WALK_FILES);
+            ctx.resourcesVisited += visitedEntries[0];
             return true;
         }
         if (depthTruncated[0]) {
@@ -1434,8 +1449,10 @@ class PomChangeAnalyzer {
                             + " Module will be conservatively marked as affected.",
                     dir,
                     MAX_RESOURCE_WALK_DEPTH);
+            ctx.resourcesVisited += visitedEntries[0];
             return true;
         }
+        ctx.resourcesVisited += visitedEntries[0];
         return foundRef[0];
     }
 

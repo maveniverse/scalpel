@@ -257,7 +257,7 @@ class ScalpelLifecycleParticipantTest {
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
         ChangeDetectionResult detectionResult = new ChangeDetectionResult(changedFiles, oldPoms);
-        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(detectionResult);
+        when(scalpelCore.detectChanges(any(), any(), any(), any())).thenReturn(detectionResult);
 
         // commons-lang dependency used for transitive resolution (old vs new version)
         org.eclipse.aether.graph.Dependency commonsLangNew = new org.eclipse.aether.graph.Dependency(
@@ -433,7 +433,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // module-e: total resolution failure, exception carries NO partial result
@@ -539,7 +539,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("module-a/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("module-a/pom.xml", oldModuleAPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
@@ -668,7 +668,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // No transitive deps to resolve
@@ -804,7 +804,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("parent/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("parent/pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // No transitive deps to resolve for this test
@@ -903,7 +903,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/test/java/com/example/MyTest.java");
         changedFiles.add("module-b/src/main/java/com/example/Service.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
 
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
@@ -1026,7 +1026,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // module-b: commons-lang is only via test scope (old=1.0, new=2.0)
@@ -1146,7 +1146,7 @@ class ScalpelLifecycleParticipantTest {
         // module-a has a source change
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/com/example/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
 
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
@@ -1215,7 +1215,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1254,7 +1254,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1298,7 +1298,7 @@ class ScalpelLifecycleParticipantTest {
         // module-a is directly affected; the parent is force-included so nothing is skipped
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1383,7 +1383,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1439,7 +1439,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-b/src/main/java/Bar.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1505,7 +1505,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-x/src/main/java/Baz.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1566,7 +1566,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-c/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1608,7 +1608,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1652,7 +1652,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1698,7 +1698,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1734,7 +1734,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add(".github/workflows/ci.yml");
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1773,7 +1773,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/README.md");
         changedFiles.add("module-b/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -1900,7 +1900,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("bom/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // Mock dependency resolution: module-b has commons-lang transitively (old=1.0, new=2.0)
@@ -2000,7 +2000,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2056,7 +2056,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2103,7 +2103,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2149,7 +2149,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2214,7 +2214,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2287,7 +2287,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("module-a/src/main/java/Foo.java");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // module-b has commons-lang transitively (old=1.0, new=2.0)
@@ -2395,7 +2395,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("module-a/src/main/java/Foo.java");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
         setupEmptyDependencyResolution();
 
@@ -2445,7 +2445,7 @@ class ScalpelLifecycleParticipantTest {
         // Only module-a has a source change
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -2484,7 +2484,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("README.md");
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -2526,7 +2526,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         changedFiles.add("module-b/src/main/java/Bar.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2571,7 +2571,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("module-a/src/main/java/Foo.java");
         changedFiles.add("module-b/src/main/java/Bar.java");
         changedFiles.add("module-c/src/main/java/Baz.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2612,7 +2612,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         changedFiles.add("module-b/src/main/java/Bar.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2653,7 +2653,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("module-a/src/main/java/Foo.java");
         changedFiles.add("module-a/README.md");
         changedFiles.add("module-b/src/main/java/Bar.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2758,7 +2758,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("parent/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("parent/pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         DependencyResolutionResult emptyResolution = mock(DependencyResolutionResult.class);
@@ -2828,7 +2828,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         changedFiles.add("module-b/src/main/java/Bar.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2869,7 +2869,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
         changedFiles.add("module-b/src/main/java/Bar.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2911,7 +2911,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -2959,7 +2959,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -3016,7 +3016,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -3061,7 +3061,7 @@ class ScalpelLifecycleParticipantTest {
         // A CI config file changed, matching the disable trigger
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add(".github/workflows/ci.yml");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3099,7 +3099,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -3130,7 +3130,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -3167,7 +3167,7 @@ class ScalpelLifecycleParticipantTest {
         Files.createDirectories(reportFile.getParent());
         Files.write(reportFile, "STALE-REPORT".getBytes(StandardCharsets.UTF_8));
 
-        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.detectChanges(any(), any(), any(), any())).thenReturn(null);
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
@@ -3199,7 +3199,7 @@ class ScalpelLifecycleParticipantTest {
         List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         // Null detection result (e.g., no git repo or no base branch)
-        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.detectChanges(any(), any(), any(), any())).thenReturn(null);
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "report");
@@ -3239,7 +3239,7 @@ class ScalpelLifecycleParticipantTest {
         Files.createDirectories(reportFile.getParent());
         Files.write(reportFile, "STALE-REPORT".getBytes(StandardCharsets.UTF_8));
 
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(new LinkedHashSet<>(), new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -3281,7 +3281,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("docs/guide.md");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -3320,7 +3320,7 @@ class ScalpelLifecycleParticipantTest {
 
         List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
-        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.detectChanges(any(), any(), any(), any())).thenReturn(null);
         when(scalpelCore.getLastDetectionSkipReason()).thenReturn("disabled by disableOnBranch");
         setupEmptyDependencyResolution();
 
@@ -3358,7 +3358,7 @@ class ScalpelLifecycleParticipantTest {
 
         List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
-        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.detectChanges(any(), any(), any(), any())).thenReturn(null);
         when(scalpelCore.getLastDetectionSkipReason()).thenReturn("no base branch configured");
         setupEmptyDependencyResolution();
 
@@ -3398,7 +3398,7 @@ class ScalpelLifecycleParticipantTest {
 
         List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
-        when(scalpelCore.detectChanges(any(), any(), any())).thenReturn(null);
+        when(scalpelCore.detectChanges(any(), any(), any(), any())).thenReturn(null);
         when(scalpelCore.getLastDetectionSkipReason()).thenReturn("not a git repository");
         setupEmptyDependencyResolution();
 
@@ -3489,7 +3489,7 @@ class ScalpelLifecycleParticipantTest {
         List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
         // No changed files
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(new LinkedHashSet<String>(), new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3524,7 +3524,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("README.md");
         changedFiles.add("CHANGELOG.md");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3562,7 +3562,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add(".github/workflows/ci.yml");
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3599,7 +3599,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", "<<<INVALID XML>>>".getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
         setupEmptyDependencyResolution();
 
@@ -3634,7 +3634,7 @@ class ScalpelLifecycleParticipantTest {
 
         // ScalpelCore throws ScalpelException (e.g. merge-base unavailable with failSafe=false in core,
         // but the lifecycle participant should still respect its own failSafe check)
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenThrow(new ScalpelException("Could not find merge base between origin/main and HEAD"));
         setupEmptyDependencyResolution();
 
@@ -3665,7 +3665,7 @@ class ScalpelLifecycleParticipantTest {
 
         List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenThrow(new ScalpelException("Could not find merge base between origin/main and HEAD"));
         setupEmptyDependencyResolution();
 
@@ -3703,7 +3703,7 @@ class ScalpelLifecycleParticipantTest {
         // Change a file that doesn't map to any module (e.g. root-level non-pom file)
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add(".gitignore");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3745,7 +3745,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3784,7 +3784,7 @@ class ScalpelLifecycleParticipantTest {
         // module-b has source changes, module-a is upstream
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-b/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3843,7 +3843,7 @@ class ScalpelLifecycleParticipantTest {
         // module-b has source changes
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-b/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3937,7 +3937,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
         setupEmptyDependencyResolution();
 
@@ -3975,7 +3975,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("Jenkinsfile");
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -4013,7 +4013,7 @@ class ScalpelLifecycleParticipantTest {
         // module-b has source changes, module-a is upstream
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-b/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -4072,7 +4072,7 @@ class ScalpelLifecycleParticipantTest {
         List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -4138,7 +4138,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
         setupEmptyDependencyResolution();
 
@@ -4202,7 +4202,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
         setupEmptyDependencyResolution();
 
@@ -4627,7 +4627,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("bom/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("bom/pom.xml", oldBomPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // module-a has smallrye-graphql as a transitive dependency (old=2.18.1, new=2.18.2)
@@ -4906,7 +4906,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("parent/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("parent/pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // No transitive dep resolution matches (changedManagedDepGAs should be empty anyway)
@@ -5173,7 +5173,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("parent/pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("parent/pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
         setupEmptyDependencyResolution();
 
@@ -5298,7 +5298,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add(".mvn/extensions.xml");
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -5362,7 +5362,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -5456,7 +5456,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -5488,7 +5488,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -5545,7 +5545,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/docs/guide.md");
         changedFiles.add("module-b/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -5669,7 +5669,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // Build two-level dependency graphs (old=1.0, new=2.0 for deep-lib):
@@ -5773,7 +5773,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // Build diamond dependency graphs (old=1.0, new=2.0 for target-lib):
@@ -5894,7 +5894,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         // Build two-level trees (old=1.0, new=2.0 for deep-test-lib):
@@ -5996,7 +5996,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("pom.xml");
         Map<String, byte[]> oldPoms = new HashMap<>();
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
 
         DependencyNode newGraph = createDependencyGraph(new org.eclipse.aether.graph.Dependency(
@@ -6031,7 +6031,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<>()));
         setupEmptyDependencyResolution();
 
@@ -6104,7 +6104,7 @@ class ScalpelLifecycleParticipantTest {
 
         List<MavenProject> allProjects = List.of(parentProject, moduleA);
 
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(new LinkedHashSet<>(), new HashMap<>()));
         setupEmptyDependencyResolution();
 
