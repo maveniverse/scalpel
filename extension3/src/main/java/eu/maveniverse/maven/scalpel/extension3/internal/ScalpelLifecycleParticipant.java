@@ -296,7 +296,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             reactorRoot,
                             allProjects,
                             AnalysisContext.empty(
-                                    changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs));
+                                    changedFiles,
+                                    changedProperties,
+                                    changedManagedDepGAs,
+                                    changedManagedPluginGAs,
+                                    unmatchedPomPaths));
                 } else if (config.isModeSkipTests()) {
                     skipTestsOnAll(allProjects);
                 }
@@ -346,7 +350,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             reactorRoot,
                             allProjects,
                             AnalysisContext.empty(
-                                    changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs));
+                                    changedFiles,
+                                    changedProperties,
+                                    changedManagedDepGAs,
+                                    changedManagedPluginGAs,
+                                    unmatchedPomPaths));
                 } else if (config.isModeSkipTests()) {
                     skipTestsOnAll(allProjects);
                 }
@@ -388,7 +396,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                         changedFiles,
                                         changedProperties,
                                         changedManagedDepGAs,
-                                        changedManagedPluginGAs));
+                                        changedManagedPluginGAs,
+                                        unmatchedPomPaths));
                     } else if (config.isModeSkipTests()) {
                         skipTestsOnAll(allProjects);
                     }

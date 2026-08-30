@@ -7,10 +7,12 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -24,6 +26,19 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class ScalpelReportTest {
+
+    @Test
+    void skippedModule_rejectsUnknownReason() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> new ScalpelReport.SkippedModule("g", "a", "p", "SOMETHING_ELSE"),
+                "unknown skip reasons must not reach the report");
+        assertDoesNotThrow(() -> new ScalpelReport.SkippedModule("g", "a", "p", "NOT_AFFECTED"));
+        assertThrows(
+                NullPointerException.class,
+                () -> new ScalpelReport.SkippedModule("g", "a", "p", null),
+                "null reason fails fast");
+    }
 
     @TempDir
     Path tempDir;

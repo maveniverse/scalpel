@@ -306,7 +306,7 @@ Note that properties defined in a project POM's `<properties>` are deliberately 
 | `scalpel.excludePaths` | *(none)* | Comma-separated glob patterns; changed files matching these are ignored |
 | `scalpel.includePaths` | *(none)* | Comma-separated glob patterns; narrows the affected set to matching modules rather than filtering changed files |
 | `scalpel.disableTriggers` | *(none)* | Comma-separated glob patterns; if any changed file matches, Scalpel is disabled entirely |
-| `scalpel.reportFile` | `target/scalpel-report.json` | Path for the JSON report (report mode), relative to reactor root |
+| `scalpel.reportFile` | `target/scalpel-report.json` | Path for the JSON report (written in report and trim modes), relative to reactor root |
 | `scalpel.impactedLog` | *(none)* | Write impacted module paths to this file (one per line) |
 | `scalpel.forceBuildModules` | *(none)* | Comma-separated regex patterns; always include modules whose artifactId matches |
 | `scalpel.buildAllIfNoChanges` | `false` | Build everything when no changes are detected (useful for cron builds) |
@@ -621,7 +621,7 @@ with a `<type>test-jar</type>` dependency are affected. In Apache Camel, this re
 tests on affected ones. GIB has no equivalent — it either includes or excludes modules from the
 reactor.
 
-**Structured JSON report.** Scalpel's `mode=report` produces a JSON file with per-module reasons
+**Structured JSON report.** Scalpel writes a JSON file (in `report` and `trim` modes) with per-module reasons
 (`SOURCE_CHANGE`, `POM_CHANGE`, `TRANSITIVE_DEPENDENCY`, `MANAGED_PLUGIN`, etc.), categories
 (`DIRECT`, `UPSTREAM`, `DOWNSTREAM`), and source sets (`main`, `test`). CI scripts can make
 fine-grained decisions based on this data.
