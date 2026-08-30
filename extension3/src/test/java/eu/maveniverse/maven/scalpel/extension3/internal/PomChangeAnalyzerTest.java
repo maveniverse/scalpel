@@ -3076,12 +3076,14 @@ class PomChangeAnalyzerTest {
 
         @Override
         public void addRepository(Repository repository) throws InvalidRepositoryException {
-            // deliberately ignores repository declarations: the reactor model resolver only needs parent resolution
+            // deliberately ignores repository declarations: the reactor model resolver resolves parents and BOM imports
+            // from the reactor itself, never remote repositories
         }
 
         @Override
         public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {
-            // deliberately ignores repository declarations: the reactor model resolver only needs parent resolution
+            // deliberately ignores repository declarations: the reactor model resolver resolves parents and BOM imports
+            // from the reactor itself, never remote repositories
         }
 
         @Override
