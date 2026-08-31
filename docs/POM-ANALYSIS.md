@@ -36,7 +36,7 @@ parent/
 
 If `bom/pom.xml` changes `lib.version` from `3.12` to `3.14`, Scalpel detects that:
 
-* `module-a` is directly affected (it imports the BOM and uses `commons-lang`)
+* `module-a` is directly affected (reason `POM_CHANGE`, category `DIRECT`): the BOM change reaches it through the import, because it uses `commons-lang`
 * `module-b` is not affected (it does not import the BOM or use the dependency)
 
 This works with all POM analysis features. Property indirection, managed plugin changes, and transitive dependency checking all apply.

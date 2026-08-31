@@ -83,13 +83,13 @@ The following GIB features have no direct Scalpel equivalent. For each, we expla
 | `gib.buildAllIfNoChanges` | `scalpel.buildAllIfNoChanges` | Same |
 | `gib.failOnError` | `scalpel.failSafe` | Inverted semantics (`failSafe=true` is like `failOnError=false`) |
 | `gib.buildUpstreamMode` | *(no equivalent)* | Scalpel always uses the full impacted set |
-| `gib.excludeDownstreamModulesPackagedAs` | *(no equivalent)* | Use `forceBuildModules` or CI scripting |
+| `gib.excludeDownstreamModulesPackagedAs` | *(no equivalent)* | Use `scalpel.alsoMakeDependents=false` for a broad local bypass, or CI scripting |
 | `gib.includePathsMatching` | *(no equivalent)* | File-level include filter. Use `excludePaths` inversely. Not `scalpel.includePaths`, which is module-scoped |
-| `gib.disableBranchComparison` | *(no equivalent)* | Use `uncommitted` or `untracked` without setting `baseBranch` |
+| `gib.disableBranchComparison` | *(no equivalent)* | Set `scalpel.baseBranch=HEAD` together with `uncommitted`/`untracked`; without a base branch Scalpel returns before reading them |
 | `gib.loadImpactedDependenciesFrom` | *(no equivalent)* | |
 | `gib.logImpactedFormat` | *(no equivalent)* | JSON report contains GAV information |
 | `gib.logProjectsMode` | *(no equivalent)* | |
-| `gib.failOnMissingGitDir` | `scalpel.failSafe` | Covered by general fail-safe behavior |
+| `gib.failOnMissingGitDir` | *(no equivalent)* | A missing `.git` always falls back to a full build, regardless of `failSafe` |
 | `gib.compareToMergeBase` | *(no equivalent)* | Scalpel always uses merge-base |
 | `gib.help` | *(no equivalent)* | |
 
@@ -124,7 +124,7 @@ Key differences:
 * `scalpel.baseBranch` uses `origin/main` (not `refs/remotes/origin/main`)
 * `scalpel.excludePaths` uses glob patterns (not regex)
 * `uncommitted` and `untracked` default to `false`, so they can be omitted
-* `failSafe` defaults to `true` (GIB's `failOnError` defaults to `true`)
+* `failSafe` defaults to `true` (fail-open: errors fall back to a full build); GIB's `failOnError` defaults to `true` (fail-closed: errors fail the build), so the out-of-the-box behavior differs
 
 ## See Also
 

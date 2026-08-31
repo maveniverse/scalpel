@@ -69,6 +69,7 @@ The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/res
       "artifactId": "module-c",
       "path": "module-c",
       "reasons": ["DOWNSTREAM_DEPENDENT"],
+      "category": "DOWNSTREAM",
       "testsSkipped": true,
       "testsSkippedReason": "EXCLUDED_DOWNSTREAM"
     }
@@ -92,7 +93,7 @@ The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/res
 | `scalpelVersion` | string | Scalpel version that generated this report |
 | `baseBranch` | string | The base branch used for change detection |
 | `fullBuildTriggered` | boolean | `true` if a full build was triggered (e.g., by `fullBuildTriggers`) |
-| `triggerFile` | string | Path of the file that triggered a full build (if applicable) |
+| `triggerFile` | string or null | Path of the file that triggered a full build; `null` when no full build was triggered |
 | `changedFiles` | string[] | List of changed files (relative to reactor root) |
 | `changedProperties` | string[] | List of property names that changed in POMs |
 | `changedManagedDependencies` | string[] | List of changed managed dependency GAVs |
@@ -103,6 +104,8 @@ The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/res
 | `skippedModules` | object[] | Reactor modules left out of the build set (see below) |
 | `status` | string | *(optional)* Only present when analysis did not complete: `"failed"` or `"skipped"` |
 | `reason` | string | *(optional)* Human-readable explanation when `status` is present |
+
+**Status-only reports:** when analysis does not complete (failSafe bail-out, unexpected error) or is deliberately skipped (no changes detected, disabled by configuration, all files excluded by path filters), Scalpel overwrites the report file with this minimal status document so that a previous run's report cannot be mistaken for current results. A `"failed"` status means: do not trust the report contents, read the build log. Both fields are absent from normal full reports.
 
 ## Module Object Fields
 
@@ -136,7 +139,7 @@ Each module in `affectedModules` or `skippedModules` contains:
 | `DOWNSTREAM_TEST` | Included as a downstream dependent via test-scoped dependency only |
 | `FORCE_BUILD` | This module was force-included via `forceBuildModules` |
 
-Upstream build-prerequisite modules are not listed with a reason; they are excluded from `affectedModules` and only counted in `excludedUpstreamCount`.
+Upstream build-prerequisite modules are split in two: a module that is itself directly or transitively affected but was included in the build set as an upstream prerequisite is listed in `affectedModules` with category `UPSTREAM` and its actual reason. A module included purely as a build-order prerequisite (no affected reason at all) is not listed; those are only counted in `excludedUpstreamCount`.
 
 ## Affected Module Source Sets
 
