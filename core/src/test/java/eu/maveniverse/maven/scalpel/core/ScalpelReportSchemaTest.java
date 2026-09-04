@@ -19,6 +19,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -221,9 +222,9 @@ class ScalpelReportSchemaTest {
         // declared top-level property set against the field names toJson can emit. A new
         // field without a matching schema edit fails here instead of drifting silently.
         Map<String, Object> props = cast(schema.get("properties"), "schema.properties");
-        Set<String> declared = new java.util.TreeSet<>(props.keySet());
+        Set<String> declared = new TreeSet<>(props.keySet());
         // Every top-level key ScalpelReport.toJson emits, in emission order:
-        Set<String> emittable = new java.util.TreeSet<>(Set.of(
+        Set<String> emittable = new TreeSet<>(Set.of(
                 "version",
                 "scalpelVersion",
                 "baseBranch",
