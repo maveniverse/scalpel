@@ -111,6 +111,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             List<String> selectedProjects = session.getRequest().getSelectedProjects();
             if (selectedProjects != null && !selectedProjects.isEmpty()) {
                 logger.info("Scalpel {} disabled due to -pl project selection", version);
+                if (config.isModeShadow()) {
+                    // This exit predates any measurement; a previous run's shadow document
+                    // must not survive it (#89 semantics, shadow twin).
+                    writeShadowStatus(
+                            session.getRequest()
+                                    .getMultiModuleProjectDirectory()
+                                    .toPath(),
+                            "skipped",
+                            "disabled by -pl project selection");
+                }
                 return;
             }
         }
@@ -623,6 +633,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (config.isFailSafe()) {
                 logger.warn("Scalpel: {}, building all modules", e.getMessage());
                 logger.debug("ScalpelException details", e);
+                if (config.isModeShadow()) {
+                    // The monitor is the last thing the passive branch installs, so an
+                    // exception reaching here means nothing was measured; a previous run's
+                    // shadow document must not survive the bail-out.
+                    writeShadowStatus(reactorRoot, "failed", e.getMessage());
+                }
                 return;
             }
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
