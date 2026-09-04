@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 public final class ScalpelReport {
 
@@ -49,10 +50,10 @@ public final class ScalpelReport {
     public static final String SKIP_REASON_NOT_AFFECTED = "NOT_AFFECTED";
 
     /** The skip reasons a {@link SkippedModule} may carry; extend together with the schema enum. */
-    private static final java.util.Set<String> KNOWN_SKIP_REASONS = java.util.Set.of(SKIP_REASON_NOT_AFFECTED);
+    private static final Set<String> KNOWN_SKIP_REASONS = Set.of(SKIP_REASON_NOT_AFFECTED);
 
     /** The reasons an {@link AffectedModule} may carry; extend together with the schema enum. */
-    private static final java.util.Set<String> KNOWN_MODULE_REASONS = java.util.Set.of(
+    private static final Set<String> KNOWN_MODULE_REASONS = Set.of(
             REASON_SOURCE_CHANGE,
             REASON_TEST_CHANGE,
             REASON_POM_CHANGE,
@@ -68,6 +69,10 @@ public final class ScalpelReport {
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";
     public static final String CATEGORY_DOWNSTREAM = "DOWNSTREAM";
     public static final String CATEGORY_TRANSITIVE = "TRANSITIVE";
+
+    /** The categories an {@link AffectedModule} may carry; extend together with the schema enum. */
+    private static final Set<String> KNOWN_CATEGORIES =
+            Set.of(CATEGORY_DIRECT, CATEGORY_UPSTREAM, CATEGORY_DOWNSTREAM, CATEGORY_TRANSITIVE);
 
     private final String baseBranch;
     private final String status;
@@ -163,14 +168,9 @@ public final class ScalpelReport {
             if (sourceSet != null && !"main".equals(sourceSet) && !"test".equals(sourceSet)) {
                 throw new IllegalArgumentException("sourceSet must be 'main', 'test', or null");
             }
-            if (category != null
-                    && !CATEGORY_DIRECT.equals(category)
-                    && !CATEGORY_UPSTREAM.equals(category)
-                    && !CATEGORY_DOWNSTREAM.equals(category)
-                    && !CATEGORY_TRANSITIVE.equals(category)) {
+            if (category != null && !KNOWN_CATEGORIES.contains(category)) {
                 throw new IllegalArgumentException(
-                        "Unknown category '" + category + "'. Known categories: " + CATEGORY_DIRECT + ", "
-                                + CATEGORY_UPSTREAM + ", " + CATEGORY_DOWNSTREAM + ", " + CATEGORY_TRANSITIVE);
+                        "Unknown category '" + category + "'. Known categories: " + KNOWN_CATEGORIES);
             }
             requireNonNull(reasons, "reasons").forEach(r -> {
                 if (!KNOWN_MODULE_REASONS.contains(r)) {

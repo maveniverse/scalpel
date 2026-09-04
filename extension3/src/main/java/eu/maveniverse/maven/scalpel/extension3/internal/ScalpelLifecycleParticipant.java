@@ -499,6 +499,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         allProjects,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
+                                .unmatchedPomPaths(unmatchedPomPaths)
                                 .directlyAffected(directlyAffected)
                                 .affectedBySource(affectedBySource)
                                 .testOnlyBySource(sourceResult.getTestOnlyAffected())
