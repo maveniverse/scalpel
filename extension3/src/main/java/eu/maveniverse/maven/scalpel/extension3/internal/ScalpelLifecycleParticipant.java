@@ -319,6 +319,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (directlyAffected.isEmpty() && oldEffectiveModels.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
                 if (config.isPassiveMode()) {
+                    if (config.isModeShadow()) {
+                        writeShadowStatus(reactorRoot, "skipped", "no modules affected by changes");
+                    }
                     writeReport(
                             config,
                             reactorRoot,
@@ -382,6 +385,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (directlyAffected.isEmpty() && transitivelyAffected.isEmpty()) {
                 logger.info("Scalpel: No modules affected by changes");
                 if (config.isPassiveMode()) {
+                    if (config.isModeShadow()) {
+                        writeShadowStatus(reactorRoot, "skipped", "no modules affected by changes");
+                    }
                     writeReport(
                             config,
                             reactorRoot,
@@ -427,6 +433,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 if (allAffected.isEmpty()) {
                     logger.info("Scalpel: No modules match includePaths filters");
                     if (config.isPassiveMode()) {
+                        if (config.isModeShadow()) {
+                            writeShadowStatus(reactorRoot, "skipped", "no modules match includePaths filters");
+                        }
                         writeReport(
                                 config,
                                 reactorRoot,
@@ -523,7 +532,18 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         // "." like the impacted log does (#84) so every module has a name.
                         return path.isEmpty() ? "." : path;
                     };
-                    for (MavenProject project : decision.getBuildSet()) {
+                    List<MavenProject> decisionBuildSet = decision.getBuildSet();
+                    if (!includeMatchers.isEmpty()) {
+                        // Mirror the post-computeBuildSet filter trim mode applies, so the
+                        // shadow decision is the set trim would actually build: downstream
+                        // modules outside the includePaths scope are dropped here too.
+                        Set<MavenProject> affected = allAffected;
+                        decisionBuildSet = new ArrayList<>(decisionBuildSet);
+                        decisionBuildSet.removeIf(project -> !affected.contains(project)
+                                && !decision.getUpstreamOnly().contains(project)
+                                && !matchesIncludePaths(project, includeMatchers, reactorRoot));
+                    }
+                    for (MavenProject project : decisionBuildSet) {
                         wouldHaveBuilt.add(moduleKey.apply(project));
                     }
                     Set<String> wouldHaveSkipped = new LinkedHashSet<>();
@@ -1591,6 +1611,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     private void writeStatusReport(ScalpelConfiguration config, Path reactorRoot, String status, String reason) {
         String baseBranch = config.getBaseBranch();
         try {
+            // Written first and independently: a failure of the report write below must
+            // not leave a previous run's shadow measurement in place.
+            if (config.isModeShadow()) {
+                writeShadowStatus(reactorRoot, status, reason);
+            }
             ScalpelReport report = ScalpelReport.builder()
                     .baseBranch(baseBranch != null ? baseBranch : "(unconfigured)")
                     .status(status)
@@ -1603,9 +1628,6 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     status,
                     reason,
                     config.getReportFile());
-            if (config.isModeShadow()) {
-                writeShadowStatus(reactorRoot, status, reason);
-            }
         } catch (Exception e) {
             // Status reports must never fail the build; that is their entire job.
             logger.warn("Scalpel: Could not overwrite report with {} status: {}", status, e.toString());
@@ -1644,13 +1666,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 .changedFiles(changedFiles)
                 .build();
         try {
-            report.writeToFile(reactorRoot, config.getReportFile());
-            logger.info("Scalpel: Report written to {}", config.getReportFile());
+            // Written first and independently: a failure of the report write below must
+            // not leave a previous run's shadow measurement in place.
             if (config.isModeShadow()) {
-                // A full build was triggered, so the would-be decision is "build all":
-                // record that instead of leaving a previous run's measurement in place.
                 writeShadowStatus(reactorRoot, "skipped", "full build triggered by " + triggerFile);
             }
+            report.writeToFile(reactorRoot, config.getReportFile());
+            logger.info("Scalpel: Report written to {}", config.getReportFile());
         } catch (IOException e) {
             handleWriteFailure(config, "Failed to write report", e);
         }
