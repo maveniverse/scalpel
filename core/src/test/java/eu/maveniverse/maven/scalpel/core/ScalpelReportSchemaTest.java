@@ -18,6 +18,8 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.TreeSet;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
@@ -211,6 +213,44 @@ class ScalpelReportSchemaTest {
     @Test
     void schemaSkippedReasons_matchEmittableConstants() {
         assertEquals(List.of(ScalpelReport.SKIP_REASON_NOT_AFFECTED), skippedModuleReasonsEnum());
+    }
+
+    @Test
+    void schemaTopLevelProperties_matchEmittableFields() {
+        // The validator cannot catch a newly emitted OPTIONAL field (JSON Schema ignores
+        // undeclared instance properties by design), so this guard compares the schema's
+        // declared top-level property set against the field names toJson can emit. A new
+        // field without a matching schema edit fails here instead of drifting silently.
+        //
+        // Rather than hardcoding the emittable set, we derive it from a maximal report
+        // instance that populates every optional field. This way, adding a field to
+        // toJson() without updating the schema (or vice versa) is caught automatically.
+        Timings timings = new Timings();
+        timings.start(Timings.PHASE_DIFF);
+        timings.stop(Timings.PHASE_DIFF);
+        timings.increment(Timings.OP_GIT_BLOBS_READ, 1);
+        ScalpelReport maximalReport = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .status("skipped")
+                .reason("drift guard fixture")
+                .fullBuildTriggered(false)
+                .changedFiles(List.of("A.java"))
+                .changedProperties(List.of("v"))
+                .changedManagedDependencies(List.of("g:a"))
+                .changedManagedPlugins(List.of("g:p"))
+                .unmatchedPomPaths(List.of("x/pom.xml"))
+                .excludedUpstreamCount(1)
+                .timings(timings, 1)
+                .addAffectedModule(
+                        new ScalpelReport.AffectedModule("g", "a", "a", List.of(ScalpelReport.REASON_SOURCE_CHANGE)))
+                .addSkippedModule(
+                        new ScalpelReport.SkippedModule("g", "b", "b", ScalpelReport.SKIP_REASON_NOT_AFFECTED))
+                .build();
+        Map<String, Object> emitted = cast(Json.parse(maximalReport.toJson()), "maximal report");
+        Set<String> emittable = new TreeSet<>(emitted.keySet());
+        Map<String, Object> props = cast(schema.get("properties"), "schema.properties");
+        Set<String> declared = new TreeSet<>(props.keySet());
+        assertEquals(emittable, declared, "schema top-level properties must exactly match the fields toJson emits");
     }
 
     @Test
