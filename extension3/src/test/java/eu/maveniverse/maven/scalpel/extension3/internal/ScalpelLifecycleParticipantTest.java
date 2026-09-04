@@ -4424,7 +4424,10 @@ class ScalpelLifecycleParticipantTest {
         }
 
         @Override
-        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {}
+        public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {
+            // deliberately ignores repository declarations: the reactor model resolver resolves parents and BOM imports
+            // from the reactor itself, never remote repositories
+        }
 
         @Override
         public org.apache.maven.model.resolution.ModelResolver newCopy() {
