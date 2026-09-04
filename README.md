@@ -572,7 +572,7 @@ child modules with `<filtering>true</filtering>` reference that property in thei
 **Source-set-aware propagation.** When only test sources (`src/test/**`) change in a module,
 Scalpel does not rebuild downstream modules that depend on the production artifact. Only modules
 with a `<type>test-jar</type>` dependency are affected. In Apache Camel, this reduces a
-`camel-core` test change from ~500 downstream modules to ~25 (measured 2026-08-27, see the
+`camel-core` test change from 518 transitive dependents to 25 (measured 2026-08-27, see the
 test-jar section above for the reproduction).
 
 **Skip-tests mode.** Scalpel offers `mode=skip-tests`, which builds all modules but only runs
