@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://maveniverse.eu/schemas/scalpel-report-v2.json",
   "title": "Scalpel Report",
-  "description": "JSON report produced by Scalpel (mode=report) describing which modules in a Maven multi-module reactor are affected by a git changeset.",
+  "description": "JSON report produced by Scalpel (report and trim modes) describing which modules in a Maven multi-module reactor are affected by a git changeset.",
   "type": "object",
   "required": [
     "version",

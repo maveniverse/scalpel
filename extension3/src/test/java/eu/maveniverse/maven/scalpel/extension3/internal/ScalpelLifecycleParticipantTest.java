@@ -3680,6 +3680,46 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void reportMode_unmatchedPomPathsReachReportOnEarlyReturn() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        // Only changed file is a POM matching no reactor project (e.g. profile-gated module):
+        // the analysis takes the "no modules affected" early return, and the report must still
+        // carry unmatchedPomPaths - it is the answer to "why was nothing affected".
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("gated-module/pom.xml");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        // The real PomChangeAnalyzer is wired in (see setUp): gated-module/pom.xml matches no
+        // reactor project, so it lands in unmatchedPomPaths and the analysis takes the
+        // no-modules-affected early return.
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "report must be written even when no module is affected");
+        String json = Files.readString(reportFile);
+        assertTrue(
+                json.contains("\"unmatchedPomPaths\": [\"gated-module/pom.xml\"]"),
+                "unmatchedPomPaths must survive the no-modules-affected early return: " + json);
+    }
+
+    @Test
     void noModulesAffected_skipTestsMode_skipsAllTests() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);

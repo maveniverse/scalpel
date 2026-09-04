@@ -7,6 +7,8 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
+import static java.util.Objects.requireNonNull;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -14,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 public final class ScalpelReport {
 
@@ -46,10 +49,30 @@ public final class ScalpelReport {
      */
     public static final String SKIP_REASON_NOT_AFFECTED = "NOT_AFFECTED";
 
+    /** The skip reasons a {@link SkippedModule} may carry; extend together with the schema enum. */
+    private static final Set<String> KNOWN_SKIP_REASONS = Set.of(SKIP_REASON_NOT_AFFECTED);
+
+    /** The reasons an {@link AffectedModule} may carry; extend together with the schema enum. */
+    private static final Set<String> KNOWN_MODULE_REASONS = Set.of(
+            REASON_SOURCE_CHANGE,
+            REASON_TEST_CHANGE,
+            REASON_POM_CHANGE,
+            REASON_TRANSITIVE_DEPENDENCY,
+            REASON_TRANSITIVE_DEPENDENCY_TEST,
+            REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED,
+            REASON_MANAGED_PLUGIN,
+            REASON_DOWNSTREAM_DEPENDENT,
+            REASON_DOWNSTREAM_TEST,
+            REASON_FORCE_BUILD);
+
     public static final String CATEGORY_DIRECT = "DIRECT";
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";
     public static final String CATEGORY_DOWNSTREAM = "DOWNSTREAM";
     public static final String CATEGORY_TRANSITIVE = "TRANSITIVE";
+
+    /** The categories an {@link AffectedModule} may carry; extend together with the schema enum. */
+    private static final Set<String> KNOWN_CATEGORIES =
+            Set.of(CATEGORY_DIRECT, CATEGORY_UPSTREAM, CATEGORY_DOWNSTREAM, CATEGORY_TRANSITIVE);
 
     private final String baseBranch;
     private final String status;
@@ -151,9 +174,19 @@ public final class ScalpelReport {
             if (sourceSet != null && !"main".equals(sourceSet) && !"test".equals(sourceSet)) {
                 throw new IllegalArgumentException("sourceSet must be 'main', 'test', or null");
             }
-            this.groupId = groupId;
-            this.artifactId = artifactId;
-            this.path = path;
+            if (category != null && !KNOWN_CATEGORIES.contains(category)) {
+                throw new IllegalArgumentException(
+                        "Unknown category '" + category + "'. Known categories: " + KNOWN_CATEGORIES);
+            }
+            requireNonNull(reasons, "reasons").forEach(r -> {
+                if (!KNOWN_MODULE_REASONS.contains(r)) {
+                    throw new IllegalArgumentException(
+                            "Unknown module reason '" + r + "'. Known reasons: " + KNOWN_MODULE_REASONS);
+                }
+            });
+            this.groupId = requireNonNull(groupId, "groupId");
+            this.artifactId = requireNonNull(artifactId, "artifactId");
+            this.path = requireNonNull(path, "path");
             this.reasons = reasons;
             this.category = category;
             this.sourceSet = sourceSet;
@@ -253,10 +286,15 @@ public final class ScalpelReport {
         private final String reason;
 
         public SkippedModule(String groupId, String artifactId, String path, String reason) {
-            this.groupId = groupId;
-            this.artifactId = artifactId;
-            this.path = path;
-            this.reason = reason;
+            this.groupId = requireNonNull(groupId, "groupId");
+            this.artifactId = requireNonNull(artifactId, "artifactId");
+            this.path = requireNonNull(path, "path");
+            this.reason = requireNonNull(reason, "reason");
+            if (!KNOWN_SKIP_REASONS.contains(reason)) {
+                throw new IllegalArgumentException(
+                        "Unknown skipped-module reason '" + reason + "'. Known reasons: " + KNOWN_SKIP_REASONS
+                                + ". Extend the schema enum, this set and the drift test together when adding one.");
+            }
         }
 
         public String getGroupId() {
@@ -302,7 +340,7 @@ public final class ScalpelReport {
         sb.append("  \"changedManagedPlugins\": ")
                 .append(jsonStringArray(changedManagedPlugins))
                 .append(",\n");
-        if (unmatchedPomPaths != null && !unmatchedPomPaths.isEmpty()) {
+        if (!unmatchedPomPaths.isEmpty()) {
             sb.append("  \"unmatchedPomPaths\": ")
                     .append(jsonStringArray(unmatchedPomPaths))
                     .append(",\n");

@@ -314,7 +314,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             reactorRoot,
                             allProjects,
                             AnalysisContext.empty(
-                                    changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs),
+                                    changedFiles,
+                                    changedProperties,
+                                    changedManagedDepGAs,
+                                    changedManagedPluginGAs,
+                                    unmatchedPomPaths),
                             timings,
                             analysisStartNano);
                 } else if (config.isModeSkipTests()) {
@@ -373,7 +377,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             reactorRoot,
                             allProjects,
                             AnalysisContext.empty(
-                                    changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs),
+                                    changedFiles,
+                                    changedProperties,
+                                    changedManagedDepGAs,
+                                    changedManagedPluginGAs,
+                                    unmatchedPomPaths),
                             timings,
                             analysisStartNano);
                 } else if (config.isModeSkipTests()) {
@@ -414,7 +422,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 reactorRoot,
                                 allProjects,
                                 AnalysisContext.empty(
-                                        changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs),
+                                        changedFiles,
+                                        changedProperties,
+                                        changedManagedDepGAs,
+                                        changedManagedPluginGAs,
+                                        unmatchedPomPaths),
                                 timings,
                                 analysisStartNano);
                     } else if (config.isModeSkipTests()) {
@@ -538,6 +550,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         allProjects,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
+                                .unmatchedPomPaths(unmatchedPomPaths)
                                 .directlyAffected(directlyAffected)
                                 .affectedBySource(affectedBySource)
                                 .testOnlyBySource(sourceResult.getTestOnlyAffected())

@@ -65,14 +65,14 @@ public class GitChangeDetector {
     public ObjectId findMergeBase(Repository repository, String baseBranch, String head) throws IOException {
         ObjectId baseId = repository.resolve(baseBranch);
         if (baseId == null) {
-            warnIfShallow(repository, baseBranch, head);
             logger.warn("Cannot resolve base branch: {}", baseBranch);
+            warnIfShallow(repository, baseBranch, head);
             return null;
         }
         ObjectId headId = repository.resolve(head);
         if (headId == null) {
-            warnIfShallow(repository, baseBranch, head);
             logger.warn("Cannot resolve head: {}", head);
+            warnIfShallow(repository, baseBranch, head);
             return null;
         }
 
@@ -89,7 +89,6 @@ public class GitChangeDetector {
             logger.debug("Merge base between {} and {}: {}", baseBranch, head, mergeBase.getName());
             return mergeBase.getId();
         } catch (MissingObjectException e) {
-            warnIfShallow(repository, baseBranch, head);
             logger.warn(
                     "Cannot compute merge base between {} and {}: commit history is incomplete"
                             + " (missing object). {}",
@@ -97,6 +96,7 @@ public class GitChangeDetector {
                     head,
                     e.getMessage());
             logger.debug("MissingObjectException details", e);
+            warnIfShallow(repository, baseBranch, head);
             return null;
         } catch (IOException e) {
             logger.warn("Cannot compute merge base between {} and {}: {}", baseBranch, head, e.getMessage());

@@ -70,8 +70,10 @@ final class AnalysisContext {
             Set<String> changedFiles,
             Set<String> changedProperties,
             Set<String> changedManagedDepGAs,
-            Set<String> changedManagedPluginGAs) {
+            Set<String> changedManagedPluginGAs,
+            Set<String> unmatchedPomPaths) {
         return builder(changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
+                .unmatchedPomPaths(unmatchedPomPaths)
                 .build();
     }
 
