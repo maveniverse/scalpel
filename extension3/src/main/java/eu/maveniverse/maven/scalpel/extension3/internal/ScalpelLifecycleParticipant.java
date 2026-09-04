@@ -1415,13 +1415,78 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Files.createDirectories(logPath.getParent());
             List<String> lines = new ArrayList<>();
             for (MavenProject project : affectedModules) {
-                lines.add(relativePath(reactorRoot, project));
+                String relPath = relativePath(reactorRoot, project);
+                if (relPath.isEmpty()) {
+                    // The reactor root's relative path is the empty string; represent it as
+                    // "." so an affected root stays visible to CI consumers instead of
+                    // disappearing as a blank (or skipped) line (#84).
+                    relPath = ".";
+                }
+                if (!isSafeImpactedLogPath(relPath)) {
+                    // The log is one path per line, consumed by CI shell scripts ($(cat ...),
+                    // xargs); a module directory name is PR-author-controlled, so a path outside
+                    // the documented safe set is skipped rather than escaped (#84).
+                    logger.warn(
+                            "Scalpel: Skipping module {} in impacted log: path '{}' uses characters outside the"
+                                    + " safe set (letters, digits, '-', '_', '.', '/'; see README)",
+                            key(project),
+                            escapeControlChars(relPath));
+                    continue;
+                }
+                lines.add(relPath);
             }
             Files.write(logPath, lines, StandardCharsets.UTF_8);
             logger.info("Scalpel: Impacted modules written to {}", config.getImpactedLog());
         } catch (IOException e) {
             handleWriteFailure(config, "Failed to write impacted log", e);
         }
+    }
+
+    /**
+     * Safe character set for impacted-log lines. The log holds one relative module path per line
+     * and is consumed by CI shell scripts, so a PR author controlling a module directory name must
+     * not be able to inject shell metacharacters, spaces, quotes, glob characters or
+     * line/control characters into it. Only {@code [A-Za-z0-9._-/]} is accepted; a leading dash
+     * (option injection) and the empty string are rejected too. Control characters and newlines
+     * are rejected by construction: nothing outside this set passes. Backslashes never occur
+     * ({@link #relativePath} normalizes separators to '/') and would be rejected like any other
+     * character.
+     */
+    static boolean isSafeImpactedLogPath(String path) {
+        if (path == null || path.isEmpty() || path.charAt(0) == '-') {
+            return false;
+        }
+        for (int i = 0; i < path.length(); i++) {
+            char c = path.charAt(i);
+            boolean allowed = (c >= 'a' && c <= 'z')
+                    || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9')
+                    || c == '-'
+                    || c == '_'
+                    || c == '.'
+                    || c == '/';
+            if (!allowed) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Escapes control characters (newlines included) so a rejected path cannot forge extra
+     * lines in the skip warning itself.
+     */
+    private static String escapeControlChars(String value) {
+        StringBuilder escaped = new StringBuilder(value.length() + 8);
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (Character.isISOControl(c)) {
+                escaped.append("\\u%04x".formatted((int) c));
+            } else {
+                escaped.append(c);
+            }
+        }
+        return escaped.toString();
     }
 
     /**

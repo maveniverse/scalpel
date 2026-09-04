@@ -3801,6 +3801,210 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void impactedLog_skipsModulePathsWithShellMetacharacters() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // module-safe: ordinary directory name; module;rm and module$(id): directory names a
+        // PR author controls, containing shell metacharacters that make $(cat ...) / xargs
+        // consumption of the log injection-prone
+        String parentPom = simpleParentPom("module-safe", "module;rm", "module$(id)");
+        writePom(root, "pom.xml", parentPom);
+        String safePom = simpleChildPom("module-safe");
+        writePom(root, "module-safe/pom.xml", safePom);
+        String semiPom = simpleChildPom("module-semi");
+        writePom(root, "module;rm/pom.xml", semiPom);
+        String cmdSubPom = simpleChildPom("module-cmdsub");
+        writePom(root, "module$(id)/pom.xml", cmdSubPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleSafe =
+                createProject("com.example", "module-safe", "1.0", root, "module-safe/pom.xml", safePom);
+        moduleSafe.setParent(parentProject);
+        MavenProject moduleSemi =
+                createProject("com.example", "module-semi", "1.0", root, "module;rm/pom.xml", semiPom);
+        moduleSemi.setParent(parentProject);
+        MavenProject moduleCmdSub =
+                createProject("com.example", "module-cmdsub", "1.0", root, "module$(id)/pom.xml", cmdSubPom);
+        moduleCmdSub.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleSafe, moduleSemi, moduleCmdSub);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-safe/src/main/java/Foo.java");
+        changedFiles.add("module;rm/src/main/java/Foo.java");
+        changedFiles.add("module$(id)/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.impactedLog", "target/scalpel-impacted.log");
+
+        String stderr = runCapturingStdErr(() -> participant.afterProjectsRead(session));
+
+        Path logFile = root.resolve("target/scalpel-impacted.log");
+        assertTrue(Files.exists(logFile), "Impacted log file should be created even when entries are skipped");
+        List<String> lines = Files.readAllLines(logFile, StandardCharsets.UTF_8);
+        assertEquals(List.of("module-safe"), lines, "Impacted log must contain only the safe module path");
+        assertFalse(lines.toString().contains("module;rm"), "Path with ';' must not reach the impacted log");
+        assertFalse(lines.toString().contains("module$(id)"), "Path with '$' must not reach the impacted log");
+        assertTrue(
+                stderr.contains("module;rm"),
+                "A WARN naming the skipped module path 'module;rm' should be emitted, got: " + stderr);
+        assertTrue(
+                stderr.contains("module$(id)"),
+                "A WARN naming the skipped module path 'module$(id)' should be emitted, got: " + stderr);
+    }
+
+    @Test
+    void impactedLog_newlineInModulePathCannotForgeEntries() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        // A newline inside a module directory name would, written verbatim, produce a forged
+        // extra entry ("forge") on its own line in the log
+        String evilDir = "evil\nforge";
+        String parentPom = simpleParentPom("module-safe");
+        writePom(root, "pom.xml", parentPom);
+        String safePom = simpleChildPom("module-safe");
+        writePom(root, "module-safe/pom.xml", safePom);
+        String evilPom = simpleChildPom("module-evil");
+        writePom(root, evilDir + "/pom.xml", evilPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleSafe =
+                createProject("com.example", "module-safe", "1.0", root, "module-safe/pom.xml", safePom);
+        moduleSafe.setParent(parentProject);
+        MavenProject moduleEvil =
+                createProject("com.example", "module-evil", "1.0", root, evilDir + "/pom.xml", evilPom);
+        moduleEvil.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleSafe, moduleEvil);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-safe/src/main/java/Foo.java");
+        changedFiles.add(evilDir + "/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.impactedLog", "target/scalpel-impacted.log");
+
+        String stderr = runCapturingStdErr(() -> participant.afterProjectsRead(session));
+
+        Path logFile = root.resolve("target/scalpel-impacted.log");
+        assertTrue(Files.exists(logFile), "Impacted log file should be created even when entries are skipped");
+        List<String> lines = Files.readAllLines(logFile, StandardCharsets.UTF_8);
+        assertEquals(List.of("module-safe"), lines, "Impacted log must contain only the safe module path");
+        assertFalse(lines.contains("forge"), "Newline in a module path must not forge extra log entries");
+        assertTrue(
+                stderr.contains("impacted log"),
+                "A WARN about the skipped newline-containing path should be emitted, got: " + stderr);
+    }
+
+    @Test
+    void impactedLog_notConfigured_writesNoFile() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+
+        participant.afterProjectsRead(session);
+
+        assertFalse(
+                Files.exists(root.resolve("target/scalpel-impacted.log")),
+                "No impacted log must be written when scalpel.impactedLog is unset");
+    }
+
+    @Test
+    void impactedLog_blank_writesNoFile() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.impactedLog", "   ");
+
+        participant.afterProjectsRead(session);
+
+        assertFalse(
+                Files.exists(root.resolve("target/scalpel-impacted.log")),
+                "A blank scalpel.impactedLog value must not produce a file");
+    }
+
+    @Test
+    void impactedLogPathValidation_acceptsSafePaths() {
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module-a"), "simple name");
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module-a/sub-module"), "nested path");
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("Module_1.v2/dir"), "mixed charset");
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("m"), "single character");
+        assertTrue(ScalpelLifecycleParticipant.isSafeImpactedLogPath("a-b_c.d/e"), "all safe separators");
+    }
+
+    @Test
+    void impactedLogPathValidation_rejectsUnsafePaths() {
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath(null), "null path");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath(""), "empty path");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("-module"), "leading dash (option injection)");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module;rm"), "semicolon");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module$(id)"), "command substitution");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module rm"), "space");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module`id`"), "backtick");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo'dule"), "single quote");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo\"dule"), "double quote");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo\\dule"), "backslash");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module*"), "glob star");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo?dule"), "glob question mark");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("mo[du]le"), "glob brackets");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module|rm"), "pipe");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("module&rm"), "ampersand");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\nforge"), "newline forges entries");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\rforge"), "carriage return");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\tforge"), "tab");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\0forge"), "NUL byte");
+        assertFalse(ScalpelLifecycleParticipant.isSafeImpactedLogPath("evil\u007Fforge"), "delete character");
+    }
+
+    @Test
     void skipTestsMode_skipTestsForUpstream_skipsUpstreamTests() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
@@ -4263,6 +4467,28 @@ class ScalpelLifecycleParticipantTest {
         when(emptyResolution.getDependencyGraph()).thenReturn(createDependencyGraph());
         when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
                 .thenReturn(emptyResolution);
+    }
+
+    private interface ThrowingRunnable {
+        void run() throws Exception;
+    }
+
+    /**
+     * Runs {@code action} with {@code System.err} redirected to an in-memory buffer and returns
+     * everything the participant logged there. slf4j-simple resolves {@code System.err} per call
+     * (verified against the 1.7.36 jar the build resolves), so swapping the stream captures the
+     * WARN output emitted during the run.
+     */
+    private String runCapturingStdErr(ThrowingRunnable action) throws Exception {
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        try {
+            action.run();
+        } finally {
+            System.setErr(originalErr);
+        }
+        return captured.toString(StandardCharsets.UTF_8);
     }
 
     /**

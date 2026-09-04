@@ -27,6 +27,26 @@ module-b/sub-module
 
 This works in all modes (`trim`, `skip-tests`, `report`) and is written alongside the JSON report, not as a replacement. It contains only directly affected modules (not upstream or downstream).
 
+**Safety.** Module directory names are chosen by whoever authors the repository (or pull request),
+so the log is written defensively: a path is only written when it consists solely of letters,
+digits, `-`, `_`, `.` and `/`, and does not start with `-`. A path containing anything else
+(spaces, quotes, `$`, backticks, `;`, `|`, glob characters, backslashes, newlines, control
+characters) is skipped with a WARN instead of written. Even so, consume the file defensively:
+unquoted expansion word-splits and glob-expands file contents.
+
+```bash
+# Safe: quoted read loop, one module per line
+while IFS= read -r module; do
+  build_module "$module"
+done < target/scalpel-impacted.log
+
+# Safe (GNU xargs): explicit newline delimiter, no word splitting
+xargs -d '\n' build_module < target/scalpel-impacted.log
+
+# Unsafe: unquoted command substitution word-splits and glob-expands the contents
+build_all $(cat target/scalpel-impacted.log)
+```
+
 ## Schema
 
 The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/resources/eu/maveniverse/maven/scalpel/core/scalpel-report-v2.schema.json) is published alongside the code. The current version is **2**.
@@ -130,6 +150,20 @@ Each module in `affectedModules` or `skippedModules` contains:
 | `testsSkipped` | boolean | *(optional)* Present and `true` when tests are skipped for this module |
 | `testsSkippedReason` | string | *(optional)* Why tests were skipped (see values below) |
 | `reason` | string | *(skippedModules only)* Why the module was skipped: `"NOT_AFFECTED"` |
+
+**Consuming `path` values in scripts:** like the impacted log, the `path` fields of
+`affectedModules` entries carry module directory names chosen by the repository (or pull request)
+author. The values are JSON-encoded, so newlines and quotes cannot corrupt the document, but they
+are not restricted to a safe character set. Keep them quoted end-to-end when feeding them to shell
+commands:
+
+```bash
+# Safe: filter to the same character set as the impacted log, then a quoted read loop.
+# The filter matters: jq -r emits embedded newlines raw, so without it a path value
+# containing a newline would be split into two entries by the read loop.
+jq -r '.affectedModules[].path | select(test("^[A-Za-z0-9._/-]+$"))' target/scalpel-report.json |
+  while IFS= read -r module; do build_module "$module"; done
+```
 
 ## Affected Module Reasons
 
