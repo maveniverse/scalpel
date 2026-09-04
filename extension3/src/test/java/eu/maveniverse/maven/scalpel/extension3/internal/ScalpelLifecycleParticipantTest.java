@@ -3835,7 +3835,7 @@ class ScalpelLifecycleParticipantTest {
         changedFiles.add("module-safe/src/main/java/Foo.java");
         changedFiles.add("module;rm/src/main/java/Foo.java");
         changedFiles.add("module$(id)/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3887,7 +3887,7 @@ class ScalpelLifecycleParticipantTest {
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-safe/src/main/java/Foo.java");
         changedFiles.add(evilDir + "/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3925,7 +3925,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
@@ -3957,7 +3957,7 @@ class ScalpelLifecycleParticipantTest {
 
         Set<String> changedFiles = new LinkedHashSet<>();
         changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any()))
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
