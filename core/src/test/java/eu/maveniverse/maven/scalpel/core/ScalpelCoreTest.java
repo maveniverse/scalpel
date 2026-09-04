@@ -15,8 +15,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayOutputStream;
-import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -264,15 +262,7 @@ class ScalpelCoreTest {
      * and returns everything that was written during its execution.
      */
     private String captureStderr(Runnable action) {
-        PrintStream originalErr = System.err;
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
-        try {
-            action.run();
-        } finally {
-            System.setErr(originalErr);
-        }
-        return captured.toString(StandardCharsets.UTF_8);
+        return TestOutputCapture.captureStderr(action);
     }
 
     @Test
@@ -388,6 +378,82 @@ class ScalpelCoreTest {
             String readOldPom = new String(result.getOldPomContents().get("pom.xml"), StandardCharsets.UTF_8);
             assertTrue(readOldPom.contains("1.0"), "Old POM should contain original version");
             assertFalse(readOldPom.contains("2.0"), "Old POM should not contain new version");
+        }
+    }
+
+    @Test
+    void detectChanges_oldPomOverSizeCap_omittedWithWarn() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            // Old POM deliberately larger than the configured cap
+            String oldPom = "<project><!--" + "x".repeat(300) + "--><version>1.0</version></project>";
+            Files.write(tempDir.resolve("pom.xml"), oldPom.getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            String newPom = "<project><version>2.0</version></project>";
+            Files.write(tempDir.resolve("pom.xml"), newPom.getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("bump version").call();
+
+            ScalpelCore core = new ScalpelCore(new GitChangeDetector());
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            sys.setProperty("scalpel.maxResourceFileSize", "200");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            String err = captureStderr(() -> {
+                ChangeDetectionResult result;
+                try {
+                    result = core.detectChanges(tempDir, config, Set.of("pom.xml"));
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+                assertNotNull(result);
+                assertTrue(result.getChangedFiles().contains("pom.xml"), "the change itself must still be detected");
+                assertFalse(
+                        result.getOldPomContents().containsKey("pom.xml"),
+                        "old POM blob over scalpel.maxResourceFileSize must be omitted from old POM contents");
+            });
+
+            assertTrue(err.contains("WARN "), "expected a WARN about the oversized blob but stderr was: " + err);
+            assertTrue(err.contains("pom.xml"), "WARN should name the blob path but stderr was: " + err);
+            assertTrue(
+                    err.contains("scalpel.maxResourceFileSize"),
+                    "WARN should name how to raise the cap but stderr was: " + err);
+        }
+    }
+
+    @Test
+    void detectChanges_oldPomUnderSizeCap_stillRead() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            String oldPom = "<project><!--" + "x".repeat(300) + "--><version>1.0</version></project>";
+            Files.write(tempDir.resolve("pom.xml"), oldPom.getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            Files.write(
+                    tempDir.resolve("pom.xml"),
+                    "<project><version>2.0</version></project>".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("bump version").call();
+
+            ScalpelCore core = new ScalpelCore(new GitChangeDetector());
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            // Cap comfortably above the blob size: the read must go through
+            sys.setProperty("scalpel.maxResourceFileSize", "4096");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of("pom.xml"));
+
+            assertNotNull(result);
+            assertTrue(
+                    result.getOldPomContents().containsKey("pom.xml"), "old POM blob under the cap must still be read");
+            assertTrue(
+                    new String(result.getOldPomContents().get("pom.xml"), StandardCharsets.UTF_8).contains("1.0"),
+                    "old POM content must be the base-branch version");
         }
     }
 

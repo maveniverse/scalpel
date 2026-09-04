@@ -347,6 +347,34 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void analyzeChanges_oversizedOldPomOmitted_marksAllDependentsAffected() throws Exception {
+        // The blob-size cap (scalpel.maxResourceFileSize) makes readPomFilesAtCommit omit
+        // an old POM blob that exceeds it from oldPomContents. That omission must land on
+        // the conservative side: the module and all its dependents are marked affected,
+        // never treated as "no effective change" (which would under-build).
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+
+        // Parent entry absent from oldPoms: exactly the map readPomFilesAtCommit returns
+        // when the parent's blob exceeded the size cap
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+
+        Set<MavenProject> affected =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        assertEquals(
+                3,
+                affected.size(),
+                "Omitted oversized old POM must mark parent + all children as affected, not zero modules");
+        assertTrue(affected.contains(projects.get(0)), "parent must be affected when its old blob is unreadable");
+        assertTrue(
+                affected.contains(projects.get(1)), "module-a must be affected when the parent old blob is unreadable");
+        assertTrue(
+                affected.contains(projects.get(2)), "module-b must be affected when the parent old blob is unreadable");
+    }
+
+    @Test
     void analyzeChanges_returnsChangedProperties() throws Exception {
         Path root = setupReactorRoot();
         List<MavenProject> projects = createReactorWithPropertyUsage(root);

@@ -174,9 +174,10 @@ public final class ScalpelConfiguration {
     public static final String REPORT_FILE = PREFIX + "reportFile";
 
     /**
-     * System property {@code scalpel.maxResourceFileSize}: maximum size in bytes for a resource file
-     * to be scanned during source mapping; larger files are skipped. Default:
-     * {@link #DEFAULT_MAX_RESOURCE_FILE_SIZE}.
+     * System property {@code scalpel.maxResourceFileSize}: maximum size in bytes of a git blob
+     * read for change analysis (old-POM content at the merge base). Larger blobs are skipped
+     * with a WARN and the affected analysis treats the module conservatively as affected.
+     * Default: {@link #DEFAULT_MAX_RESOURCE_FILE_SIZE}.
      */
     public static final String MAX_RESOURCE_FILE_SIZE = PREFIX + "maxResourceFileSize";
 
@@ -684,8 +685,9 @@ public final class ScalpelConfiguration {
     }
 
     /**
-     * Returns the maximum size in bytes for a resource file to be scanned during source mapping.
-     * Default: {@link #DEFAULT_MAX_RESOURCE_FILE_SIZE}.
+     * Returns the maximum size in bytes of a git blob read for change analysis (old-POM
+     * content at the merge base); larger blobs are skipped with a WARN and treated
+     * conservatively as affected. Default: {@link #DEFAULT_MAX_RESOURCE_FILE_SIZE}.
      */
     public long getMaxResourceFileSize() {
         return maxResourceFileSize;

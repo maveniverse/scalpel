@@ -15,12 +15,12 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Map;
 import java.util.Set;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.lib.ObjectId;
@@ -276,7 +276,8 @@ class GitChangeDetectorTest {
             git.commit().setMessage("add data").call();
 
             ObjectId commitId = git.getRepository().resolve("HEAD");
-            byte[] read = detector.readFileAtCommit(git.getRepository(), commitId, "data.txt");
+            byte[] read = detector.readFileAtCommit(
+                    git.getRepository(), commitId, "data.txt", ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE);
 
             assertNotNull(read);
             assertEquals(content, new String(read, StandardCharsets.UTF_8));
@@ -291,9 +292,79 @@ class GitChangeDetectorTest {
             git.commit().setMessage("initial").call();
 
             ObjectId commitId = git.getRepository().resolve("HEAD");
-            byte[] read = detector.readFileAtCommit(git.getRepository(), commitId, "nonexistent.txt");
+            byte[] read = detector.readFileAtCommit(
+                    git.getRepository(),
+                    commitId,
+                    "nonexistent.txt",
+                    ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE);
 
             assertNull(read, "Should return null for a file not present at the commit");
+        }
+    }
+
+    @Test
+    void readFileAtCommit_oversizeBlob_returnsNullWithWarn() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            byte[] blob = new byte[300];
+            Arrays.fill(blob, (byte) 'x');
+            Files.write(tempDir.resolve("data.txt"), blob);
+            git.add().addFilepattern("data.txt").call();
+            git.commit().setMessage("add data").call();
+
+            ObjectId commitId = git.getRepository().resolve("HEAD");
+            String err = captureStderr(() -> {
+                byte[] read;
+                try {
+                    read = detector.readFileAtCommit(git.getRepository(), commitId, "data.txt", 200);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+                assertNull(read, "Blob over the cap must be skipped (null), not read into memory");
+            });
+
+            assertTrue(err.contains("WARN "), "expected a WARN about the oversized blob but stderr was: " + err);
+            assertTrue(err.contains("data.txt"), "WARN should name the blob path but stderr was: " + err);
+            assertTrue(err.contains("300"), "WARN should name the blob size but stderr was: " + err);
+            assertTrue(err.contains("200"), "WARN should name the cap but stderr was: " + err);
+            assertTrue(
+                    err.contains("scalpel.maxResourceFileSize"),
+                    "WARN should name how to raise the cap but stderr was: " + err);
+        }
+    }
+
+    @Test
+    void readFileAtCommit_blobAtExactCap_stillReads() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            byte[] blob = new byte[200];
+            Arrays.fill(blob, (byte) 'x');
+            Files.write(tempDir.resolve("data.txt"), blob);
+            git.add().addFilepattern("data.txt").call();
+            git.commit().setMessage("add data").call();
+
+            ObjectId commitId = git.getRepository().resolve("HEAD");
+            byte[] read = detector.readFileAtCommit(git.getRepository(), commitId, "data.txt", 200);
+
+            assertNotNull(read, "A blob exactly at the cap must still be read (only strictly larger is skipped)");
+            assertEquals(200, read.length);
+        }
+    }
+
+    @Test
+    void readFileAtCommit_nonPositiveCap_rejected() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "x".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+
+            ObjectId commitId = git.getRepository().resolve("HEAD");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> detector.readFileAtCommit(git.getRepository(), commitId, "file.txt", 0),
+                    "A zero cap must be rejected up front");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> detector.readFileAtCommit(git.getRepository(), commitId, "file.txt", -1),
+                    "A negative cap must be rejected up front");
         }
     }
 
@@ -533,7 +604,10 @@ class GitChangeDetectorTest {
 
             ObjectId commitId = git.getRepository().resolve("HEAD");
             var result = detector.readPomFilesAtCommit(
-                    git.getRepository(), commitId, Set.of("pom.xml", "sub/pom.xml", "missing/pom.xml"));
+                    git.getRepository(),
+                    commitId,
+                    Set.of("pom.xml", "sub/pom.xml", "missing/pom.xml"),
+                    ScalpelConfiguration.DEFAULT_MAX_RESOURCE_FILE_SIZE);
 
             assertEquals(2, result.size(), "Should read two existing poms, skip the missing one");
             assertTrue(result.containsKey("pom.xml"));
@@ -541,6 +615,72 @@ class GitChangeDetectorTest {
             assertFalse(result.containsKey("missing/pom.xml"), "Missing pom should not be in the map");
             assertEquals("<project/>", new String(result.get("pom.xml"), StandardCharsets.UTF_8));
             assertEquals("<module/>", new String(result.get("sub/pom.xml"), StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void readPomFilesAtCommit_oversizeBlob_omitsEntryWithWarn() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            byte[] bigPom = new byte[300];
+            Arrays.fill(bigPom, (byte) 'x');
+            Files.write(tempDir.resolve("pom.xml"), bigPom);
+            Files.createDirectories(tempDir.resolve("sub"));
+            Files.write(tempDir.resolve("sub/pom.xml"), "<module/>".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.add().addFilepattern("sub/pom.xml").call();
+            git.commit().setMessage("add poms").call();
+
+            ObjectId commitId = git.getRepository().resolve("HEAD");
+            String err = captureStderr(() -> {
+                Map<String, byte[]> result;
+                try {
+                    result = detector.readPomFilesAtCommit(
+                            git.getRepository(), commitId, Set.of("pom.xml", "sub/pom.xml"), 200);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+                assertFalse(result.containsKey("pom.xml"), "Oversized pom blob must be omitted from the map");
+                assertTrue(result.containsKey("sub/pom.xml"), "Pom under the cap must still be read");
+                assertEquals(1, result.size());
+            });
+
+            assertTrue(err.contains("WARN "), "expected a WARN about the oversized blob but stderr was: " + err);
+            assertTrue(err.contains("pom.xml"), "WARN should name the blob path but stderr was: " + err);
+            assertTrue(
+                    err.contains("scalpel.maxResourceFileSize"),
+                    "WARN should name how to raise the cap but stderr was: " + err);
+        }
+    }
+
+    @Test
+    void readFileAtCommit_threeArgOverload_usesDefaultCap() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("data.txt"), "x".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("data.txt").call();
+            git.commit().setMessage("initial").call();
+            ObjectId commitId = git.getRepository().resolve("HEAD");
+            // small file reads fine through the backward-compatible 3-arg form
+            byte[] read = detector.readFileAtCommit(git.getRepository(), commitId, "data.txt");
+            assertNotNull(read, "3-arg overload must read a file under the default cap");
+        }
+    }
+
+    @Test
+    void readPomFilesAtCommit_nonPositiveCap_rejected() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("pom.xml"), "<project/>".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("add pom").call();
+
+            ObjectId commitId = git.getRepository().resolve("HEAD");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> detector.readPomFilesAtCommit(git.getRepository(), commitId, Set.of("pom.xml"), 0),
+                    "A zero cap must be rejected up front");
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> detector.readPomFilesAtCommit(git.getRepository(), commitId, Set.of("pom.xml"), -5),
+                    "A negative cap must be rejected up front");
         }
     }
 
@@ -606,15 +746,7 @@ class GitChangeDetectorTest {
      * and returns everything that was written during its execution.
      */
     private String captureStderr(Runnable action) {
-        PrintStream originalErr = System.err;
-        ByteArrayOutputStream captured = new ByteArrayOutputStream();
-        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
-        try {
-            action.run();
-        } finally {
-            System.setErr(originalErr);
-        }
-        return captured.toString(StandardCharsets.UTF_8);
+        return TestOutputCapture.captureStderr(action);
     }
 
     @Test

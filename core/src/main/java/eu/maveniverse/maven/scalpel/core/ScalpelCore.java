@@ -225,7 +225,8 @@ public class ScalpelCore {
             Map<String, byte[]> oldPomContents;
             timings.start(Timings.PHASE_READ_OLD_POMS);
             try {
-                oldPomContents = gitChangeDetector.readPomFilesAtCommit(repository, mergeBase, changedPomPaths);
+                oldPomContents = gitChangeDetector.readPomFilesAtCommit(
+                        repository, mergeBase, changedPomPaths, config.getMaxResourceFileSize());
             } finally {
                 timings.stop(Timings.PHASE_READ_OLD_POMS);
             }
