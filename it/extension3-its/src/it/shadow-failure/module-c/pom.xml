@@ -8,10 +8,19 @@
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>module-a</artifactId>
+    <artifactId>module-c</artifactId>
 
     <name>${project.groupId}:${project.artifactId}</name>
 
-    <!-- Upstream prerequisite of module-b: trim would build it, so it must NOT appear
-         in the shadow document's would-skip or false-negative sets. -->
+    <!-- Independent of the change in module-b and of every other module, so trim would
+         skip it; its failing test is exactly what shadow mode must surface as a
+         would-have-skipped false negative. -->
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.13.4</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 </project>

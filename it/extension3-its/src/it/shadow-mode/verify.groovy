@@ -17,6 +17,7 @@ assert log.contains('mode=shadow')
 assert !log.contains('Scalpel: Building ') : "shadow mode must not trim the reactor"
 assert log.contains('module-a')
 assert log.contains('module-b')
+assert log.contains('module-c')
 assert log.contains('BUILD SUCCESS')
 
 // Shadow behaves exactly like report mode: the JSON report is written too
@@ -28,26 +29,32 @@ assert report.contains('"affectedModules"') : "report should contain affectedMod
 assert report.contains('module-b') : "module-b should appear in the report as affected"
 assert report.contains('SOURCE_CHANGE') : "module-b should have SOURCE_CHANGE reason"
 
-// The shadow document carries the would-be decision and the join
+// The shadow document carries the would-be decision and the join. module-b changed and
+// depends on module-a, so trim would build parent, module-a and module-b; only the
+// independent module-c would be skipped.
 File shadowFile = new File(basedir, 'target/scalpel-shadow.json')
 assert shadowFile.exists() : "shadow json should be written at session end"
 String shadow = shadowFile.text
 assert shadow.contains('"mode": "shadow"')
 assert shadow.contains('"estimatedSecondsSaved"')
 assert shadow.contains('"wouldHaveSkippedButFailed"')
-assert shadow.contains('module-a') : "module-a is unaffected and must be in the would-skip set"
 assert shadow.contains('"wouldHaveBuilt"')
-
-// Decision parity with report mode: this fixture is byte-identical to the report-mode IT,
-// where the same change classifies module-b as affected (SOURCE_CHANGE) and leaves
-// module-a out. The shadow decision must agree: module-b would be built, module-a skipped.
+def skipStart = shadow.indexOf('"wouldHaveSkipped": [')
+def skipOpen = shadow.indexOf('[', skipStart)
+def skipClose = shadow.indexOf(']', skipOpen)
+def skipSet = shadow.substring(skipOpen, skipClose)
+assert skipSet.contains('module-c') : "module-c must be in the would-skip set"
+assert !skipSet.contains('module-a') : "module-a is an upstream prerequisite and must NOT be in the would-skip set"
 assert shadow.contains('module-b')
-def wouldSkipMatchesReport = shadow.contains('module-a') && report.contains('"path": "module-a"')
-assert wouldSkipMatchesReport : "shadow would-skip set must match the report's untouched module set"
+
+// Decision parity with report mode: this fixture mirrors the report-mode IT (module-b
+// change classifies as affected/SOURCE_CHANGE there). The report's skippedModules and
+// the shadow would-skip set must agree: both contain module-c only.
+assert report.contains('"path": "module-c"') : "report skippedModules must contain module-c"
 
 // One JSONL history line per run
 File history = new File(basedir, 'target/scalpel-shadow-history.jsonl')
 assert history.exists() : "history jsonl should be appended"
 def lines = history.text.readLines().findAll { it.trim() }
 assert lines.size() == 1 : "expected exactly one history line, got ${lines.size()}"
-assert lines[0].contains('module-a')
+assert lines[0].contains('module-c')

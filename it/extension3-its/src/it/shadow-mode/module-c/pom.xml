@@ -3,15 +3,12 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>eu.maveniverse.maven.scalpel.it.shadowfailure</groupId>
-        <artifactId>shadow-failure</artifactId>
+        <groupId>eu.maveniverse.maven.scalpel.it.shadowmode</groupId>
+        <artifactId>shadow-mode</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
-    <artifactId>module-a</artifactId>
+    <artifactId>module-c</artifactId>
 
     <name>${project.groupId}:${project.artifactId}</name>
-
-    <!-- Upstream prerequisite of module-b: trim would build it, so it must NOT appear
-         in the shadow document's would-skip or false-negative sets. -->
 </project>

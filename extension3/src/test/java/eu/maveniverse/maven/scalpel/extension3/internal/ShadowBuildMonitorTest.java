@@ -20,7 +20,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
 import java.util.function.LongSupplier;
-
 import org.apache.maven.execution.ExecutionEvent;
 import org.apache.maven.execution.ExecutionListener;
 import org.apache.maven.execution.MavenSession;
@@ -88,6 +87,18 @@ class ShadowBuildMonitorTest {
             rec("mojoFailed");
         }
 
+        public void mojoSkipped(ExecutionEvent event) {
+            rec("mojoSkipped");
+        }
+
+        public void projectDiscoveryStarted(ExecutionEvent event) {
+            rec("projectDiscoveryStarted");
+        }
+
+        public void projectSkipped(ExecutionEvent event) {
+            rec("projectSkipped");
+        }
+
         public void forkStarted(ExecutionEvent event) {
             rec("forkStarted");
         }
@@ -136,7 +147,7 @@ class ShadowBuildMonitorTest {
                 return project;
             }
 
-            public MojoExecution getMojo() {
+            public MojoExecution getMojoExecution() {
                 return null;
             }
 
