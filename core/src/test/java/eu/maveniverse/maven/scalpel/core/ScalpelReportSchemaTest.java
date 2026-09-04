@@ -59,6 +59,14 @@ class ScalpelReportSchemaTest {
 
     @Test
     void representativeReportWithAllOptionalFields_validatesAgainstSchema() {
+        Timings timings = new Timings();
+        timings.start(Timings.PHASE_DIFF);
+        timings.stop(Timings.PHASE_DIFF);
+        timings.increment(Timings.OP_GIT_BLOBS_READ, 2);
+        timings.increment(Timings.OP_EFFECTIVE_MODELS, 6);
+        timings.increment(Timings.OP_DEPENDENCY_RESOLVES, 4);
+        timings.increment(Timings.OP_RESOLVE_CACHE_HITS, 1);
+        timings.increment(Timings.OP_RESOURCES_VISITED, 12);
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .status("skipped")
@@ -70,6 +78,7 @@ class ScalpelReportSchemaTest {
                 .changedManagedPlugins(List.of("org.apache.maven.plugins:maven-compiler-plugin"))
                 .unmatchedPomPaths(List.of("gated-module/pom.xml"))
                 .excludedUpstreamCount(1)
+                .timings(timings, 123)
                 .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
                                 "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE))
                         .category(ScalpelReport.CATEGORY_DIRECT)
@@ -166,6 +175,17 @@ class ScalpelReportSchemaTest {
                         .stream()
                         .anyMatch(e -> e.contains("WHATEVER")),
                 "unknown skipped-module reason must be rejected");
+        assertTrue(
+                validate(mutate(report, m -> m.put("timings", Map.of("totalMillis", -1L, "phases", Map.of())))).stream()
+                        .anyMatch(e -> e.contains("totalMillis")),
+                "negative totalMillis must be rejected");
+        assertTrue(
+                validate(mutate(
+                                report,
+                                m -> m.put("timings", Map.of("totalMillis", 0L, "phases", Map.of("diff", -1L)))))
+                        .stream()
+                        .anyMatch(e -> e.contains("diff")),
+                "negative phase duration must be rejected");
     }
 
     // ---------------------------------------------------------------
@@ -217,9 +237,30 @@ class ScalpelReportSchemaTest {
                 "excludedUpstreamCount",
                 "affectedModules",
                 "skippedModules",
+                "timings",
+                "operations",
                 "status",
                 "reason"));
         assertEquals(emittable, declared, "schema top-level properties must exactly match the fields toJson emits");
+    }
+
+    @Test
+    void schema_declaresOptionalTimingAndOperationProperties() {
+        // #99: toJson can emit a timings object (totalMillis + per-phase millis) and an
+        // operations object (named counters) next to the analysis fields. The validator
+        // ignores undeclared instance properties by design, so presence must be asserted
+        // against the schema itself or the declaration would drift.
+        Map<String, Object> props = cast(schema.get("properties"), "schema.properties");
+        assertTrue(
+                props.containsKey("timings"),
+                "schema must declare the optional 'timings' object emitted with phase timing instrumentation");
+        assertTrue(
+                props.containsKey("operations"),
+                "schema must declare the optional 'operations' object emitted with operation counters");
+        Map<String, Object> timings = cast(props.get("timings"), "schema.properties.timings");
+        Map<String, Object> timingsProps = cast(timings.get("properties"), "schema.properties.timings.properties");
+        assertTrue(timingsProps.containsKey("totalMillis"), "timings must declare totalMillis");
+        assertTrue(timingsProps.containsKey("phases"), "timings must declare the phases map");
     }
 
     // ---------------------------------------------------------------
@@ -503,6 +544,7 @@ class ScalpelReportSchemaTest {
                 "enum",
                 "required",
                 "properties",
+                "additionalProperties",
                 "items",
                 "minimum",
                 "minItems");
@@ -568,6 +610,15 @@ class ScalpelReportSchemaTest {
                                 object.get(property.getKey()),
                                 path + "." + property.getKey(),
                                 errors);
+                    }
+                }
+                if (schema.containsKey("additionalProperties")) {
+                    Map<String, Object> addlSchema =
+                            cast(schema.get("additionalProperties"), path + ".additionalProperties");
+                    for (Map.Entry<String, Object> entry : object.entrySet()) {
+                        if (!properties.containsKey(entry.getKey())) {
+                            validateSchema(addlSchema, entry.getValue(), path + "." + entry.getKey(), errors);
+                        }
                     }
                 }
             }
