@@ -24,7 +24,7 @@ The tradeoff: Scalpel has fewer knobs. If Scalpel's analysis is wrong, your esca
 
 **Resource filtering tracking.** When a property changes in a parent POM, Scalpel checks whether child modules with `<filtering>true</filtering>` reference that property in their resource files (e.g. `${app.version}` in `application.properties`).
 
-**Source-set-aware propagation.** When only test sources (`src/test/`) change in a module, Scalpel does not rebuild downstream modules that depend on the production artifact. Only modules with a `<type>test-jar</type>` dependency are affected. In Apache Camel, this reduces a `camel-core` test change from ~500 downstream modules to ~23.
+**Source-set-aware propagation.** When only test sources (`src/test/`) change in a module, Scalpel does not rebuild downstream modules that depend on the production artifact. Only modules with a `<type>test-jar</type>` dependency are affected. In Apache Camel, this reduces a `camel-core` test change from 518 transitive dependents to 25 (measured 2026-08-27, see [POM Analysis](POM-ANALYSIS.md) for the reproduction).
 
 **Skip-tests mode.** Scalpel offers `mode=skip-tests`, which builds all modules but only runs tests on affected ones. GIB has no equivalent. It either includes or excludes modules from the reactor.
 

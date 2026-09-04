@@ -69,7 +69,20 @@ POM or resource changes are treated like main source changes. All dependents are
 
 ### Impact
 
-This dramatically reduces unnecessary builds. For example, in Apache Camel, `camel-core` has ~500 regular dependents but only ~23 test-jar dependents. A change to a test base class in `camel-core` triggers testing of only those 23 modules instead of all 500+.
+This dramatically reduces unnecessary builds. For example, in Apache Camel, `camel-core` has 518
+transitive dependents (52 of them direct) but only 25 modules declaring a `test-jar` dependency on
+it. A change to a test base class in `camel-core` triggers testing of only those 25 modules instead
+of all 518 (measured on Camel main @ `384a00a8`, 2026-08-27). Reproduce the 25: build the
+reactor-internal dependency graph from the POMs and count the modules whose `<dependency>` block
+for `org.apache.camel:camel-core` also carries `<type>test-jar</type>`:
+
+```bash
+git clone --depth 1 --filter=blob:none --sparse https://github.com/apache/camel.git
+cd camel && git sparse-checkout set --no-cone '*.xml'
+find . -name pom.xml | while read f; do
+  awk 'BEGIN{RS="</dependency>"} /<artifactId>camel-core<\/artifactId>/ && /<type>test-jar<\/type>/ {print FILENAME}' "$f"
+done | sort -u | wc -l   # -> 25
+```
 
 Test-jar dependencies are declared in Maven as:
 
