@@ -47,9 +47,11 @@ assert skipSet.contains('module-c') : "module-c must be in the would-skip set"
 assert !skipSet.contains('module-a') : "module-a is an upstream prerequisite and must NOT be in the would-skip set"
 assert shadow.contains('module-b')
 
-// Decision parity with report mode: this fixture mirrors the report-mode IT (module-b
-// change classifies as affected/SOURCE_CHANGE there). The report's skippedModules and
-// the shadow would-skip set must agree: both contain module-c only.
+// Decision parity with report mode, scoped to what it actually proves: this fixture has
+// no transitively affected modules, so the report's skippedModules (report-mode
+// semantics, built from directlyAffected) and the shadow would-skip set (trim-mode
+// semantics, built from allAffected) coincide. With transitives the two legitimately
+// diverge: shadow mirrors trim, the report keeps its own categorization.
 assert report.contains('"path": "module-c"') : "report skippedModules must contain module-c"
 
 // One JSONL history line per run

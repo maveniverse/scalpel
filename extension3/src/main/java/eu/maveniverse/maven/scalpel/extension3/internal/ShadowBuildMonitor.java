@@ -209,13 +209,32 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         fields.add(field("scalpelVersion", scalpelVersion));
         fields.add(field("baseBranch", baseBranch));
         fields.add(field("timestamp", Instant.now().toString()));
-        fields.add(field("changedFilesCount", String.valueOf(changedFiles.size())));
+        fields.add("\"changedFilesCount\": " + changedFiles.size());
         fields.add(arrayField("wouldHaveBuilt", wouldHaveBuilt));
         fields.add(arrayField("wouldHaveSkipped", new ArrayList<>(wouldHaveSkipped)));
-        fields.add("  \"moduleMillis\": " + moduleMillisJson());
-        fields.add("  \"estimatedSecondsSaved\": " + estimatedSecondsSaved);
+        fields.add("\"moduleMillis\": " + moduleMillisJson());
+        fields.add("\"estimatedSecondsSaved\": " + estimatedSecondsSaved);
         fields.add(arrayField("wouldHaveSkippedButFailed", new ArrayList<>(wouldHaveSkippedButFailed)));
         return "{\n  " + String.join(",\n  ", fields) + "\n}\n";
+    }
+
+    /**
+     * Minimal status-only shadow document, the shadow twin of the report's status document
+     * (#89 semantics): written whenever a shadow run bails out before the measurement, so a
+     * previous run's shadow document cannot be mistaken for current results. The history
+     * file is appended only by measured runs, so a gap there means "not measured", never
+     * "measured zero".
+     */
+    public static String statusDocument(String status, String reason) {
+        return "{\n"
+                + "  \"version\": \"1\",\n"
+                + "  \"mode\": \"shadow\",\n"
+                + "  \"status\": "
+                + jsonString(status)
+                + ",\n"
+                + "  \"reason\": "
+                + jsonString(reason)
+                + "\n}\n";
     }
 
     private String moduleMillisJson() {

@@ -507,12 +507,18 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         }
                     }
                     Set<String> wouldHaveBuilt = new LinkedHashSet<>();
+                    java.util.function.Function<MavenProject, String> moduleKey = project -> {
+                        String path = relativePath(reactorRoot, project);
+                        // The root aggregator relativizes to the empty string; report it as
+                        // "." like the impacted log does (#84) so every module has a name.
+                        return path.isEmpty() ? "." : path;
+                    };
                     for (MavenProject project : decision.getBuildSet()) {
-                        wouldHaveBuilt.add(relativePath(reactorRoot, project));
+                        wouldHaveBuilt.add(moduleKey.apply(project));
                     }
                     Set<String> wouldHaveSkipped = new LinkedHashSet<>();
                     for (MavenProject project : allProjects) {
-                        String path = relativePath(reactorRoot, project);
+                        String path = moduleKey.apply(project);
                         if (!wouldHaveBuilt.contains(path)) {
                             wouldHaveSkipped.add(path);
                         }
@@ -527,7 +533,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                     config.getBaseBranch(),
                                     changedFiles,
                                     System::nanoTime,
-                                    project -> relativePath(reactorRoot, project)));
+                                    moduleKey));
                     logger.info(
                             "Scalpel: Shadow mode observing the full build: would build {} of {} modules, would skip {}",
                             wouldHaveBuilt.size(),
@@ -1581,9 +1587,34 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     status,
                     reason,
                     config.getReportFile());
+            if (config.isModeShadow()) {
+                writeShadowStatus(reactorRoot, status, reason);
+            }
         } catch (Exception e) {
             // Status reports must never fail the build; that is their entire job.
             logger.warn("Scalpel: Could not overwrite report with {} status: {}", status, e.toString());
+        }
+    }
+
+    /**
+     * Shadow mode must uphold the same invariant as the JSON report (#89): when a run bails
+     * out before any measurement, the previous run's shadow document is overwritten with a
+     * status-only document rather than surviving as if current. Write failures are logged
+     * and swallowed like the report's.
+     */
+    private void writeShadowStatus(Path reactorRoot, String status, String reason) {
+        try {
+            Files.createDirectories(
+                    reactorRoot.resolve(ShadowBuildMonitor.SHADOW_FILE).getParent());
+            Files.write(
+                    reactorRoot.resolve(ShadowBuildMonitor.SHADOW_FILE),
+                    ShadowBuildMonitor.statusDocument(status, reason).getBytes(StandardCharsets.UTF_8));
+            logger.warn(
+                    "Scalpel: Shadow document at {} overwritten with {} status",
+                    ShadowBuildMonitor.SHADOW_FILE,
+                    status);
+        } catch (Exception e) {
+            logger.warn("Scalpel: Could not overwrite shadow document with {} status: {}", status, e.toString());
         }
     }
 
@@ -1599,6 +1630,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         try {
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.info("Scalpel: Report written to {}", config.getReportFile());
+            if (config.isModeShadow()) {
+                // A full build was triggered, so the would-be decision is "build all":
+                // record that instead of leaving a previous run's measurement in place.
+                writeShadowStatus(reactorRoot, "skipped", "full build triggered by " + triggerFile);
+            }
         } catch (IOException e) {
             handleWriteFailure(config, "Failed to write report", e);
         }

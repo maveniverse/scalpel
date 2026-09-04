@@ -44,13 +44,15 @@ public final class ScalpelConfiguration {
 
     /**
      * System property {@code scalpel.alsoMake}: include upstream dependencies of affected modules so
-     * they compile. Default: {@code true}. Active in {@code trim} mode; also read in {@code report} mode.
+     * they compile. Default: {@code true}. Active in {@code trim} mode; also read in {@code report}
+     * and {@code shadow} modes.
      */
     public static final String ALSO_MAKE = PREFIX + "alsoMake";
 
     /**
      * System property {@code scalpel.alsoMakeDependents}: include downstream dependents of affected
-     * modules. Default: {@code true}. Active in {@code trim} mode; also read in {@code report} mode.
+     * modules. Default: {@code true}. Active in {@code trim} mode; also read in {@code report}
+     * and {@code shadow} modes.
      */
     public static final String ALSO_MAKE_DEPENDENTS = PREFIX + "alsoMakeDependents";
 

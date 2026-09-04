@@ -6,10 +6,12 @@
  * https://www.eclipse.org/legal/epl-v20.html
  */
 
-// Shadow-mode false-negative fixture: module-a carries a failing test from the initial
-// commit (so it is unaffected by the feature-branch change in module-b), the full build
-// runs everything, module-a fails, and the shadow document must flag it as a module
-// Scalpel would have skipped (wouldHaveSkippedButFailed).
+// Shadow-mode false-negative fixture: module-c (independent of every other module)
+// carries a failing test from the initial commit, so it is unaffected by the
+// feature-branch change in module-b; the full build runs everything, module-c fails,
+// and the shadow document must flag it as a module Scalpel would have skipped
+// (wouldHaveSkippedButFailed). module-a is an upstream prerequisite of module-b and
+// must NOT be flagged.
 def dir = basedir
 
 def exec = { String... args ->

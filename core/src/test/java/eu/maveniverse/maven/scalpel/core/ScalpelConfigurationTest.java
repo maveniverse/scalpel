@@ -462,7 +462,8 @@ class ScalpelConfigurationTest {
         sys.setProperty("scalpel.mode", "shadow");
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
         assertTrue(config.isModeShadow());
-        assertTrue(config.isModeReport() == false);
+        assertFalse(config.isModeReport());
+        assertTrue(config.isPassiveMode(), "shadow leaves the reactor untouched like report");
     }
 
     @Test
@@ -474,6 +475,7 @@ class ScalpelConfigurationTest {
             }
             ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
             assertFalse(config.isModeShadow(), "mode=" + mode + " must not be shadow");
+            assertEquals("report".equals(mode), config.isPassiveMode(), "only report is passive besides shadow");
         }
     }
 

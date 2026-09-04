@@ -92,6 +92,26 @@ mvn verify -Dscalpel.mode=shadow -Dscalpel.baseBranch=origin/main
 
 Run it on a few representative pull requests, then read `estimatedSecondsSaved` and `wouldHaveSkippedButFailed`: the first tells you whether your topology benefits from trimming, the second whether Scalpel's analysis is safe for it. A shadow run never modifies the reactor and never skips a test.
 
+### `target/scalpel-shadow.json`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | string | Shadow document version (`"1"`) |
+| `mode` | string | Always `"shadow"` |
+| `scalpelVersion` | string | Scalpel version that generated the document |
+| `baseBranch` | string or null | The base branch used for change detection; `null` when unconfigured |
+| `timestamp` | string | ISO-8601 instant of the session end |
+| `changedFilesCount` | number | Size of the detected changeset |
+| `wouldHaveBuilt` | string[] | Module paths trim mode would have kept in the reactor |
+| `wouldHaveSkipped` | string[] | Module paths trim mode would have dropped; the root aggregator is reported as `.` |
+| `moduleMillis` | object | Measured wall-clock per module path, in millis, for the full build that ran |
+| `estimatedSecondsSaved` | number | Summed duration of the would-have-skipped modules, in seconds |
+| `wouldHaveSkippedButFailed` | string[] | Modules it would have skipped that failed: the false-negative counter |
+
+When a shadow run bails out before any measurement (no base branch, not a git repository, disable triggers, a full-build trigger, or a fail-safe error), the document is overwritten with a minimal status document (`status` and `reason`) so a previous run's measurement can never be mistaken for current results, mirroring the JSON report's semantics. The history file is appended only by measured runs, so a gap there means "not measured", never "measured zero".
+
+One semantic note: `wouldHaveSkipped` mirrors the trim decision (built from the full affected set). The JSON report's `skippedModules`, written in the same run, uses the report's own categorization. The two coincide unless managed-dependency changes transitively affect modules, in which case shadow reports what trim would do and the report keeps its classification.
+
 ## Full Build Triggers
 
 By default, changes to files under `.mvn/` trigger a full build. You can customize this.

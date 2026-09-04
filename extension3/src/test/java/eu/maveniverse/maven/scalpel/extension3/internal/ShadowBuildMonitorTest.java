@@ -153,6 +153,28 @@ class ShadowBuildMonitorTest {
         assertTrue(json.contains("\"estimatedSecondsSaved\": 0.400"));
         assertTrue(json.contains("\"wouldHaveSkippedButFailed\": ["));
         assertTrue(json.contains("module-c"));
+        // Drift guard: the emitted top-level fields are exactly this set, in this order
+        java.util.regex.Matcher topLevel = java.util.regex.Pattern.compile(
+                        "^  \"([A-Za-z]+)\":", java.util.regex.Pattern.MULTILINE)
+                .matcher(json);
+        List<String> emitted = new ArrayList<>();
+        while (topLevel.find()) {
+            emitted.add(topLevel.group(1));
+        }
+        assertEquals(
+                Arrays.asList(
+                        "version",
+                        "mode",
+                        "scalpelVersion",
+                        "baseBranch",
+                        "timestamp",
+                        "changedFilesCount",
+                        "wouldHaveBuilt",
+                        "wouldHaveSkipped",
+                        "moduleMillis",
+                        "estimatedSecondsSaved",
+                        "wouldHaveSkippedButFailed"),
+                emitted);
 
         Path history = reactorRoot.resolve("target/scalpel-shadow-history.jsonl");
         assertTrue(Files.exists(history), "history jsonl must be appended at session end");
