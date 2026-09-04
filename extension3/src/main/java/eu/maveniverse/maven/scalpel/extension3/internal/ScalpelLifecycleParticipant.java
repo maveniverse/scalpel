@@ -38,7 +38,6 @@ import javax.inject.Named;
 import javax.inject.Singleton;
 import org.apache.maven.AbstractMavenLifecycleParticipant;
 import org.apache.maven.MavenExecutionException;
-import org.apache.maven.execution.ExecutionListener;
 import org.apache.maven.execution.MavenSession;
 import org.apache.maven.model.Model;
 import org.apache.maven.project.DefaultDependencyResolutionRequest;
@@ -487,15 +486,53 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     logExplainDecisions(allProjects, reportedModules, evidence);
                 }
                 if (config.isModeShadow()) {
-                    registerShadowMonitor(
-                            session,
-                            config,
-                            reactorRoot,
-                            allProjects,
-                            allAffected,
-                            testOnlyModules,
-                            changedFiles,
-                            timings);
+                    // Shadow mode (#92): hand the would-be trim decision to a monitor wrapped
+                    // around the session's ExecutionListener; the full build below runs
+                    // unmodified while per-module wall-clock and failures are recorded, and at
+                    // session end the join is written to target/scalpel-shadow.json plus one
+                    // JSONL history line. The decision uses the same ReactorTrimmer call trim
+                    // mode runs on the same inputs, so shadow and trim decisions agree by
+                    // construction; when nothing is transitively affected, the report branch
+                    // above already computed that exact set.
+                    TrimResult decision;
+                    if (trimResult != null && allAffected.equals(directlyAffected)) {
+                        decision = trimResult;
+                    } else {
+                        timings.start(Timings.PHASE_TRIM);
+                        try {
+                            decision = reactorTrimmer.computeBuildSet(
+                                    allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+                        } finally {
+                            timings.stop(Timings.PHASE_TRIM);
+                        }
+                    }
+                    Set<String> wouldHaveBuilt = new LinkedHashSet<>();
+                    for (MavenProject project : decision.getBuildSet()) {
+                        wouldHaveBuilt.add(relativePath(reactorRoot, project));
+                    }
+                    Set<String> wouldHaveSkipped = new LinkedHashSet<>();
+                    for (MavenProject project : allProjects) {
+                        String path = relativePath(reactorRoot, project);
+                        if (!wouldHaveBuilt.contains(path)) {
+                            wouldHaveSkipped.add(path);
+                        }
+                    }
+                    session.getRequest()
+                            .setExecutionListener(new ShadowBuildMonitor(
+                                    session.getRequest().getExecutionListener(),
+                                    reactorRoot,
+                                    wouldHaveBuilt,
+                                    wouldHaveSkipped,
+                                    Version.version(),
+                                    config.getBaseBranch(),
+                                    changedFiles,
+                                    System::nanoTime,
+                                    project -> relativePath(reactorRoot, project)));
+                    logger.info(
+                            "Scalpel: Shadow mode observing the full build: would build {} of {} modules, would skip {}",
+                            wouldHaveBuilt.size(),
+                            allProjects.size(),
+                            wouldHaveSkipped.size());
                 }
                 return;
             }
@@ -1565,60 +1602,6 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         } catch (IOException e) {
             handleWriteFailure(config, "Failed to write report", e);
         }
-    }
-
-    /**
-     * Shadow mode (#92): computes the trim decision Scalpel WOULD have made, using the same
-     * {@link ReactorTrimmer#computeBuildSet} call trim mode uses on the same inputs, so the
-     * shadow decision is by construction identical to a trim run on the same diff. The
-     * decision is then handed to a {@link ShadowBuildMonitor} wrapped around the session's
-     * existing {@link ExecutionListener}: the full build runs unmodified while per-module
-     * wall-clock and failures are recorded, and at session end the join is written to
-     * {@code target/scalpel-shadow.json} plus one JSONL history line.
-     */
-    private void registerShadowMonitor(
-            MavenSession session,
-            ScalpelConfiguration config,
-            Path reactorRoot,
-            List<MavenProject> allProjects,
-            Set<MavenProject> allAffected,
-            Set<MavenProject> testOnlyModules,
-            Set<String> changedFiles,
-            Timings timings) {
-        TrimResult decision;
-        timings.start(Timings.PHASE_TRIM);
-        try {
-            decision = reactorTrimmer.computeBuildSet(
-                    allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
-        } finally {
-            timings.stop(Timings.PHASE_TRIM);
-        }
-        Set<String> wouldHaveBuilt = new LinkedHashSet<>();
-        for (MavenProject project : decision.getBuildSet()) {
-            wouldHaveBuilt.add(relativePath(reactorRoot, project));
-        }
-        Set<String> wouldHaveSkipped = new LinkedHashSet<>();
-        for (MavenProject project : allProjects) {
-            String path = relativePath(reactorRoot, project);
-            if (!wouldHaveBuilt.contains(path)) {
-                wouldHaveSkipped.add(path);
-            }
-        }
-        session.getRequest()
-                .setExecutionListener(new ShadowBuildMonitor(
-                        session.getRequest().getExecutionListener(),
-                        reactorRoot,
-                        wouldHaveBuilt,
-                        wouldHaveSkipped,
-                        Version.version(),
-                        config.getBaseBranch(),
-                        changedFiles,
-                        System::nanoTime));
-        logger.info(
-                "Scalpel: Shadow mode observing the full build: would build {} of {} modules, would skip {}",
-                wouldHaveBuilt.size(),
-                allProjects.size(),
-                wouldHaveSkipped.size());
     }
 
     private void writeReport(

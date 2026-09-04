@@ -23,6 +23,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 import org.apache.maven.execution.ExecutionEvent;
 import org.apache.maven.execution.ExecutionListener;
@@ -43,12 +44,13 @@ import org.slf4j.LoggerFactory;
  *       in the full build, the false-negative counter</li>
  * </ul>
  *
- * Every event is forwarded to the wrapped listener unchanged, and a {@code null} delegate
- * is tolerated. Measurements use the supplied clock so tests are deterministic; the module
- * key is the module path relative to the reactor root, the same key space as the would-be
- * decision. The shadow document and the JSONL history line are written on
- * {@link #sessionEnded(ExecutionEvent)} even when the build failed, because that is
- * precisely when the false-negative information is valuable.
+ * Every event is forwarded to the wrapped listener unchanged (a {@code null} delegate is
+ * normalized to a no-op). Measurements use the supplied clock so tests are deterministic.
+ * Module keys come from the supplied key function, which must produce the same key space
+ * as the would-be decision; the lifecycle participant passes its {@code relativePath}
+ * helper for both, so the two can never disagree. The shadow document and the JSONL
+ * history line are written on {@link #sessionEnded(ExecutionEvent)} even when the build
+ * failed, because that is precisely when the false-negative information is valuable.
  */
 public final class ShadowBuildMonitor implements ExecutionListener {
 
@@ -56,6 +58,9 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     static final String HISTORY_FILE = "target/scalpel-shadow-history.jsonl";
 
     private static final Logger logger = LoggerFactory.getLogger(ShadowBuildMonitor.class);
+
+    /** Absorbs a {@code null} delegate so the event methods can forward unconditionally. */
+    private static final ExecutionListener NOOP = new NoopExecutionListener();
 
     private final ExecutionListener delegate;
     private final Path reactorRoot;
@@ -65,6 +70,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     private final String baseBranch;
     private final List<String> changedFiles;
     private final LongSupplier nanoClock;
+    private final Function<MavenProject, String> moduleKey;
 
     private final ConcurrentMap<String, Long> startNanos = new ConcurrentHashMap<>();
     private final ConcurrentMap<String, Long> durationNanos = new ConcurrentHashMap<>();
@@ -78,8 +84,9 @@ public final class ShadowBuildMonitor implements ExecutionListener {
             String scalpelVersion,
             String baseBranch,
             Collection<String> changedFiles,
-            LongSupplier nanoClock) {
-        this.delegate = delegate;
+            LongSupplier nanoClock,
+            Function<MavenProject, String> moduleKey) {
+        this.delegate = delegate == null ? NOOP : delegate;
         this.reactorRoot = reactorRoot;
         this.wouldHaveBuilt = new ArrayList<>(wouldHaveBuilt);
         this.wouldHaveSkipped = new LinkedHashSet<>(wouldHaveSkipped);
@@ -87,6 +94,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         this.baseBranch = baseBranch;
         this.changedFiles = changedFiles == null ? List.of() : new ArrayList<>(changedFiles);
         this.nanoClock = nanoClock;
+        this.moduleKey = moduleKey;
     }
 
     // ------------------------------------------------------------------
@@ -95,28 +103,22 @@ public final class ShadowBuildMonitor implements ExecutionListener {
 
     @Override
     public void projectStarted(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.projectStarted(event);
-        }
-        String module = moduleKey(event.getProject());
-        if (module != null) {
-            startNanos.put(module, nanoClock.getAsLong());
+        delegate.projectStarted(event);
+        MavenProject project = event.getProject();
+        if (project != null) {
+            startNanos.put(moduleKey.apply(project), nanoClock.getAsLong());
         }
     }
 
     @Override
     public void projectSucceeded(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.projectSucceeded(event);
-        }
+        delegate.projectSucceeded(event);
         stopModule(event.getProject());
     }
 
     @Override
     public void projectFailed(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.projectFailed(event);
-        }
+        delegate.projectFailed(event);
         String module = stopModule(event.getProject());
         if (module != null) {
             failedModules.add(module);
@@ -124,26 +126,15 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     }
 
     private String stopModule(MavenProject project) {
-        String module = moduleKey(project);
-        if (module != null) {
-            Long start = startNanos.remove(module);
-            if (start != null) {
-                durationNanos.merge(module, Math.max(0L, nanoClock.getAsLong() - start), Long::sum);
-            }
-        }
-        return module;
-    }
-
-    private String moduleKey(MavenProject project) {
         if (project == null) {
             return null;
         }
-        if (project.getFile() != null) {
-            Path moduleDir = project.getFile().getParentFile().toPath();
-            String relative = reactorRoot.relativize(moduleDir).toString().replace('\\', '/');
-            return relative.isEmpty() ? "." : relative;
+        String module = moduleKey.apply(project);
+        Long start = startNanos.remove(module);
+        if (start != null) {
+            durationNanos.merge(module, Math.max(0L, nanoClock.getAsLong() - start), Long::sum);
         }
-        return project.getArtifactId();
+        return module;
     }
 
     // ------------------------------------------------------------------
@@ -186,9 +177,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
 
     @Override
     public void sessionEnded(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.sessionEnded(event);
-        }
+        delegate.sessionEnded(event);
         try {
             writeOutputs();
         } catch (IOException e) {
@@ -199,90 +188,74 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     }
 
     void writeOutputs() throws IOException {
+        Set<String> wouldHaveSkippedButFailed = getWouldHaveSkippedButFailed();
+        String estimatedSecondsSaved = String.format(Locale.ROOT, "%.3f", getEstimatedSecondsSaved());
         Files.createDirectories(reactorRoot.resolve(SHADOW_FILE).getParent());
-        Files.write(reactorRoot.resolve(SHADOW_FILE), shadowJson().getBytes(StandardCharsets.UTF_8));
-        String historyLine = historyLine();
+        Files.write(
+                reactorRoot.resolve(SHADOW_FILE),
+                shadowJson(wouldHaveSkippedButFailed, estimatedSecondsSaved).getBytes(StandardCharsets.UTF_8));
         Files.write(
                 reactorRoot.resolve(HISTORY_FILE),
-                (historyLine + System.lineSeparator()).getBytes(StandardCharsets.UTF_8),
+                (historyLine(wouldHaveSkippedButFailed, estimatedSecondsSaved) + System.lineSeparator())
+                        .getBytes(StandardCharsets.UTF_8),
                 StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND);
     }
 
-    private String shadowJson() {
+    private String shadowJson(Set<String> wouldHaveSkippedButFailed, String estimatedSecondsSaved) {
+        List<String> fields = new ArrayList<>();
+        fields.add(field("version", "1"));
+        fields.add(field("mode", "shadow"));
+        fields.add(field("scalpelVersion", scalpelVersion));
+        fields.add(field("baseBranch", baseBranch));
+        fields.add(field("timestamp", Instant.now().toString()));
+        fields.add(field("changedFilesCount", String.valueOf(changedFiles.size())));
+        fields.add(arrayField("wouldHaveBuilt", wouldHaveBuilt));
+        fields.add(arrayField("wouldHaveSkipped", new ArrayList<>(wouldHaveSkipped)));
+        fields.add("  \"moduleMillis\": " + moduleMillisJson());
+        fields.add("  \"estimatedSecondsSaved\": " + estimatedSecondsSaved);
+        fields.add(arrayField("wouldHaveSkippedButFailed", new ArrayList<>(wouldHaveSkippedButFailed)));
+        return "{\n  " + String.join(",\n  ", fields) + "\n}\n";
+    }
+
+    private String moduleMillisJson() {
         Map<String, Long> moduleMillis = new TreeMap<>();
         for (String module : durationNanos.keySet()) {
             moduleMillis.put(module, getModuleMillis(module));
         }
-        StringBuilder sb = new StringBuilder();
-        sb.append("{\n");
-        appendField(sb, "version", "1");
-        appendField(sb, "mode", "shadow");
-        appendField(sb, "scalpelVersion", scalpelVersion);
-        appendField(sb, "baseBranch", baseBranch);
-        appendField(sb, "timestamp", Instant.now().toString());
-        appendField(sb, "changedFilesCount", (long) changedFiles.size());
-        appendStringArrayField(sb, "wouldHaveBuilt", wouldHaveBuilt);
-        appendStringArrayField(sb, "wouldHaveSkipped", new ArrayList<>(wouldHaveSkipped));
-        sb.append("  \"moduleMillis\": {");
-        if (!moduleMillis.isEmpty()) {
-            sb.append("\n");
-            int i = 0;
-            for (Map.Entry<String, Long> e : moduleMillis.entrySet()) {
-                sb.append("    ").append(jsonString(e.getKey())).append(": ").append(e.getValue());
-                if (++i < moduleMillis.size()) {
-                    sb.append(",");
-                }
-                sb.append("\n");
-            }
-            sb.append("  },\n");
-        } else {
-            sb.append("},\n");
+        if (moduleMillis.isEmpty()) {
+            return "{}";
         }
-        sb.append("  \"estimatedSecondsSaved\": ")
-                .append(String.format(Locale.ROOT, "%.3f", getEstimatedSecondsSaved()))
-                .append(",\n");
-        appendStringArrayField(sb, "wouldHaveSkippedButFailed", new ArrayList<>(getWouldHaveSkippedButFailed()));
-        sb.setLength(sb.length() - 2); // drop trailing ",\n" of the last field
-        sb.append("\n}\n");
-        return sb.toString();
+        List<String> entries = new ArrayList<>();
+        for (Map.Entry<String, Long> e : moduleMillis.entrySet()) {
+            entries.add(jsonString(e.getKey()) + ": " + e.getValue());
+        }
+        return "{\n    " + String.join(",\n    ", entries) + "\n  }";
     }
 
-    private String historyLine() {
-        StringBuilder sb = new StringBuilder("{");
-        sb.append("\"timestamp\": ").append(jsonString(Instant.now().toString()));
-        sb.append(", \"baseBranch\": ").append(jsonString(baseBranch));
-        sb.append(", \"changedFilesCount\": ").append(changedFiles.size());
-        sb.append(", \"estimatedSecondsSaved\": ")
-                .append(String.format(Locale.ROOT, "%.3f", getEstimatedSecondsSaved()));
-        sb.append(", \"wouldHaveBuiltCount\": ").append(wouldHaveBuilt.size());
-        sb.append(", \"wouldHaveSkipped\": ").append(jsonStringArray(new ArrayList<>(wouldHaveSkipped)));
-        sb.append(", \"wouldHaveSkippedButFailed\": ")
-                .append(jsonStringArray(new ArrayList<>(getWouldHaveSkippedButFailed())));
-        sb.append("}");
-        return sb.toString();
+    private String historyLine(Set<String> wouldHaveSkippedButFailed, String estimatedSecondsSaved) {
+        return "{"
+                + "\"timestamp\": " + jsonString(Instant.now().toString())
+                + ", \"baseBranch\": " + jsonString(baseBranch)
+                + ", \"changedFilesCount\": " + changedFiles.size()
+                + ", \"estimatedSecondsSaved\": " + estimatedSecondsSaved
+                + ", \"wouldHaveBuiltCount\": " + wouldHaveBuilt.size()
+                + ", \"wouldHaveSkipped\": " + jsonStringArray(new ArrayList<>(wouldHaveSkipped))
+                + ", \"wouldHaveSkippedButFailed\": "
+                + jsonStringArray(new ArrayList<>(wouldHaveSkippedButFailed))
+                + "}";
     }
 
-    private static void appendField(StringBuilder sb, String name, String value) {
-        sb.append("  ")
-                .append(jsonString(name))
-                .append(": ")
-                .append(jsonString(value))
-                .append(",\n");
+    private static String field(String name, String value) {
+        return jsonString(name) + ": " + jsonString(value);
     }
 
-    private static void appendField(StringBuilder sb, String name, long value) {
-        sb.append("  ").append(jsonString(name)).append(": ").append(value).append(",\n");
+    private static String arrayField(String name, List<String> values) {
+        return jsonString(name) + ": " + jsonStringArray(values);
     }
 
-    private static void appendStringArrayField(StringBuilder sb, String name, List<String> values) {
-        sb.append("  ")
-                .append(jsonString(name))
-                .append(": ")
-                .append(jsonStringArray(values))
-                .append(",\n");
-    }
-
+    // Keep in sync with the twins in ScalpelReport: the shadow document and the JSON
+    // report must escape and format identically so consumers can parse both the same way.
     private static String jsonStringArray(List<String> values) {
         if (values.isEmpty()) {
             return "[]";
@@ -337,92 +310,119 @@ public final class ShadowBuildMonitor implements ExecutionListener {
 
     @Override
     public void sessionStarted(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.sessionStarted(event);
-        }
+        delegate.sessionStarted(event);
     }
 
     @Override
     public void projectDiscoveryStarted(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.projectDiscoveryStarted(event);
-        }
+        delegate.projectDiscoveryStarted(event);
     }
 
     @Override
     public void projectSkipped(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.projectSkipped(event);
-        }
+        delegate.projectSkipped(event);
     }
 
     @Override
     public void mojoStarted(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.mojoStarted(event);
-        }
+        delegate.mojoStarted(event);
     }
 
     @Override
     public void mojoSucceeded(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.mojoSucceeded(event);
-        }
+        delegate.mojoSucceeded(event);
     }
 
     @Override
     public void mojoFailed(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.mojoFailed(event);
-        }
+        delegate.mojoFailed(event);
     }
 
     @Override
     public void mojoSkipped(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.mojoSkipped(event);
-        }
+        delegate.mojoSkipped(event);
     }
 
     @Override
     public void forkStarted(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.forkStarted(event);
-        }
+        delegate.forkStarted(event);
     }
 
     @Override
     public void forkSucceeded(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.forkSucceeded(event);
-        }
+        delegate.forkSucceeded(event);
     }
 
     @Override
     public void forkFailed(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.forkFailed(event);
-        }
+        delegate.forkFailed(event);
     }
 
     @Override
     public void forkedProjectStarted(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.forkedProjectStarted(event);
-        }
+        delegate.forkedProjectStarted(event);
     }
 
     @Override
     public void forkedProjectSucceeded(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.forkedProjectSucceeded(event);
-        }
+        delegate.forkedProjectSucceeded(event);
     }
 
     @Override
     public void forkedProjectFailed(ExecutionEvent event) {
-        if (delegate != null) {
-            delegate.forkedProjectFailed(event);
-        }
+        delegate.forkedProjectFailed(event);
+    }
+
+    private static final class NoopExecutionListener implements ExecutionListener {
+        @Override
+        public void projectDiscoveryStarted(ExecutionEvent event) {}
+
+        @Override
+        public void sessionStarted(ExecutionEvent event) {}
+
+        @Override
+        public void sessionEnded(ExecutionEvent event) {}
+
+        @Override
+        public void projectSkipped(ExecutionEvent event) {}
+
+        @Override
+        public void projectStarted(ExecutionEvent event) {}
+
+        @Override
+        public void projectSucceeded(ExecutionEvent event) {}
+
+        @Override
+        public void projectFailed(ExecutionEvent event) {}
+
+        @Override
+        public void mojoSkipped(ExecutionEvent event) {}
+
+        @Override
+        public void mojoStarted(ExecutionEvent event) {}
+
+        @Override
+        public void mojoSucceeded(ExecutionEvent event) {}
+
+        @Override
+        public void mojoFailed(ExecutionEvent event) {}
+
+        @Override
+        public void forkStarted(ExecutionEvent event) {}
+
+        @Override
+        public void forkSucceeded(ExecutionEvent event) {}
+
+        @Override
+        public void forkFailed(ExecutionEvent event) {}
+
+        @Override
+        public void forkedProjectStarted(ExecutionEvent event) {}
+
+        @Override
+        public void forkedProjectSucceeded(ExecutionEvent event) {}
+
+        @Override
+        public void forkedProjectFailed(ExecutionEvent event) {}
     }
 }

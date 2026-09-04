@@ -9,10 +9,10 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -32,7 +32,10 @@ import org.junit.jupiter.api.io.TempDir;
  * Unit tests for the shadow-mode build monitor: per-module wall-clock recording, the
  * would-have-skipped join (estimatedSecondsSaved, wouldHaveSkippedButFailed), transparent
  * delegation to any pre-existing ExecutionListener, and the shadow artifacts written at
- * session end (#92).
+ * session end (#92). Module keys come from the injected key function; these fixtures set
+ * artifactId to the module path, so {@code MavenProject::getArtifactId} is the key
+ * function. The production key function (the participant's relativePath helper) is
+ * exercised end to end by the shadow integration tests.
  */
 class ShadowBuildMonitorTest {
 
@@ -47,81 +50,15 @@ class ShadowBuildMonitorTest {
         }
     }
 
-    /** Records every callback so delegation transparency is asserted, not assumed. */
-    private static final class RecordingDelegate implements ExecutionListener {
-        final List<String> calls = new ArrayList<>();
-
-        private void rec(String method) {
-            calls.add(method);
-        }
-
-        public void sessionStarted(ExecutionEvent event) {
-            rec("sessionStarted");
-        }
-
-        public void sessionEnded(ExecutionEvent event) {
-            rec("sessionEnded");
-        }
-
-        public void projectStarted(ExecutionEvent event) {
-            rec("projectStarted");
-        }
-
-        public void projectSucceeded(ExecutionEvent event) {
-            rec("projectSucceeded");
-        }
-
-        public void projectFailed(ExecutionEvent event) {
-            rec("projectFailed");
-        }
-
-        public void mojoStarted(ExecutionEvent event) {
-            rec("mojoStarted");
-        }
-
-        public void mojoSucceeded(ExecutionEvent event) {
-            rec("mojoSucceeded");
-        }
-
-        public void mojoFailed(ExecutionEvent event) {
-            rec("mojoFailed");
-        }
-
-        public void mojoSkipped(ExecutionEvent event) {
-            rec("mojoSkipped");
-        }
-
-        public void projectDiscoveryStarted(ExecutionEvent event) {
-            rec("projectDiscoveryStarted");
-        }
-
-        public void projectSkipped(ExecutionEvent event) {
-            rec("projectSkipped");
-        }
-
-        public void forkStarted(ExecutionEvent event) {
-            rec("forkStarted");
-        }
-
-        public void forkSucceeded(ExecutionEvent event) {
-            rec("forkSucceeded");
-        }
-
-        public void forkFailed(ExecutionEvent event) {
-            rec("forkFailed");
-        }
-
-        public void forkedProjectStarted(ExecutionEvent event) {
-            rec("forkedProjectStarted");
-        }
-
-        public void forkedProjectSucceeded(ExecutionEvent event) {
-            rec("forkedProjectSucceeded");
-        }
-
-        public void forkedProjectFailed(ExecutionEvent event) {
-            rec("forkedProjectFailed");
-        }
+    /** A delegate that records every callback name, so delegation transparency is asserted, not assumed. */
+    private static ExecutionListener recordingDelegate(List<String> calls) {
+        return (ExecutionListener) Proxy.newProxyInstance(
+                ExecutionListener.class.getClassLoader(),
+                new Class<?>[] {ExecutionListener.class},
+                (proxy, method, args) -> {
+                    calls.add(method.getName());
+                    return null;
+                });
     }
 
     private static MavenProject project(Path reactorRoot, String relativePath) {
@@ -160,20 +97,21 @@ class ShadowBuildMonitorTest {
     @Test
     void recordsDurationsJoinsSkippedSetAndDelegates(@TempDir Path tmp) throws IOException {
         SteppingClock clock = new SteppingClock();
-        RecordingDelegate delegate = new RecordingDelegate();
+        List<String> delegateCalls = new ArrayList<>();
         Path reactorRoot = tmp.resolve("reactor");
         Files.createDirectories(reactorRoot);
 
         // module-b would have been built; module-a and module-c would have been skipped.
         ShadowBuildMonitor monitor = new ShadowBuildMonitor(
-                delegate,
+                recordingDelegate(delegateCalls),
                 reactorRoot,
                 Arrays.asList("module-b"),
                 Arrays.asList("module-a", "module-c"),
                 "0.3.11",
                 "base",
                 Arrays.asList("module-b/src/Foo.java"),
-                clock);
+                clock,
+                MavenProject::getArtifactId);
 
         MavenProject a = project(reactorRoot, "module-a");
         MavenProject b = project(reactorRoot, "module-b");
@@ -201,9 +139,9 @@ class ShadowBuildMonitorTest {
         assertEquals(0.4, monitor.getEstimatedSecondsSaved(), 1e-9);
 
         // Delegation: every event reached the wrapped listener untouched
-        assertTrue(delegate.calls.contains("sessionStarted"));
-        assertTrue(delegate.calls.contains("sessionEnded"));
-        assertTrue(delegate.calls.containsAll(Arrays.asList("projectStarted", "projectSucceeded", "projectFailed")));
+        assertTrue(delegateCalls.contains("sessionStarted"));
+        assertTrue(delegateCalls.contains("sessionEnded"));
+        assertTrue(delegateCalls.containsAll(Arrays.asList("projectStarted", "projectSucceeded", "projectFailed")));
 
         // Artifacts written at session end
         Path shadowJson = reactorRoot.resolve("target/scalpel-shadow.json");
@@ -238,7 +176,8 @@ class ShadowBuildMonitorTest {
                     "0.3.11",
                     "base",
                     Arrays.asList("module-b/src/Foo.java"),
-                    clock);
+                    clock,
+                    MavenProject::getArtifactId);
             MavenProject b = project(reactorRoot, "module-b");
             monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, b));
             monitor.projectSucceeded(event(ExecutionEvent.Type.ProjectSucceeded, b));
@@ -262,7 +201,8 @@ class ShadowBuildMonitorTest {
                 "0.3.11",
                 null,
                 null,
-                new SteppingClock());
+                new SteppingClock(),
+                MavenProject::getArtifactId);
 
         monitor.sessionEnded(event(ExecutionEvent.Type.SessionEnded, null));
 
@@ -273,8 +213,6 @@ class ShadowBuildMonitorTest {
 
         Path shadowJson = reactorRoot.resolve("target/scalpel-shadow.json");
         assertTrue(Files.exists(shadowJson), "shadow json is still written with nothing measured");
-        String json = Files.readString(shadowJson);
-        assertNotNull(json);
-        assertFalse(json.contains("estimatedSecondsSaved\": null"), "savings stay numeric");
+        assertFalse(Files.readString(shadowJson).contains("estimatedSecondsSaved\": null"), "savings stay numeric");
     }
 }
