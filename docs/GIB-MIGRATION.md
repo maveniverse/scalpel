@@ -54,7 +54,7 @@ The following GIB features have no direct Scalpel equivalent. For each, we expla
 
 **`logProjectsMode`.** GIB can filter console output to show only `changed`, `impacted`, `all`, or `none` projects in the build log. Scalpel logs affected modules at INFO level and detailed analysis at DEBUG level. Users who need quieter or more verbose output can use Maven's standard logging controls (`-q` for quiet, `-X` for debug).
 
-**`failOnMissingGitDir`.** GIB has a separate control for behavior when no `.git` directory is found. Scalpel's `failSafe` property covers this. When `.git` is missing, Scalpel falls back to a full build (or throws if `failSafe=false`). A separate property for this specific scenario would add granularity without practical benefit.
+**`failOnMissingGitDir`.** GIB has a separate control for behavior when no `.git` directory is found. In Scalpel, a missing `.git` directory is caught before the `failSafe` handler and always results in a full build — `failSafe` has no effect on this path. There is no separate property for this scenario because the behavior is unconditionally safe.
 
 **Authentication support.** GIB supports HTTP credential queries via native Git (`git credential fill`) and SSH key authentication via JGit agent. Scalpel relies on the credentials already configured in the Git environment. This is intentional. Git authentication should be configured at the OS or CI level (SSH agent, credential helper, CI tokens), not duplicated inside a Maven extension. JGit inherits the system's SSH and credential configuration automatically.
 
