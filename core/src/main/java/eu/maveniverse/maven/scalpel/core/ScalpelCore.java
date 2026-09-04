@@ -60,9 +60,22 @@ public class ScalpelCore {
      */
     public ChangeDetectionResult detectChanges(Path reactorRoot, ScalpelConfiguration config, Set<String> allPomPaths)
             throws ScalpelException {
+        return detectChanges(reactorRoot, config, allPomPaths, new Timings());
+    }
+
+    /**
+     * Same as {@link #detectChanges(Path, ScalpelConfiguration, Set)} with an explicit
+     * instrumentation collector: the git phases (repoOpen, fetch, mergeBase, diff, status,
+     * readOldPoms) and the git-blob-read counter are recorded into {@code timings}.
+     */
+    public ChangeDetectionResult detectChanges(
+            Path reactorRoot, ScalpelConfiguration config, Set<String> allPomPaths, Timings timings)
+            throws ScalpelException {
+        requireNonNull(timings, "timings");
         lastDetectionSkipReason = null;
         Repository repository;
         try {
+            timings.start(Timings.PHASE_REPO_OPEN);
             repository = openRepository(reactorRoot);
         } catch (RepositoryNotFoundException | IllegalArgumentException e) {
             logger.info("Scalpel: Not a git repository, building all modules");
@@ -70,6 +83,8 @@ public class ScalpelCore {
             return null;
         } catch (IOException e) {
             return handleError(config, "Error opening git repository", e);
+        } finally {
+            timings.stop(Timings.PHASE_REPO_OPEN);
         }
 
         try {
@@ -117,27 +132,38 @@ public class ScalpelCore {
 
             // Fetch base branch if configured and ref cannot be resolved
             if (config.isFetchBaseBranch()) {
-                ObjectId baseId = repository.resolve(baseBranch);
-                if (baseId == null) {
-                    try {
-                        gitChangeDetector.fetchBranch(repository, baseBranch);
-                    } catch (Exception e) {
-                        if (config.isFailSafe()) {
-                            logger.warn(
-                                    "Scalpel: Failed to fetch {}, building all modules: {}",
-                                    baseBranch,
-                                    e.getMessage());
-                            return null;
-                        } else {
-                            throw new ScalpelException("Failed to fetch " + baseBranch, e);
+                timings.start(Timings.PHASE_FETCH);
+                try {
+                    ObjectId baseId = repository.resolve(baseBranch);
+                    if (baseId == null) {
+                        try {
+                            gitChangeDetector.fetchBranch(repository, baseBranch);
+                        } catch (Exception e) {
+                            if (config.isFailSafe()) {
+                                logger.warn(
+                                        "Scalpel: Failed to fetch {}, building all modules: {}",
+                                        baseBranch,
+                                        e.getMessage());
+                                return null;
+                            } else {
+                                throw new ScalpelException("Failed to fetch " + baseBranch, e);
+                            }
                         }
                     }
+                } finally {
+                    timings.stop(Timings.PHASE_FETCH);
                 }
             }
 
             String head = config.getHead();
 
-            ObjectId mergeBase = gitChangeDetector.findMergeBase(repository, baseBranch, head);
+            ObjectId mergeBase;
+            timings.start(Timings.PHASE_MERGE_BASE);
+            try {
+                mergeBase = gitChangeDetector.findMergeBase(repository, baseBranch, head);
+            } finally {
+                timings.stop(Timings.PHASE_MERGE_BASE);
+            }
             if (mergeBase == null) {
                 if (config.isFailSafe()) {
                     logger.warn(
@@ -152,12 +178,23 @@ public class ScalpelCore {
 
             ObjectId headId = repository.resolve(head);
             // Copy the set to avoid mutating the return value of getChangedFiles()
-            Set<String> changedFiles =
-                    new LinkedHashSet<>(gitChangeDetector.getChangedFiles(repository, mergeBase, headId));
+            Set<String> changedFiles;
+            timings.start(Timings.PHASE_DIFF);
+            try {
+                changedFiles = new LinkedHashSet<>(gitChangeDetector.getChangedFiles(repository, mergeBase, headId));
+            } finally {
+                timings.stop(Timings.PHASE_DIFF);
+            }
 
             // Merge in uncommitted/untracked files if configured
             if (config.isUncommitted() || config.isUntracked()) {
-                GitChangeDetector.StatusResult statusResult = gitChangeDetector.getStatusFiles(repository);
+                GitChangeDetector.StatusResult statusResult;
+                timings.start(Timings.PHASE_STATUS);
+                try {
+                    statusResult = gitChangeDetector.getStatusFiles(repository);
+                } finally {
+                    timings.stop(Timings.PHASE_STATUS);
+                }
                 if (config.isUncommitted() && !statusResult.getUncommitted().isEmpty()) {
                     logger.info(
                             "Scalpel: {} uncommitted files detected",
@@ -185,8 +222,15 @@ public class ScalpelCore {
                     changedPomPaths.add(path);
                 }
             }
-            Map<String, byte[]> oldPomContents = gitChangeDetector.readPomFilesAtCommit(
-                    repository, mergeBase, changedPomPaths, config.getMaxResourceFileSize());
+            Map<String, byte[]> oldPomContents;
+            timings.start(Timings.PHASE_READ_OLD_POMS);
+            try {
+                oldPomContents = gitChangeDetector.readPomFilesAtCommit(
+                        repository, mergeBase, changedPomPaths, config.getMaxResourceFileSize());
+            } finally {
+                timings.stop(Timings.PHASE_READ_OLD_POMS);
+            }
+            timings.increment(Timings.OP_GIT_BLOBS_READ, oldPomContents.size());
 
             return new ChangeDetectionResult(changedFiles, oldPomContents);
         } catch (ScalpelException e) {

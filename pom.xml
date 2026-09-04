@@ -73,6 +73,7 @@
 
     <version.slf4j>1.7.36</version.slf4j>
     <version.jacoco>0.8.15</version.jacoco>
+    <version.cyclonedx>2.9.3</version.cyclonedx>
   </properties>
 
   <dependencyManagement>
@@ -226,4 +227,37 @@
       </plugin>
     </plugins>
   </build>
+
+  <!--
+    Generate a CycloneDX SBOM for the release: a single aggregate BOM (JSON + XML,
+    spec version 1.6 as per plugin default) covering the whole reactor, attached with
+    the "cyclonedx" classifier so that it gets deployed with the released artifacts.
+    Modules that are not deployed (like it) are skipped by the plugin's default
+    skipNotDeployed setting. Invoked by the release workflow, see .github/workflows/release.yml
+  -->
+  <profiles>
+    <profile>
+      <id>cyclonedx-sbom</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.cyclonedx</groupId>
+            <artifactId>cyclonedx-maven-plugin</artifactId>
+            <version>${version.cyclonedx}</version>
+            <executions>
+              <execution>
+                <id>generate-aggregate-sbom</id>
+                <goals>
+                  <goal>makeAggregateBom</goal>
+                </goals>
+                <configuration>
+                  <outputReactorProjects>false</outputReactorProjects>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
