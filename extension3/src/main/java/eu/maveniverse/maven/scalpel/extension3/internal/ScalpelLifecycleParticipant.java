@@ -1325,7 +1325,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
             if (Character.isISOControl(c)) {
-                escaped.append(String.format("\\u%04x", (int) c));
+                escaped.append("\\u%04x".formatted((int) c));
             } else {
                 escaped.append(c);
             }
