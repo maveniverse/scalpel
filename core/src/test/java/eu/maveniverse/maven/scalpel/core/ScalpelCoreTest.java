@@ -9,11 +9,14 @@ package eu.maveniverse.maven.scalpel.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -155,6 +158,121 @@ class ScalpelCoreTest {
 
             assertNull(result, "Should return null when current branch matches disableOnBranch");
         }
+    }
+
+    @Test
+    void detectChanges_baseBranchNameOverLimit_skipsDisableMatchAndWarns() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            ScalpelCore core = new ScalpelCore(new GitChangeDetector());
+            Properties sys = new Properties();
+            // 300-char base branch name: over the documented input cap, would match "b.*"
+            // if the matcher applied the pattern to the full-length value
+            sys.setProperty("scalpel.baseBranch", "b".repeat(300));
+            sys.setProperty("scalpel.disableOnBaseBranch", "b.*");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            ChangeDetectionResult[] result = new ChangeDetectionResult[1];
+            String err = captureStderr(() -> {
+                try {
+                    result[0] = core.detectChanges(tempDir, config, Set.of());
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            });
+
+            assertNotEquals(
+                    "disabled by disableOnBaseBranch",
+                    core.getLastDetectionSkipReason(),
+                    "an over-limit branch name must not be treated as a match");
+            assertTrue(err.contains("exceeds"), "expected a WARN about the over-limit input but stderr was: " + err);
+            assertFalse(
+                    err.contains("Disabled because base branch"),
+                    "over-limit input must be skipped before matching but stderr was: " + err);
+        }
+    }
+
+    @Test
+    void detectChanges_recordsGitPhaseTimingsAndBlobCount() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("pom.xml"), "<project/>".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            // Change the POM on the current branch so old content must be read from git
+            Files.write(tempDir.resolve("pom.xml"), "<project><modules/></project>".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("change pom").call();
+
+            ScalpelCore core = new ScalpelCore(new GitChangeDetector());
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            Timings timings = new Timings();
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of("pom.xml"), timings);
+
+            assertNotNull(result);
+            assertTrue(result.getChangedFiles().contains("pom.xml"));
+            assertTrue(timings.getPhaseNames().contains(Timings.PHASE_REPO_OPEN), "repoOpen phase must be recorded");
+            assertTrue(timings.getPhaseNames().contains(Timings.PHASE_MERGE_BASE), "mergeBase phase must be recorded");
+            assertTrue(timings.getPhaseNames().contains(Timings.PHASE_DIFF), "diff phase must be recorded");
+            assertTrue(
+                    timings.getPhaseNames().contains(Timings.PHASE_READ_OLD_POMS),
+                    "readOldPoms phase must be recorded when a POM changed");
+            assertEquals(
+                    1,
+                    timings.getOperationCount(Timings.OP_GIT_BLOBS_READ),
+                    "exactly one old-POM blob must be counted as read");
+        }
+    }
+
+    @Test
+    void detectChanges_emptyDisableRegexLists_detectionProceeds() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("file.txt").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            Files.write(tempDir.resolve("new-file.txt"), "world".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("new-file.txt").call();
+            git.commit().setMessage("add new file").call();
+
+            ScalpelCore core = new ScalpelCore(new GitChangeDetector());
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            // unset vs empty-string variants must both behave as "no patterns configured"
+            sys.setProperty("scalpel.disableOnBranch", "");
+            sys.setProperty("scalpel.disableOnBaseBranch", "");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of());
+
+            assertNotNull(result);
+            assertTrue(result.getChangedFiles().contains("new-file.txt"));
+        }
+    }
+
+    /**
+     * Runs the action with System.err captured (slf4j-simple writes to stderr)
+     * and returns everything that was written during its execution.
+     */
+    private String captureStderr(Runnable action) {
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        try {
+            action.run();
+        } finally {
+            System.setErr(originalErr);
+        }
+        return captured.toString(StandardCharsets.UTF_8);
     }
 
     @Test

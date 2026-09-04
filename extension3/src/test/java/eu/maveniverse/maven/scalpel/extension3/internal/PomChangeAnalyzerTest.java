@@ -10,6 +10,7 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -19,7 +20,9 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -27,11 +30,13 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Stream;
+import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Parent;
 import org.apache.maven.model.Profile;
 import org.apache.maven.model.Repository;
+import org.apache.maven.model.Resource;
 import org.apache.maven.model.building.DefaultModelBuildingRequest;
 import org.apache.maven.model.building.FileModelSource;
 import org.apache.maven.model.building.ModelBuildingException;
@@ -2328,6 +2333,218 @@ class PomChangeAnalyzerTest {
         assertFalse(
                 result.getAffectedProjects().contains(parent),
                 "parent should NOT be self-affected for a property-only change");
+    }
+
+    // --- IO error conservative handling tests ---
+    //
+    // The #131 effective-model rework removed readPomText; the equivalent failure
+    // surface is a child whose effective model cannot be built (IO or parse error),
+    // which currently makes hasEffectiveChanges silently return "not affected".
+
+    @Test
+    void analyzeChanges_unparseableChildPomMarksChildAsAffected() throws Exception {
+        // When neither old nor new effective model can be built for a child (here:
+        // unparseable POM content on disk), the child should be conservatively
+        // marked as affected rather than silently skipped.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root);
+
+        // Corrupt module-b's POM on disk after the reactor is built: the in-memory
+        // models stay valid, but effective model building fails for both states.
+        Files.write(root.resolve("module-b/pom.xml"), "<<< not a pom >>>".getBytes(StandardCharsets.UTF_8));
+
+        // Old parent POM had dep.version=1.0
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>1.0</dep.version>
+                  </properties>
+                </project>
+                """;
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleB),
+                "module-b with unparseable POM should be conservatively marked as affected");
+        assertFalse(
+                affected.contains(moduleA),
+                "module-a is readable and does not reference the changed property, should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_unreadableResourceFileMarksChildAsAffected() throws Exception {
+        // When a filtered resource file cannot be read (IOException),
+        // the child should be conservatively marked as affected.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root);
+
+        // Create a filtered resource referencing the changed property and make it unreadable
+        Path resourceDir = root.resolve("module-a/src/main/resources");
+        Files.createDirectories(resourceDir);
+        Path unreadableFile = resourceDir.resolve("application.properties");
+        Files.write(unreadableFile, "app.version=${dep.version}\n".getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(unreadableFile, EnumSet.noneOf(PosixFilePermission.class));
+        assumeTrue(
+                !Files.isReadable(unreadableFile), "Filesystem does not enforce POSIX permissions (running as root?)");
+
+        MavenProject moduleA = projects.get(1);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleA.getModel().setBuild(build);
+
+        // Old parent POM had dep.version=1.0
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>1.0</dep.version>
+                  </properties>
+                </project>
+                """;
+
+        PomChangeAnalyzer.Result result = analyzeChanges(
+                Set.of("pom.xml"), Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)), projects, root);
+
+        // Restore permissions for cleanup
+        Files.setPosixFilePermissions(
+                unreadableFile, EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE));
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a with unreadable resource file should be conservatively marked as affected");
+    }
+
+    @Test
+    void analyzeChanges_unreadableResourceDirectoryMarksChildAsAffected() throws Exception {
+        // When a filtered resource subdirectory cannot be listed (IOException on
+        // DirectoryStream), the child should be conservatively marked as affected.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root);
+
+        // Create resource directory structure with unreadable subdirectory
+        Path resourceDir = root.resolve("module-a/src/main/resources");
+        Files.createDirectories(resourceDir);
+        Path subDir = resourceDir.resolve("config");
+        Files.createDirectories(subDir);
+        Files.write(subDir.resolve("app.properties"), "app.version=${dep.version}\n".getBytes(StandardCharsets.UTF_8));
+        // Make the subdirectory unreadable so DirectoryStream fails
+        Files.setPosixFilePermissions(subDir, EnumSet.noneOf(PosixFilePermission.class));
+        assumeTrue(!Files.isReadable(subDir), "Filesystem does not enforce POSIX permissions (running as root?)");
+
+        MavenProject moduleA = projects.get(1);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleA.getModel().setBuild(build);
+
+        // Old parent POM had dep.version=1.0
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>1.0</dep.version>
+                  </properties>
+                </project>
+                """;
+
+        PomChangeAnalyzer.Result result = analyzeChanges(
+                Set.of("pom.xml"), Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)), projects, root);
+
+        // Restore permissions for cleanup
+        Files.setPosixFilePermissions(
+                subDir,
+                EnumSet.of(
+                        PosixFilePermission.OWNER_READ,
+                        PosixFilePermission.OWNER_WRITE,
+                        PosixFilePermission.OWNER_EXECUTE));
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a with unreadable resource subdirectory should be conservatively marked as affected");
+    }
+
+    @Test
+    void analyzeChanges_oversizedResourceFileMarksChildAsAffected() throws Exception {
+        // The pre-#131 code treated filtered resources larger than the (configurable)
+        // scan limit as affected. #145 replaced that with a hard-coded 1 MB skip that
+        // returns "not affected": a large filtered resource that references a changed
+        // property is silently missed. The conservative direction must be restored.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root);
+
+        Path resourceDir = root.resolve("module-a/src/main/resources");
+        Files.createDirectories(resourceDir);
+        StringBuilder content = new StringBuilder("app.version=${dep.version}\n");
+        String padding = "x".repeat(8192);
+        while (content.length() <= 1024 * 1024) {
+            content.append(padding).append('\n');
+        }
+        Path bigFile = resourceDir.resolve("big.properties");
+        Files.write(bigFile, content.toString().getBytes(StandardCharsets.UTF_8));
+
+        MavenProject moduleA = projects.get(1);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleA.getModel().setBuild(build);
+
+        // Old parent POM had dep.version=1.0
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>1.0</dep.version>
+                  </properties>
+                </project>
+                """;
+
+        PomChangeAnalyzer.Result result = analyzeChanges(
+                Set.of("pom.xml"), Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)), projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a with a >1MB filtered resource referencing the changed property"
+                        + " should be conservatively marked as affected");
     }
 
     // --- Helper methods ---

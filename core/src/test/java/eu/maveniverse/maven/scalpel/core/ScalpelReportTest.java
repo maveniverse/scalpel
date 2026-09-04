@@ -520,8 +520,8 @@ class ScalpelReportTest {
         assertEquals(
                 expected,
                 normalised,
-                "Report JSON structure has changed — update the golden file and "
-                        + "bump REPORT_VERSION if the schema changed.");
+                "Report JSON structure has changed: update the golden file, and bump "
+                        + "REPORT_VERSION if the change is not an optional additive field.");
     }
 
     @Test
@@ -552,6 +552,66 @@ class ScalpelReportTest {
 
         String json = report.toJson();
         assertFalse(json.contains("unmatchedPomPaths"));
+    }
+
+    @Test
+    void toJson_timingFieldsOmittedWhenNotInstrumented() {
+        // #99 null-input rule: a report built without instrumentation data must not
+        // carry timings/operations keys at all (no null, no empty objects).
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/Foo.java"))
+                .addAffectedModule(new ScalpelReport.AffectedModule(
+                        "com.example", "module-a", "module-a", List.of(ScalpelReport.REASON_SOURCE_CHANGE)))
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("\"timings\""), "timings must be omitted when nothing was recorded");
+        assertFalse(json.contains("\"operations\""), "operations must be omitted when nothing was counted");
+    }
+
+    @Test
+    void toJson_timingsAndOperationsIncludedWhenInstrumented() {
+        Timings timings = new Timings();
+        timings.start(Timings.PHASE_DIFF);
+        timings.stop(Timings.PHASE_DIFF);
+        timings.start(Timings.PHASE_POM_ANALYSIS);
+        timings.stop(Timings.PHASE_POM_ANALYSIS);
+        timings.increment(Timings.OP_GIT_BLOBS_READ, 3);
+        timings.increment(Timings.OP_DEPENDENCY_RESOLVES);
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("pom.xml"))
+                .timings(timings, 42)
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\"timings\""), "timings object must be present");
+        assertTrue(json.contains("\"totalMillis\": 42"), "caller-provided total must be serialized");
+        assertTrue(json.contains("\"phases\""), "per-phase map must be present");
+        assertTrue(json.contains("\"diff\""), "recorded phases must be listed");
+        assertTrue(json.contains("\"pomAnalysis\""), "recorded phases must be listed");
+        assertTrue(json.contains("\"operations\""), "operations object must be present");
+        assertTrue(json.contains("\"blobs\": 3"), "operation counters must be serialized");
+        assertTrue(json.contains("\"resolves\": 1"), "operation counters must be serialized");
+    }
+
+    @Test
+    void toJson_timingsOmittedWhenInstrumentationRecordedNothing() {
+        // #99 null-input rule: an instrumented run that recorded no phase and counted no
+        // operation must omit both fields entirely, not emit empty objects.
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("module-a/src/Foo.java"))
+                .timings(new Timings(), 0)
+                .build();
+
+        String json = report.toJson();
+        assertFalse(json.contains("\"timings\""), "timings must be omitted when no phase was recorded");
+        assertFalse(json.contains("\"operations\""), "operations must be omitted when nothing was counted");
     }
 
     @Test

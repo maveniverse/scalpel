@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -14,7 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -350,34 +353,34 @@ class GitChangeDetectorTest {
     }
 
     @Test
-    void fetchBranch_nonexistentRemote_throwsIOException() throws Exception {
+    void fetchBranch_unconfiguredRemotePrefix_treatedAsLocalBranchAndSkipped() throws Exception {
         try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
             Files.write(tempDir.resolve("file.txt"), "x".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("initial").call();
 
-            // "bogus/main" parses but there is no remote called "bogus"
-            assertThrows(
-                    IOException.class,
-                    () -> detector.fetchBranch(git.getRepository(), "bogus/main"),
-                    "Fetching from a nonexistent remote should throw IOException");
+            // "bogus" is not a configured remote: per #85 the whole string is a
+            // local branch name and the fetch is skipped, not attempted against
+            // a URL parsed from the prefix
+            assertDoesNotThrow(() -> detector.fetchBranch(git.getRepository(), "bogus/main"));
         }
     }
 
     @Test
-    void fetchBranch_malformedRefspec_throwsIllegalArgumentException() throws Exception {
+    void fetchBranch_urlShapedRefspec_rejectedAsUrl() throws Exception {
         try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
             Files.write(tempDir.resolve("file.txt"), "x".getBytes(StandardCharsets.UTF_8));
             git.add().addFilepattern("file.txt").call();
             git.commit().setMessage("initial").call();
 
-            // ":/nope" parses as remote=":", branch="nope" which produces an
-            // invalid RefSpec.  The current code does not catch
-            // IllegalArgumentException, so the raw exception escapes.
-            assertThrows(
-                    IllegalArgumentException.class,
+            // ":/nope" contains a colon and is URL-shaped: rejected up front with
+            // an IOException naming the configuration problem (#85), instead of
+            // escaping as a raw IllegalArgumentException from RefSpec parsing
+            IOException e = assertThrows(
+                    IOException.class,
                     () -> detector.fetchBranch(git.getRepository(), ":/nope"),
-                    "A malformed refspec should throw IllegalArgumentException");
+                    "A URL-shaped baseBranch should be rejected with IOException");
+            assertTrue(e.getMessage().contains("URL"), "message should name the URL shape: " + e.getMessage());
         }
     }
 
@@ -538,6 +541,125 @@ class GitChangeDetectorTest {
             assertFalse(result.containsKey("missing/pom.xml"), "Missing pom should not be in the map");
             assertEquals("<project/>", new String(result.get("pom.xml"), StandardCharsets.UTF_8));
             assertEquals("<module/>", new String(result.get("sub/pom.xml"), StandardCharsets.UTF_8));
+        }
+    }
+
+    // ---- fetchBranch validation (#85) ----
+
+    /**
+     * Creates a work repo with a commit on its initial branch (whatever the environment
+     * defaults to), plus a bare remote named "origin" that has that branch pushed to it,
+     * and configures the remote on the work repo.
+     */
+    private Repository repoWithOriginRemote() throws Exception {
+        Path remoteDir = tempDir.resolve("remote.git");
+        Path workDir = tempDir.resolve("work");
+        Files.createDirectories(workDir);
+
+        try (Git remoteGit =
+                Git.init().setDirectory(remoteDir.toFile()).setBare(true).call()) {
+            try (Git git = Git.init().setDirectory(workDir.toFile()).call()) {
+                git.getRepository().getConfig().setString("user", null, "name", "Scalpel Test");
+                git.getRepository().getConfig().setString("user", null, "email", "scalpel@test.invalid");
+
+                Files.write(workDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
+                git.add().addFilepattern("file.txt").call();
+                git.commit().setMessage("initial").call();
+                // The initial branch name comes from the environment (init.defaultBranch),
+                // so derive it from the repository instead of creating "main", which
+                // already exists where that is the default
+                String branch = git.getRepository().getBranch();
+                git.push().setRemote(remoteDir.toUri().toString()).add(branch).call();
+                git.remoteAdd()
+                        .setName("origin")
+                        .setUri(new org.eclipse.jgit.transport.URIish(
+                                remoteDir.toUri().toString()))
+                        .call();
+                return git.getRepository();
+            }
+        }
+    }
+
+    @Test
+    void fetchBranch_urlShapedBaseBranch_rejectedNotFetched() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            IOException e = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "git@host:evil.git/main"));
+            assertTrue(
+                    e.getMessage().contains("URL"), "expected URL-shaped rejection message but was: " + e.getMessage());
+            IOException e2 = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "https://evil.git/main"));
+            assertTrue(
+                    e2.getMessage().contains("URL"),
+                    "expected URL-shaped rejection message but was: " + e2.getMessage());
+        }
+    }
+
+    @Test
+    void fetchBranch_slashContainingLocalBranch_skipsFetchInsteadOfBogusRemote() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            // "release" is not a configured remote: the whole string is a local branch name
+            assertDoesNotThrow(() -> detector.fetchBranch(repo, "release/1.0"));
+        }
+    }
+
+    /**
+     * Runs the callable with System.err captured (slf4j-simple writes to stderr)
+     * and returns everything that was written during its execution.
+     */
+    private String captureStderr(Runnable action) {
+        PrintStream originalErr = System.err;
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+        try {
+            action.run();
+        } finally {
+            System.setErr(originalErr);
+        }
+        return captured.toString(StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void fetchBranch_unconfiguredPrefixWithSlash_warns() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            String err = captureStderr(() -> assertDoesNotThrow(() -> detector.fetchBranch(repo, "bogus/main")));
+            assertTrue(
+                    err.contains("WARN "),
+                    "expected a WARN about the unconfigured remote prefix but stderr was: " + err);
+            assertTrue(
+                    err.contains("'bogus' is not a configured remote"),
+                    "WARN should name the unconfigured prefix 'bogus' but stderr was: " + err);
+        }
+    }
+
+    @Test
+    void fetchBranch_plainBranchNoSlash_noWarn() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            String err = captureStderr(() -> assertDoesNotThrow(() -> detector.fetchBranch(repo, "main")));
+            assertFalse(err.contains("WARN "), "no WARN expected for a plain branch name but stderr was: " + err);
+        }
+    }
+
+    @Test
+    void fetchBranch_wildcardBranch_rejected() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            IOException e = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "feat*"));
+            assertTrue(
+                    e.getMessage().contains("Invalid"),
+                    "expected invalid-branch rejection message but was: " + e.getMessage());
+            IOException e2 = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "origin/ma*n"));
+            assertTrue(
+                    e2.getMessage().contains("Invalid"),
+                    "expected invalid-branch rejection message but was: " + e2.getMessage());
+        }
+    }
+
+    @Test
+    void fetchBranch_typoBranchOnValidRemote_failsLoudly() throws Exception {
+        try (Repository repo = repoWithOriginRemote()) {
+            // Valid remote, typo'd branch: the fetch must surface the failure, not swallow it
+            IOException e = assertThrows(IOException.class, () -> detector.fetchBranch(repo, "origin/typo"));
+            assertTrue(
+                    e.getMessage().contains("origin/typo"),
+                    "expected failure naming the branch but was: " + e.getMessage());
         }
     }
 }

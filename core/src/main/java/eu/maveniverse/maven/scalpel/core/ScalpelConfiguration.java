@@ -15,50 +15,187 @@ import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 
+/**
+ * Immutable, resolved configuration for the Scalpel change-detection extension.
+ *
+ * <p>Every setting is a {@code -D} system property (or an entry in {@code .mvn/maven.config}) with
+ * the {@code scalpel.} prefix. During resolution user properties (explicit {@code -D} on the
+ * command line, including {@code .mvn/maven.config} entries) take precedence over system
+ * properties (JVM properties, e.g. anything in {@code MAVEN_OPTS}), which take precedence over
+ * the built-in default: the standard Maven convention. Instances are created only through
+ * {@link #fromProperties(Properties, Properties)}; collection-valued getters return unmodifiable
+ * lists.
+ */
 public final class ScalpelConfiguration {
 
     private static final String PREFIX = "scalpel.";
 
+    /** System property {@code scalpel.enabled}: master switch for the extension. Default: {@code true}. */
     public static final String ENABLED = PREFIX + "enabled";
+
+    /**
+     * System property {@code scalpel.baseBranch}: the branch to diff the head against. Default:
+     * auto-detected from CI environment variables, or {@code null} (Scalpel then runs as a no-op).
+     */
     public static final String BASE_BRANCH = PREFIX + "baseBranch";
+
+    /** System property {@code scalpel.head}: the commit to compare from. Default: {@code HEAD}. */
     public static final String HEAD = PREFIX + "head";
+
+    /**
+     * System property {@code scalpel.alsoMake}: include upstream dependencies of affected modules so
+     * they compile. Default: {@code true}. Active in {@code trim} mode; also read in {@code report} mode.
+     */
     public static final String ALSO_MAKE = PREFIX + "alsoMake";
+
+    /**
+     * System property {@code scalpel.alsoMakeDependents}: include downstream dependents of affected
+     * modules. Default: {@code true}. Active in {@code trim} mode; also read in {@code report} mode.
+     */
     public static final String ALSO_MAKE_DEPENDENTS = PREFIX + "alsoMakeDependents";
+
+    /**
+     * System property {@code scalpel.fullBuildTriggers}: comma-separated glob patterns; if any
+     * changed file matches, a full build is triggered. Default: {@code .mvn/**}.
+     */
     public static final String FULL_BUILD_TRIGGERS = PREFIX + "fullBuildTriggers";
+
+    /**
+     * System property {@code scalpel.failSafe}: on error, fall back to a full build instead of
+     * failing the build. Default: {@code true}.
+     */
     public static final String FAIL_SAFE = PREFIX + "failSafe";
+
+    /**
+     * System property {@code scalpel.mode}: operating mode, one of {@link #MODE_TRIM},
+     * {@link #MODE_SKIP_TESTS}, or {@link #MODE_REPORT}. Default: {@code trim}.
+     */
     public static final String MODE = PREFIX + "mode";
+
+    /** System property {@code scalpel.explain}: emit per-module decision evidence. Default: {@code false}. */
     public static final String EXPLAIN = PREFIX + "explain";
 
+    /**
+     * System property {@code scalpel.disableOnBranch}: comma-separated regex patterns; Scalpel is
+     * disabled when the current branch matches any of them. Default: none.
+     */
     public static final String DISABLE_ON_BRANCH = PREFIX + "disableOnBranch";
+
+    /**
+     * System property {@code scalpel.disableOnBaseBranch}: comma-separated regex patterns; Scalpel is
+     * disabled when the base branch name matches any of them; any remote prefix is stripped first,
+     * so {@code origin/main} matches as {@code main}. Default: none.
+     */
     public static final String DISABLE_ON_BASE_BRANCH = PREFIX + "disableOnBaseBranch";
+
+    /**
+     * System property {@code scalpel.excludePaths}: comma-separated glob patterns; changed files
+     * matching any of them are ignored. Default: none.
+     */
     public static final String EXCLUDE_PATHS = PREFIX + "excludePaths";
+
+    /**
+     * System property {@code scalpel.includePaths}: comma-separated glob patterns scoping the
+     * affected set to modules whose path matches, applied after the file filters. Default: none.
+     */
     public static final String INCLUDE_PATHS = PREFIX + "includePaths";
+
+    /**
+     * System property {@code scalpel.disableTriggers}: comma-separated glob patterns; if any changed
+     * file matches, Scalpel is disabled entirely. Default: none.
+     */
     public static final String DISABLE_TRIGGERS = PREFIX + "disableTriggers";
 
+    /**
+     * System property {@code scalpel.disableOnSelectedProjects}: disable Scalpel when a
+     * {@code -pl} project selection is active. Default: {@code false}.
+     */
     public static final String DISABLE_ON_SELECTED_PROJECTS = PREFIX + "disableOnSelectedProjects";
 
+    /**
+     * System property {@code scalpel.skipTestsForUpstream}: skip tests on modules included only as
+     * upstream dependencies. Default: {@code false}. Applies in {@code skip-tests} mode.
+     */
     public static final String SKIP_TESTS_FOR_UPSTREAM = PREFIX + "skipTestsForUpstream";
+
+    /**
+     * System property {@code scalpel.skipTestsForDownstreamModules}: comma-separated patterns
+     * (artifactId or {@code groupId:artifactId}) naming downstream modules whose tests are skipped.
+     * Default: none. Applies in {@code skip-tests} mode.
+     */
     public static final String SKIP_TESTS_FOR_DOWNSTREAM_MODULES = PREFIX + "skipTestsForDownstreamModules";
+
+    /**
+     * System property {@code scalpel.upstreamArgs}: comma-separated {@code key=value} properties set
+     * on modules included only as upstream dependencies. Default: none.
+     */
     public static final String UPSTREAM_ARGS = PREFIX + "upstreamArgs";
+
+    /**
+     * System property {@code scalpel.downstreamArgs}: comma-separated {@code key=value} properties
+     * set on modules included only as downstream dependents. Default: none.
+     */
     public static final String DOWNSTREAM_ARGS = PREFIX + "downstreamArgs";
 
+    /**
+     * System property {@code scalpel.fetchBaseBranch}: fetch the base branch from the remote before
+     * change detection (for shallow clones and forks). Default: {@code false}.
+     */
     public static final String FETCH_BASE_BRANCH = PREFIX + "fetchBaseBranch";
 
+    /** System property {@code scalpel.uncommitted}: include staged and unstaged changes. Default: {@code false}. */
     public static final String UNCOMMITTED = PREFIX + "uncommitted";
+
+    /** System property {@code scalpel.untracked}: include untracked files in change detection. Default: {@code false}. */
     public static final String UNTRACKED = PREFIX + "untracked";
 
+    /**
+     * System property {@code scalpel.forceBuildModules}: comma-separated regex patterns; modules
+     * whose artifactId matches are always included. Default: none.
+     */
     public static final String FORCE_BUILD_MODULES = PREFIX + "forceBuildModules";
+
+    /**
+     * System property {@code scalpel.buildAllIfNoChanges}: build every module when no changes are
+     * detected. Default: {@code false}.
+     */
     public static final String BUILD_ALL_IF_NO_CHANGES = PREFIX + "buildAllIfNoChanges";
+
+    /**
+     * System property {@code scalpel.impactedLog}: path to write the directly impacted module paths
+     * to, one per line, alongside the JSON report. Default: none.
+     */
     public static final String IMPACTED_LOG = PREFIX + "impactedLog";
+
+    /**
+     * System property {@code scalpel.reportFile}: path of the JSON report, relative to the reactor
+     * root. Default: {@code target/scalpel-report.json}.
+     */
     public static final String REPORT_FILE = PREFIX + "reportFile";
+
+    /**
+     * System property {@code scalpel.maxResourceFileSize}: maximum size in bytes for a resource file
+     * to be scanned during source mapping; larger files are skipped. Default:
+     * {@link #DEFAULT_MAX_RESOURCE_FILE_SIZE}.
+     */
     public static final String MAX_RESOURCE_FILE_SIZE = PREFIX + "maxResourceFileSize";
 
+    /** Mode value selecting {@code trim}: drop unaffected modules from the reactor. */
     public static final String MODE_TRIM = "trim";
+
+    /** Mode value selecting {@code skip-tests}: build everything, skip tests on unaffected modules. */
     public static final String MODE_SKIP_TESTS = "skip-tests";
+
+    /** Mode value selecting {@code report}: write a JSON report without modifying the reactor. */
     public static final String MODE_REPORT = "report";
 
+    /** Default value for {@link #FULL_BUILD_TRIGGERS}: {@code .mvn/**}. */
     private static final String DEFAULT_FULL_BUILD_TRIGGERS = ".mvn/**";
+
+    /** Default value for {@link #REPORT_FILE}: {@code target/scalpel-report.json}. */
     private static final String DEFAULT_REPORT_FILE = "target/scalpel-report.json";
+
+    /** Default value for {@link #MAX_RESOURCE_FILE_SIZE}: ten mebibytes ({@code 10 * 1024 * 1024}). */
     public static final long DEFAULT_MAX_RESOURCE_FILE_SIZE = 10L * 1024 * 1024; // 10 MB
 
     private static final Set<String> KNOWN_KEYS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
@@ -178,6 +315,19 @@ public final class ScalpelConfiguration {
         this.warnings = warnings;
     }
 
+    /**
+     * Resolves a configuration from system and user properties.
+     *
+     * @param system system properties (JVM properties, e.g. from {@code MAVEN_OPTS})
+     * @param user user properties (explicit {@code -D} on the command line, including
+     *     {@code .mvn/maven.config} entries); take precedence over system properties per the
+     *     Maven convention
+     * @return the resolved configuration
+     * @throws IllegalArgumentException if {@link #MODE} or {@link #MAX_RESOURCE_FILE_SIZE} has an
+     *     invalid value, or if any boolean property is set to a value other than
+     *     {@code true}/{@code false} (case-insensitive; anything else is rejected, not
+     *     silently coerced)
+     */
     public static ScalpelConfiguration fromProperties(Properties system, Properties user) {
         boolean enabled = parseStrictBoolean(ENABLED, resolve(system, user, ENABLED, "true"));
         String baseBranch = resolve(system, user, BASE_BRANCH, null);
@@ -385,126 +535,166 @@ public final class ScalpelConfiguration {
         return null;
     }
 
+    /** Returns whether the extension is active. Default: {@code true}. */
     public boolean isEnabled() {
         return enabled;
     }
 
+    /**
+     * Returns the branch to diff the head against, or {@code null} if unset (then auto-detected from
+     * CI, and if still unset Scalpel runs as a no-op).
+     */
     public String getBaseBranch() {
         return baseBranch;
     }
 
+    /** Returns the commit to compare from. Default: {@code HEAD}. */
     public String getHead() {
         return head;
     }
 
+    /** Returns whether upstream dependencies of affected modules are included. Default: {@code true}. */
     public boolean isAlsoMake() {
         return alsoMake;
     }
 
+    /** Returns whether downstream dependents of affected modules are included. Default: {@code true}. */
     public boolean isAlsoMakeDependents() {
         return alsoMakeDependents;
     }
 
+    /** Returns the glob patterns whose match by a changed file triggers a full build. Default: {@code .mvn/**}. */
     public List<String> getFullBuildTriggers() {
         return fullBuildTriggers;
     }
 
+    /** Returns the regex patterns that disable Scalpel when the current branch matches. Default: none. */
     public List<String> getDisableOnBranch() {
         return disableOnBranch;
     }
 
+    /** Returns the regex patterns that disable Scalpel when the base branch name (remote prefix stripped) matches. Default: none. */
     public List<String> getDisableOnBaseBranch() {
         return disableOnBaseBranch;
     }
 
+    /** Returns the glob patterns; changed files matching them are ignored. Default: none. */
     public List<String> getExcludePaths() {
         return excludePaths;
     }
 
+    /** Returns the glob patterns scoping the affected set to matching modules. Default: none. */
     public List<String> getIncludePaths() {
         return includePaths;
     }
 
+    /** Returns the glob patterns; a changed file matching any disables Scalpel entirely. Default: none. */
     public List<String> getDisableTriggers() {
         return disableTriggers;
     }
 
+    /** Returns whether Scalpel is disabled when a {@code -pl} selection is active. Default: {@code false}. */
     public boolean isDisableOnSelectedProjects() {
         return disableOnSelectedProjects;
     }
 
+    /** Returns whether the base branch is fetched from the remote before change detection. Default: {@code false}. */
     public boolean isFetchBaseBranch() {
         return fetchBaseBranch;
     }
 
+    /** Returns whether tests are skipped on modules included only as upstream dependencies. Default: {@code false}. */
     public boolean isSkipTestsForUpstream() {
         return skipTestsForUpstream;
     }
 
+    /** Returns the patterns naming downstream modules whose tests are skipped. Default: none. */
     public List<String> getSkipTestsForDownstreamModules() {
         return skipTestsForDownstreamModules;
     }
 
+    /** Returns the {@code key=value} properties set on upstream-only modules. Default: none. */
     public List<String> getUpstreamArgs() {
         return upstreamArgs;
     }
 
+    /** Returns the {@code key=value} properties set on downstream-only modules. Default: none. */
     public List<String> getDownstreamArgs() {
         return downstreamArgs;
     }
 
+    /** Returns whether staged and unstaged changes are included. Default: {@code false}. */
     public boolean isUncommitted() {
         return uncommitted;
     }
 
+    /** Returns whether untracked files are included in change detection. Default: {@code false}. */
     public boolean isUntracked() {
         return untracked;
     }
 
+    /** Returns the regex patterns; modules whose artifactId matches are always included. Default: none. */
     public List<String> getForceBuildModules() {
         return forceBuildModules;
     }
 
+    /** Returns whether every module is built when no changes are detected. Default: {@code false}. */
     public boolean isBuildAllIfNoChanges() {
         return buildAllIfNoChanges;
     }
 
+    /** Returns the path to write impacted module paths to, or {@code null} if disabled. Default: none. */
     public String getImpactedLog() {
         return impactedLog;
     }
 
+    /** Returns whether errors fall back to a full build instead of failing. Default: {@code true}. */
     public boolean isFailSafe() {
         return failSafe;
     }
 
+    /** Returns whether per-module decision evidence is emitted (explain mode). Default: {@code false}. */
     public boolean isExplain() {
         return explain;
     }
 
+    /** Returns the operating mode: {@code trim}, {@code skip-tests}, or {@code report}. Default: {@code trim}. */
     public String getMode() {
         return mode;
     }
 
+    /** Returns whether the operating mode is {@code trim}; {@code true} by default. */
     public boolean isModeTrim() {
         return MODE_TRIM.equals(mode);
     }
 
+    /** Returns whether the operating mode is {@code skip-tests}; {@code false} by default. */
     public boolean isModeSkipTests() {
         return MODE_SKIP_TESTS.equals(mode);
     }
 
+    /** Returns whether the operating mode is {@code report}; {@code false} by default. */
     public boolean isModeReport() {
         return MODE_REPORT.equals(mode);
     }
 
+    /** Returns the JSON report path, relative to the reactor root. Default: {@code target/scalpel-report.json}. */
     public String getReportFile() {
         return reportFile;
     }
 
+    /**
+     * Returns the maximum size in bytes for a resource file to be scanned during source mapping.
+     * Default: {@link #DEFAULT_MAX_RESOURCE_FILE_SIZE}.
+     */
     public long getMaxResourceFileSize() {
         return maxResourceFileSize;
     }
 
+    /**
+     * Returns configuration warnings collected during parsing (e.g. unknown {@code scalpel.*} keys
+     * with a "did you mean" suggestion). Empty when the configuration is clean.
+     */
     public List<String> getWarnings() {
         return warnings;
     }

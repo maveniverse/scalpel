@@ -9,6 +9,7 @@ package eu.maveniverse.maven.scalpel.core;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -50,14 +51,27 @@ public class GitChangeDetector {
         return repository.getBranch();
     }
 
+    /**
+     * Tells whether the repository is shallow (created or fetched with a depth limit, e.g.
+     * actions/checkout with {@code fetch-depth: 1}), which is recorded in {@code .git/shallow}.
+     * JGit 7.x still exposes no public accessor for this ({@link Repository} has no shallow
+     * method; only the internal DepthWalk classes track it), so the marker file is checked directly.
+     */
+    public boolean isShallow(Repository repository) {
+        return repository.getDirectory() != null
+                && Files.isRegularFile(repository.getDirectory().toPath().resolve("shallow"));
+    }
+
     public ObjectId findMergeBase(Repository repository, String baseBranch, String head) throws IOException {
         ObjectId baseId = repository.resolve(baseBranch);
         if (baseId == null) {
+            warnIfShallow(repository, baseBranch, head);
             logger.warn("Cannot resolve base branch: {}", baseBranch);
             return null;
         }
         ObjectId headId = repository.resolve(head);
         if (headId == null) {
+            warnIfShallow(repository, baseBranch, head);
             logger.warn("Cannot resolve head: {}", head);
             return null;
         }
@@ -69,14 +83,16 @@ public class GitChangeDetector {
             RevCommit mergeBase = revWalk.next();
             if (mergeBase == null) {
                 logger.warn("No merge base found between {} and {}", baseBranch, head);
+                warnIfShallow(repository, baseBranch, head);
                 return null;
             }
             logger.debug("Merge base between {} and {}: {}", baseBranch, head, mergeBase.getName());
             return mergeBase.getId();
         } catch (MissingObjectException e) {
+            warnIfShallow(repository, baseBranch, head);
             logger.warn(
                     "Cannot compute merge base between {} and {}: commit history is incomplete"
-                            + " (shallow clone or missing objects). {}",
+                            + " (missing object). {}",
                     baseBranch,
                     head,
                     e.getMessage());
@@ -86,6 +102,22 @@ public class GitChangeDetector {
             logger.warn("Cannot compute merge base between {} and {}: {}", baseBranch, head, e.getMessage());
             logger.debug("Merge base computation error details", e);
             return null;
+        }
+    }
+
+    /**
+     * Emits the actionable remediation when the repository is shallow: the commits needed to relate
+     * {@code baseBranch} and {@code head} may sit beyond the depth-limited boundary, so an
+     * unresolved revision or a missing merge base is not a real topology problem but a clone artifact.
+     */
+    private void warnIfShallow(Repository repository, String baseBranch, String head) {
+        if (isShallow(repository)) {
+            logger.warn(
+                    "Repository is shallow (depth-limited clone/fetch, e.g. actions/checkout with fetch-depth: 1);"
+                            + " the connecting history between {} and {} may be missing. Fix: use fetch-depth: 0"
+                            + " in CI, or run 'git fetch --unshallow' before the build",
+                    baseBranch,
+                    head);
         }
     }
 
@@ -133,6 +165,9 @@ public class GitChangeDetector {
                 loader.copyTo(out);
                 return out.toByteArray();
             }
+        } catch (MissingObjectException e) {
+            warnIfShallow(repository, commitId.getName(), path);
+            throw e;
         }
     }
 
@@ -181,17 +216,53 @@ public class GitChangeDetector {
     }
 
     public void fetchBranch(Repository repository, String baseBranch) throws IOException {
-        // Parse "origin/main" → remote="origin", branch="main"
-        int slashIndex = baseBranch.indexOf('/');
-        if (slashIndex < 0) {
-            logger.debug("Cannot parse remote from baseBranch '{}', skipping fetch", baseBranch);
+        if (baseBranch == null || baseBranch.isEmpty()) {
+            logger.debug("Empty baseBranch, skipping fetch");
             return;
         }
-        String remote = baseBranch.substring(0, slashIndex);
-        String branch = baseBranch.substring(slashIndex + 1);
+        // Reject URL-shaped values early: JGit treats unknown remote names as URLs,
+        // so a typo like "git@host:evil.git/main" would otherwise attempt a network fetch
+        if (baseBranch.contains(":")) {
+            throw new IOException("Invalid scalpel.baseBranch '" + baseBranch
+                    + "': URL-shaped value, expected <remote>/<branch> or <branch>");
+        }
+        // Only treat the prefix before the first slash as a remote if it is a configured remote;
+        // otherwise the whole string is a (possibly slash-containing) local branch name
+        String remote = null;
+        String branch = baseBranch;
+        int slashIndex = baseBranch.indexOf('/');
+        if (slashIndex > 0) {
+            String candidate = baseBranch.substring(0, slashIndex);
+            if (repository.getRemoteNames().contains(candidate)) {
+                remote = candidate;
+                branch = baseBranch.substring(slashIndex + 1);
+            } else {
+                logger.warn(
+                        "Scalpel: baseBranch '{}' has a slash but '{}' is not a configured remote; "
+                                + "treating it as a local branch name and skipping the fetch",
+                        baseBranch,
+                        candidate);
+            }
+        }
+        if (!Repository.isValidRefName("refs/heads/" + branch)) {
+            throw new IOException("Invalid scalpel.baseBranch '" + baseBranch + "': not a valid branch name"
+                    + (branch.contains("*") ? " (wildcards are not allowed)" : ""));
+        }
+        if (remote == null) {
+            logger.debug("No configured remote prefix in baseBranch '{}', skipping fetch", baseBranch);
+            return;
+        }
         String refspec = "+refs/heads/" + branch + ":refs/remotes/" + remote + "/" + branch;
 
         logger.info("Scalpel: Fetching {} from {}", branch, remote);
+        if (isShallow(repository)) {
+            // FetchCommand.setDepth is not wired here, so the fetch stays unbounded on shallow
+            // repos and may or may not restore the missing history.
+            logger.warn(
+                    "Scalpel: Repository is shallow; fetching {} is unbounded and may not restore the"
+                            + " missing history. Use fetch-depth: 0 in CI or 'git fetch --unshallow' before the build",
+                    branch);
+        }
         try (Git git = new Git(repository)) {
             git.fetch().setRemote(remote).setRefSpecs(new RefSpec(refspec)).call();
         } catch (GitAPIException | JGitInternalException e) {
