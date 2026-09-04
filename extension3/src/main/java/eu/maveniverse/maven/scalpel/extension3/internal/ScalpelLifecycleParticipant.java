@@ -17,6 +17,7 @@ import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import eu.maveniverse.maven.scalpel.core.ScalpelCore;
 import eu.maveniverse.maven.scalpel.core.ScalpelException;
 import eu.maveniverse.maven.scalpel.core.ScalpelReport;
+import eu.maveniverse.maven.scalpel.core.Timings;
 import eu.maveniverse.maven.scalpel.core.Version;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -120,6 +121,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         Path reactorRoot = session.getRequest().getMultiModuleProjectDirectory().toPath();
         List<MavenProject> allProjects = session.getProjects();
 
+        Timings timings = new Timings();
+        long analysisStartNano = System.nanoTime();
         try {
             // Collect ALL reactor POM paths
             Set<String> allPomPaths = new LinkedHashSet<>();
@@ -130,7 +133,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
             // Detect changes
-            ChangeDetectionResult result = scalpelCore.detectChanges(reactorRoot, config, allPomPaths);
+            ChangeDetectionResult result = scalpelCore.detectChanges(reactorRoot, config, allPomPaths, timings);
             if (result == null) {
                 if (config.isModeReport()) {
                     String skipReason = scalpelCore.getLastDetectionSkipReason();
@@ -201,8 +204,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
             // Map source changes to modules (classifying test-only vs main changes)
-            ModuleMapper.Result sourceResult =
-                    moduleMapper.mapToProjectsClassified(sourceChanges, allProjects, reactorRoot, config.isExplain());
+            ModuleMapper.Result sourceResult;
+            timings.start(Timings.PHASE_MODULE_MAPPING);
+            try {
+                sourceResult = moduleMapper.mapToProjectsClassified(
+                        sourceChanges, allProjects, reactorRoot, config.isExplain());
+            } finally {
+                timings.stop(Timings.PHASE_MODULE_MAPPING);
+            }
             Set<MavenProject> affectedBySource = sourceResult.getAllAffected();
             logger.debug("Modules affected by source changes: {}", keys(affectedBySource));
             if (!sourceResult.getTestOnlyAffected().isEmpty()) {
@@ -220,23 +229,32 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (!pomChanges.isEmpty()) {
                 logger.debug("POM changes detected: {}", pomChanges);
                 try {
-                    PomChangeAnalyzer.Result pomResult = pomChangeAnalyzer.analyzeChanges(
-                            pomChanges,
-                            result.getOldPomContents(),
-                            allProjects,
-                            reactorRoot,
-                            config.isExplain(),
-                            new PomChangeAnalyzer.ModelResolutionContext(
-                                    session.getSystemProperties(),
-                                    session.getUserProperties(),
-                                    session.getRepositorySession(),
-                                    allProjects.get(0).getRemoteProjectRepositories()));
+                    PomChangeAnalyzer.Result pomResult;
+                    timings.start(Timings.PHASE_POM_ANALYSIS);
+                    try {
+                        pomResult = pomChangeAnalyzer.analyzeChanges(
+                                pomChanges,
+                                result.getOldPomContents(),
+                                allProjects,
+                                reactorRoot,
+                                config.isExplain(),
+                                new PomChangeAnalyzer.ModelResolutionContext(
+                                        session.getSystemProperties(),
+                                        session.getUserProperties(),
+                                        session.getRepositorySession(),
+                                        allProjects.get(0).getRemoteProjectRepositories()));
+                    } finally {
+                        timings.stop(Timings.PHASE_POM_ANALYSIS);
+                    }
                     affectedByPom = pomResult.getAffectedProjects();
                     oldEffectiveModels = pomResult.getOldEffectiveModels();
                     newEffectiveModels = pomResult.getNewEffectiveModels();
                     changedProperties = pomResult.getChangedProperties();
                     pomEvidence = pomResult.getEvidence();
                     unmatchedPomPaths.addAll(pomResult.getUnmatchedPomPaths());
+                    timings.increment(
+                            Timings.OP_EFFECTIVE_MODELS, oldEffectiveModels.size() + newEffectiveModels.size());
+                    timings.increment(Timings.OP_RESOURCES_VISITED, pomResult.getResourcesVisited());
                 } catch (Exception e) {
                     if (config.isFailSafe()) {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
@@ -300,7 +318,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                     changedProperties,
                                     changedManagedDepGAs,
                                     changedManagedPluginGAs,
-                                    unmatchedPomPaths));
+                                    unmatchedPomPaths),
+                            timings,
+                            analysisStartNano);
                 } else if (config.isModeSkipTests()) {
                     skipTestsOnAll(allProjects);
                 }
@@ -320,17 +340,24 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Compute transitively affected modules by comparing old vs new dependency trees
             Map<MavenProject, List<String>> transitiveEvidence = new LinkedHashMap<>();
-            Map<MavenProject, List<String>> transitivelyAffected = computeTransitivelyAffected(
-                    allProjects,
-                    directlyAffected,
-                    oldEffectiveModels,
-                    newEffectiveModels,
-                    reactorRoot,
-                    session,
-                    collectCache,
-                    oldCollectCache,
-                    config.isExplain(),
-                    transitiveEvidence);
+            Map<MavenProject, List<String>> transitivelyAffected;
+            timings.start(Timings.PHASE_TRANSITIVE_RESOLVE);
+            try {
+                transitivelyAffected = computeTransitivelyAffected(
+                        allProjects,
+                        directlyAffected,
+                        oldEffectiveModels,
+                        newEffectiveModels,
+                        reactorRoot,
+                        session,
+                        collectCache,
+                        oldCollectCache,
+                        timings,
+                        config.isExplain(),
+                        transitiveEvidence);
+            } finally {
+                timings.stop(Timings.PHASE_TRANSITIVE_RESOLVE);
+            }
 
             // Explain-mode evidence: which specific input triggered each module
             Map<MavenProject, List<String>> evidence = config.isExplain()
@@ -354,7 +381,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                     changedProperties,
                                     changedManagedDepGAs,
                                     changedManagedPluginGAs,
-                                    unmatchedPomPaths));
+                                    unmatchedPomPaths),
+                            timings,
+                            analysisStartNano);
                 } else if (config.isModeSkipTests()) {
                     skipTestsOnAll(allProjects);
                 }
@@ -397,7 +426,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                         changedProperties,
                                         changedManagedDepGAs,
                                         changedManagedPluginGAs,
-                                        unmatchedPomPaths));
+                                        unmatchedPomPaths),
+                                timings,
+                                analysisStartNano);
                     } else if (config.isModeSkipTests()) {
                         skipTestsOnAll(allProjects);
                     }
@@ -414,10 +445,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 // Compute upstream/downstream categorization for report enrichment
                 // Use directlyAffected here (not allAffected) to preserve correct DOWNSTREAM categorization;
                 // transitively affected modules are added to the report separately via addTransitivelyAffectedModules
-                TrimResult trimResult = directlyAffected.isEmpty()
-                        ? null
-                        : reactorTrimmer.computeBuildSet(
+                TrimResult trimResult = null;
+                if (!directlyAffected.isEmpty()) {
+                    timings.start(Timings.PHASE_TRIM);
+                    try {
+                        trimResult = reactorTrimmer.computeBuildSet(
                                 directlyAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+                    } finally {
+                        timings.stop(Timings.PHASE_TRIM);
+                    }
+                }
                 if (trimResult != null && config.isExplain()) {
                     mergeTrimReasons(evidence, trimResult);
                 }
@@ -437,7 +474,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .transitivelyAffected(transitivelyAffected)
                                 .evidence(evidence)
                                 .trimResult(trimResult)
-                                .build());
+                                .build(),
+                        timings,
+                        analysisStartNano);
                 if (config.isExplain()) {
                     Set<MavenProject> reportedModules = new LinkedHashSet<>(allAffected);
                     if (trimResult != null) {
@@ -450,24 +489,36 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
             // Compute full build set with upstream/downstream
-            TrimResult trimResult = reactorTrimmer.computeBuildSet(
-                    allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+            TrimResult trimResult;
+            timings.start(Timings.PHASE_TRIM);
+            try {
+                trimResult = reactorTrimmer.computeBuildSet(
+                        allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+            } finally {
+                timings.stop(Timings.PHASE_TRIM);
+            }
             if (config.isExplain()) {
                 mergeTrimReasons(evidence, trimResult);
             }
 
             if (config.isModeSkipTests()) {
-                applySkipTests(
-                        session,
-                        allProjects,
-                        trimResult,
-                        config,
-                        oldEffectiveModels,
-                        newEffectiveModels,
-                        includeMatchers,
-                        reactorRoot,
-                        collectCache,
-                        oldCollectCache);
+                timings.start(Timings.PHASE_APPLY_SKIP_TESTS);
+                try {
+                    applySkipTests(
+                            session,
+                            allProjects,
+                            trimResult,
+                            config,
+                            oldEffectiveModels,
+                            newEffectiveModels,
+                            includeMatchers,
+                            reactorRoot,
+                            collectCache,
+                            oldCollectCache,
+                            timings);
+                } finally {
+                    timings.stop(Timings.PHASE_APPLY_SKIP_TESTS);
+                }
                 if (config.isExplain()) {
                     logExplainDecisions(allProjects, new LinkedHashSet<>(trimResult.getBuildSet()), evidence);
                 }
@@ -508,7 +559,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .transitivelyAffected(transitivelyAffected)
                                 .trimResult(trimResult)
                                 .filteredBuildSet(buildSet)
-                                .build());
+                                .build(),
+                        timings,
+                        analysisStartNano);
             }
 
         } catch (ScalpelException e) {
@@ -528,7 +581,32 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 return;
             }
             throw new MavenExecutionException("Scalpel: " + e.getMessage(), e);
+        } finally {
+            logAnalysisSummary(timings, analysisStartNano);
         }
+    }
+
+    /**
+     * One greppable INFO line answering "how long did Scalpel take and where did it go":
+     * total wall-clock millis, the per-phase breakdown, and the operation counters (#99).
+     */
+    private void logAnalysisSummary(Timings timings, long analysisStartNano) {
+        StringBuilder line = new StringBuilder("Scalpel: analysis took ")
+                .append(millisSince(analysisStartNano))
+                .append("ms");
+        String phases = timings.toString();
+        if (!phases.isEmpty()) {
+            line.append(" (").append(phases).append(")");
+        }
+        String operations = timings.formatOperations();
+        if (!operations.isEmpty()) {
+            line.append(" ops: ").append(operations);
+        }
+        logger.info("{}", line);
+    }
+
+    private static long millisSince(long startNano) {
+        return (System.nanoTime() - startNano) / 1_000_000;
     }
 
     private boolean matchesDisableTrigger(Set<String> changedFiles, ScalpelConfiguration config) {
@@ -661,6 +739,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache,
             Map<MavenProject, DependencyResolutionResult> oldCollectCache,
+            Timings timings,
             boolean explain,
             Map<MavenProject, List<String>> returnEvidence) {
         Map<MavenProject, List<String>> transitivelyAffected = new LinkedHashMap<>();
@@ -686,6 +765,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     session,
                     collectCache,
                     oldCollectCache,
+                    timings,
                     explain);
             if (!match.reasons.isEmpty()) {
                 transitivelyAffected.put(project, match.reasons);
@@ -716,7 +796,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 if (directlyAffected.contains(project) || transitivelyAffected.containsKey(project)) {
                     continue;
                 }
-                DependencyResolutionResult depResult = resolveProjectDependencies(project, session, collectCache);
+                DependencyResolutionResult depResult =
+                        resolveProjectDependencies(project, session, collectCache, timings);
                 if (depResult == null || depResult.getDependencyGraph() == null) {
                     if (!affectedGAs.isEmpty()) {
                         // Conservative: dependency resolution failed while there are
@@ -795,6 +876,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache,
             Map<MavenProject, DependencyResolutionResult> oldCollectCache,
+            Timings timings,
             boolean explain) {
         List<String> reasons = new ArrayList<>();
         List<String> evidence = explain ? new ArrayList<>() : List.of();
@@ -821,7 +903,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
         // Compare resolved dependency trees: old effective model vs current project
         ChangedDependencyMatch depMatch =
-                findChangedDependencyInTree(project, oldModel, session, collectCache, oldCollectCache);
+                findChangedDependencyInTree(project, oldModel, session, collectCache, oldCollectCache, timings);
         if (depMatch != null) {
             if (UNRESOLVED_GA.equals(depMatch.ga)) {
                 reasons.add(ScalpelReport.REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED);
@@ -848,7 +930,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             List<PathMatcher> includeMatchers,
             Path reactorRoot,
             Map<MavenProject, DependencyResolutionResult> collectCache,
-            Map<MavenProject, DependencyResolutionResult> oldCollectCache) {
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache,
+            Timings timings) {
 
         Path absRoot = reactorRoot.toAbsolutePath().normalize();
         Set<MavenProject> buildSetLookup = new LinkedHashSet<>(trimResult.getBuildSet());
@@ -873,7 +956,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     absRoot,
                     session,
                     collectCache,
-                    oldCollectCache)) {
+                    oldCollectCache,
+                    timings)) {
                 // Skip tests on excluded downstream modules (unless they also have plugin/dep changes)
                 project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
                 skippedProjects.add(project);
@@ -901,7 +985,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Check if this module's effective plugins or dependency tree changed
             if (hasEffectiveModelChanges(
-                    project, oldEffectiveModels, newEffectiveModels, absRoot, session, collectCache, oldCollectCache)) {
+                    project,
+                    oldEffectiveModels,
+                    newEffectiveModels,
+                    absRoot,
+                    session,
+                    collectCache,
+                    oldCollectCache,
+                    timings)) {
                 testProjects.add(project);
                 continue;
             }
@@ -1006,7 +1097,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Path absRoot,
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache,
-            Map<MavenProject, DependencyResolutionResult> oldCollectCache) {
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache,
+            Timings timings) {
         if (config.getSkipTestsForDownstreamModules().isEmpty()) {
             return false;
         }
@@ -1019,7 +1111,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
         // Safety guard: don't skip tests if the module has effective model changes
         return !hasEffectiveModelChanges(
-                project, oldEffectiveModels, newEffectiveModels, absRoot, session, collectCache, oldCollectCache);
+                project,
+                oldEffectiveModels,
+                newEffectiveModels,
+                absRoot,
+                session,
+                collectCache,
+                oldCollectCache,
+                timings);
     }
 
     /**
@@ -1044,7 +1143,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Path absRoot,
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache,
-            Map<MavenProject, DependencyResolutionResult> oldCollectCache) {
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache,
+            Timings timings) {
         String relPath = absRoot.relativize(
                         project.getFile().toPath().toAbsolutePath().normalize())
                 .toString()
@@ -1063,7 +1163,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
 
         // Check dependency tree
-        return findChangedDependencyInTree(project, oldModel, session, collectCache, oldCollectCache) != null;
+        return findChangedDependencyInTree(project, oldModel, session, collectCache, oldCollectCache, timings) != null;
     }
 
     private static final class ChangedDependencyMatch {
@@ -1088,10 +1188,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Model oldEffectiveModel,
             MavenSession session,
             Map<MavenProject, DependencyResolutionResult> collectCache,
-            Map<MavenProject, DependencyResolutionResult> oldCollectCache) {
+            Map<MavenProject, DependencyResolutionResult> oldCollectCache,
+            Timings timings) {
 
         // Resolve new (current) dependency tree
-        DependencyResolutionResult newResult = resolveProjectDependencies(project, session, collectCache);
+        DependencyResolutionResult newResult = resolveProjectDependencies(project, session, collectCache, timings);
         if (newResult == null || newResult.getDependencyGraph() == null) {
             // Conservative: when the current tree cannot be resolved at all, assume it
             // changed so the module is treated as affected (and its tests are not
@@ -1102,7 +1203,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
         // Resolve old dependency tree from old effective model
         DependencyResolutionResult oldResult =
-                resolveModelDependencies(oldEffectiveModel, project, session, oldCollectCache);
+                resolveModelDependencies(oldEffectiveModel, project, session, oldCollectCache, timings);
         if (oldResult == null || oldResult.getDependencyGraph() == null) {
             // Conservative: same posture when the old tree cannot be resolved.
             return new ChangedDependencyMatch(UNRESOLVED_GA, "compile");
@@ -1154,9 +1255,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
      * Resolve the current project's dependency tree (cached).
      */
     private DependencyResolutionResult resolveProjectDependencies(
-            MavenProject project, MavenSession session, Map<MavenProject, DependencyResolutionResult> cache) {
+            MavenProject project,
+            MavenSession session,
+            Map<MavenProject, DependencyResolutionResult> cache,
+            Timings timings) {
         DependencyResolutionResult result = cache.get(project);
         if (result != null) {
+            timings.increment(Timings.OP_RESOLVE_CACHE_HITS);
             return result;
         }
         try {
@@ -1176,6 +1281,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     e.getMessage());
             return null;
         }
+        timings.increment(Timings.OP_DEPENDENCY_RESOLVES);
         cache.put(project, result);
         return result;
     }
@@ -1189,9 +1295,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Model oldModel,
             MavenProject currentProject,
             MavenSession session,
-            Map<MavenProject, DependencyResolutionResult> cache) {
+            Map<MavenProject, DependencyResolutionResult> cache,
+            Timings timings) {
         DependencyResolutionResult result = cache.get(currentProject);
         if (result != null) {
+            timings.increment(Timings.OP_RESOLVE_CACHE_HITS);
             return result;
         }
         try {
@@ -1211,6 +1319,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     e.getMessage());
             return null;
         }
+        timings.increment(Timings.OP_DEPENDENCY_RESOLVES);
         cache.put(currentProject, result);
         return result;
     }
@@ -1382,7 +1491,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     }
 
     private void writeReport(
-            ScalpelConfiguration config, Path reactorRoot, List<MavenProject> allProjects, AnalysisContext ctx)
+            ScalpelConfiguration config,
+            Path reactorRoot,
+            List<MavenProject> allProjects,
+            AnalysisContext ctx,
+            Timings timings,
+            long analysisStartNano)
             throws MavenExecutionException {
         ScalpelReport.Builder builder = ScalpelReport.builder()
                 .baseBranch(config.getBaseBranch())
@@ -1391,7 +1505,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 .changedProperties(ctx.changedProperties)
                 .changedManagedDependencies(ctx.changedManagedDepGAs)
                 .changedManagedPlugins(ctx.changedManagedPluginGAs)
-                .unmatchedPomPaths(ctx.unmatchedPomPaths);
+                .unmatchedPomPaths(ctx.unmatchedPomPaths)
+                .timings(timings, millisSince(analysisStartNano));
 
         logger.debug(
                 "Building report: {} directly affected, {} transitively affected, trim result has {} upstream / {} downstream / {} downstream-test",
