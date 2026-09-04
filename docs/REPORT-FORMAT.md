@@ -81,7 +81,12 @@ The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/res
       "path": "module-d",
       "reason": "NOT_AFFECTED"
     }
-  ]
+  ],
+  "timings": {
+    "totalMillis": 123,
+    "phases": {"repoOpen": 1, "mergeBase": 8, "diff": 30, "moduleMapping": 1, "transitiveResolve": 6}
+  },
+  "operations": {"blobs": 1, "resolves": 10, "resolveCacheHits": 4}
 }
 ```
 
@@ -104,6 +109,8 @@ The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/res
 | `skippedModules` | object[] | Reactor modules left out of the build set (see below) |
 | `status` | string | *(optional)* Only present when analysis did not complete: `"failed"` or `"skipped"` |
 | `reason` | string | *(optional)* Human-readable explanation when `status` is present |
+| `timings` | object | *(optional)* Phase timing instrumentation (`totalMillis` plus per-phase millis); omitted when no phase was recorded |
+| `operations` | object | *(optional)* Analysis operation counters (git blobs read, dependency resolutions, cache hits); omitted when no operation was counted |
 
 **Status-only reports:** when analysis does not complete (failSafe bail-out, unexpected error) or is deliberately skipped (no changes detected, disabled by configuration, all files excluded by path filters), Scalpel overwrites the report file with this minimal status document so that a previous run's report cannot be mistaken for current results. A `"failed"` status means: do not trust the report contents, read the build log. Both fields are absent from normal full reports.
 
@@ -167,7 +174,7 @@ Upstream build-prerequisite modules are split in two: a module that is itself di
 
 | Version | Changes |
 |---------|---------|
-| `2` | Added `category`, `sourceSet`, `excludedUpstreamCount`, `testsSkipped`, `testsSkippedReason`. Later additive (no bump): `status`, `reason`, `unmatchedPomPaths`, `skippedModules`, `evidence` |
+| `2` | Added `category`, `sourceSet`, `excludedUpstreamCount`, `testsSkipped`, `testsSkippedReason`. Later additive (no bump): `status`, `reason`, `unmatchedPomPaths`, `skippedModules`, `evidence`, `timings`, `operations` |
 | `1` | Initial schema |
 
 ## Compatibility Policy

@@ -197,6 +197,42 @@ class ScalpelCoreTest {
     }
 
     @Test
+    void detectChanges_recordsGitPhaseTimingsAndBlobCount() throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            Files.write(tempDir.resolve("pom.xml"), "<project/>".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("initial").call();
+            git.branchCreate().setName("main").call();
+
+            // Change the POM on the current branch so old content must be read from git
+            Files.write(tempDir.resolve("pom.xml"), "<project><modules/></project>".getBytes(StandardCharsets.UTF_8));
+            git.add().addFilepattern("pom.xml").call();
+            git.commit().setMessage("change pom").call();
+
+            ScalpelCore core = new ScalpelCore(new GitChangeDetector());
+            Properties sys = new Properties();
+            sys.setProperty("scalpel.baseBranch", "main");
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+
+            Timings timings = new Timings();
+            ChangeDetectionResult result = core.detectChanges(tempDir, config, Set.of("pom.xml"), timings);
+
+            assertNotNull(result);
+            assertTrue(result.getChangedFiles().contains("pom.xml"));
+            assertTrue(timings.getPhaseNames().contains(Timings.PHASE_REPO_OPEN), "repoOpen phase must be recorded");
+            assertTrue(timings.getPhaseNames().contains(Timings.PHASE_MERGE_BASE), "mergeBase phase must be recorded");
+            assertTrue(timings.getPhaseNames().contains(Timings.PHASE_DIFF), "diff phase must be recorded");
+            assertTrue(
+                    timings.getPhaseNames().contains(Timings.PHASE_READ_OLD_POMS),
+                    "readOldPoms phase must be recorded when a POM changed");
+            assertEquals(
+                    1,
+                    timings.getOperationCount(Timings.OP_GIT_BLOBS_READ),
+                    "exactly one old-POM blob must be counted as read");
+        }
+    }
+
+    @Test
     void detectChanges_emptyDisableRegexLists_detectionProceeds() throws Exception {
         try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
             Files.write(tempDir.resolve("file.txt"), "hello".getBytes(StandardCharsets.UTF_8));
