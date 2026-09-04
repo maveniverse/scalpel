@@ -7,6 +7,8 @@
  */
 package eu.maveniverse.maven.scalpel.core;
 
+import static java.util.Objects.requireNonNull;
+
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -14,12 +16,15 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.Set;
 
 public final class ScalpelReport {
 
     /**
-     * Report schema version. Bump this whenever the report JSON structure changes
-     * (new fields, removed fields, or semantic changes to existing fields).
+     * Report schema version. Bump this on breaking changes only: removing or renaming fields,
+     * changing a field's type, making an optional field required, or removing enum values.
+     * Adding optional fields (and new enum values consumers must tolerate) does not bump the
+     * version; see the compatibility policy in the README's Report Format section.
      * <p>
      * v1 → v2: added {@code category}, {@code sourceSet}, {@code excludedUpstreamCount},
      *           {@code testsSkipped}, {@code testsSkippedReason}.
@@ -31,17 +36,11 @@ public final class ScalpelReport {
     public static final String REASON_TRANSITIVE_DEPENDENCY = "TRANSITIVE_DEPENDENCY";
     public static final String REASON_MANAGED_PLUGIN = "MANAGED_PLUGIN";
     public static final String REASON_FORCE_BUILD = "FORCE_BUILD";
-    /**
-     * @deprecated Upstream modules are no longer included in report mode (see #39).
-     *             They are build-order prerequisites, not genuinely affected modules.
-     */
-    @Deprecated
-    public static final String REASON_UPSTREAM_DEPENDENCY = "UPSTREAM_DEPENDENCY";
-
     public static final String REASON_DOWNSTREAM_DEPENDENT = "DOWNSTREAM_DEPENDENT";
     public static final String REASON_TEST_CHANGE = "TEST_CHANGE";
     public static final String REASON_DOWNSTREAM_TEST = "DOWNSTREAM_TEST";
     public static final String REASON_TRANSITIVE_DEPENDENCY_TEST = "TRANSITIVE_DEPENDENCY_TEST";
+    public static final String REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED = "TRANSITIVE_DEPENDENCY_UNRESOLVED";
     public static final String REASON_EXCLUDED_DOWNSTREAM = "EXCLUDED_DOWNSTREAM";
 
     /**
@@ -50,10 +49,30 @@ public final class ScalpelReport {
      */
     public static final String SKIP_REASON_NOT_AFFECTED = "NOT_AFFECTED";
 
+    /** The skip reasons a {@link SkippedModule} may carry; extend together with the schema enum. */
+    private static final Set<String> KNOWN_SKIP_REASONS = Set.of(SKIP_REASON_NOT_AFFECTED);
+
+    /** The reasons an {@link AffectedModule} may carry; extend together with the schema enum. */
+    private static final Set<String> KNOWN_MODULE_REASONS = Set.of(
+            REASON_SOURCE_CHANGE,
+            REASON_TEST_CHANGE,
+            REASON_POM_CHANGE,
+            REASON_TRANSITIVE_DEPENDENCY,
+            REASON_TRANSITIVE_DEPENDENCY_TEST,
+            REASON_TRANSITIVE_DEPENDENCY_UNRESOLVED,
+            REASON_MANAGED_PLUGIN,
+            REASON_DOWNSTREAM_DEPENDENT,
+            REASON_DOWNSTREAM_TEST,
+            REASON_FORCE_BUILD);
+
     public static final String CATEGORY_DIRECT = "DIRECT";
     public static final String CATEGORY_UPSTREAM = "UPSTREAM";
     public static final String CATEGORY_DOWNSTREAM = "DOWNSTREAM";
     public static final String CATEGORY_TRANSITIVE = "TRANSITIVE";
+
+    /** The categories an {@link AffectedModule} may carry; extend together with the schema enum. */
+    private static final Set<String> KNOWN_CATEGORIES =
+            Set.of(CATEGORY_DIRECT, CATEGORY_UPSTREAM, CATEGORY_DOWNSTREAM, CATEGORY_TRANSITIVE);
 
     private final String baseBranch;
     private final String status;
@@ -68,6 +87,8 @@ public final class ScalpelReport {
     private final List<AffectedModule> affectedModules;
     private final List<SkippedModule> skippedModules;
     private final int excludedUpstreamCount;
+    private final Timings timings;
+    private final long totalMillis;
 
     private ScalpelReport(
             String baseBranch,
@@ -82,7 +103,9 @@ public final class ScalpelReport {
             List<String> unmatchedPomPaths,
             List<AffectedModule> affectedModules,
             List<SkippedModule> skippedModules,
-            int excludedUpstreamCount) {
+            int excludedUpstreamCount,
+            Timings timings,
+            long totalMillis) {
         this.baseBranch = baseBranch;
         this.status = status;
         this.reason = reason;
@@ -96,6 +119,8 @@ public final class ScalpelReport {
         this.affectedModules = affectedModules;
         this.skippedModules = skippedModules;
         this.excludedUpstreamCount = excludedUpstreamCount;
+        this.timings = timings;
+        this.totalMillis = totalMillis;
     }
 
     public static class AffectedModule {
@@ -149,9 +174,19 @@ public final class ScalpelReport {
             if (sourceSet != null && !"main".equals(sourceSet) && !"test".equals(sourceSet)) {
                 throw new IllegalArgumentException("sourceSet must be 'main', 'test', or null");
             }
-            this.groupId = groupId;
-            this.artifactId = artifactId;
-            this.path = path;
+            if (category != null && !KNOWN_CATEGORIES.contains(category)) {
+                throw new IllegalArgumentException(
+                        "Unknown category '" + category + "'. Known categories: " + KNOWN_CATEGORIES);
+            }
+            requireNonNull(reasons, "reasons").forEach(r -> {
+                if (!KNOWN_MODULE_REASONS.contains(r)) {
+                    throw new IllegalArgumentException(
+                            "Unknown module reason '" + r + "'. Known reasons: " + KNOWN_MODULE_REASONS);
+                }
+            });
+            this.groupId = requireNonNull(groupId, "groupId");
+            this.artifactId = requireNonNull(artifactId, "artifactId");
+            this.path = requireNonNull(path, "path");
             this.reasons = reasons;
             this.category = category;
             this.sourceSet = sourceSet;
@@ -251,10 +286,15 @@ public final class ScalpelReport {
         private final String reason;
 
         public SkippedModule(String groupId, String artifactId, String path, String reason) {
-            this.groupId = groupId;
-            this.artifactId = artifactId;
-            this.path = path;
-            this.reason = reason;
+            this.groupId = requireNonNull(groupId, "groupId");
+            this.artifactId = requireNonNull(artifactId, "artifactId");
+            this.path = requireNonNull(path, "path");
+            this.reason = requireNonNull(reason, "reason");
+            if (!KNOWN_SKIP_REASONS.contains(reason)) {
+                throw new IllegalArgumentException(
+                        "Unknown skipped-module reason '" + reason + "'. Known reasons: " + KNOWN_SKIP_REASONS
+                                + ". Extend the schema enum, this set and the drift test together when adding one.");
+            }
         }
 
         public String getGroupId() {
@@ -300,7 +340,7 @@ public final class ScalpelReport {
         sb.append("  \"changedManagedPlugins\": ")
                 .append(jsonStringArray(changedManagedPlugins))
                 .append(",\n");
-        if (unmatchedPomPaths != null && !unmatchedPomPaths.isEmpty()) {
+        if (!unmatchedPomPaths.isEmpty()) {
             sb.append("  \"unmatchedPomPaths\": ")
                     .append(jsonStringArray(unmatchedPomPaths))
                     .append(",\n");
@@ -331,6 +371,38 @@ public final class ScalpelReport {
                 sb.append("\n");
             }
             sb.append("  ]");
+        }
+        // Instrumentation fields (#99): emitted only when something was recorded, and
+        // each of the two objects independently, so a run with phases but no counted
+        // operations carries timings only (and vice versa).
+        if (timings != null && !timings.getPhaseNames().isEmpty()) {
+            sb.append(",\n");
+            sb.append("  \"timings\": {\n");
+            sb.append("    \"totalMillis\": ").append(totalMillis).append(",\n");
+            sb.append("    \"phases\": {");
+            boolean first = true;
+            for (String phase : timings.getPhaseNames()) {
+                if (!first) {
+                    sb.append(", ");
+                }
+                first = false;
+                sb.append(jsonString(phase)).append(": ").append(timings.getPhaseMillis(phase));
+            }
+            sb.append("}\n");
+            sb.append("  }");
+        }
+        if (timings != null && !timings.getOperationNames().isEmpty()) {
+            sb.append(",\n");
+            sb.append("  \"operations\": {");
+            boolean firstOperation = true;
+            for (String operation : timings.getOperationNames()) {
+                if (!firstOperation) {
+                    sb.append(", ");
+                }
+                firstOperation = false;
+                sb.append(jsonString(operation)).append(": ").append(timings.getOperationCount(operation));
+            }
+            sb.append("}");
         }
         sb.append("\n}\n");
         return sb.toString();
@@ -447,6 +519,8 @@ public final class ScalpelReport {
         private final List<AffectedModule> affectedModules = new ArrayList<>();
         private final List<SkippedModule> skippedModules = new ArrayList<>();
         private int excludedUpstreamCount;
+        private Timings timings;
+        private long totalMillis;
 
         public Builder baseBranch(String baseBranch) {
             this.baseBranch = baseBranch;
@@ -513,6 +587,21 @@ public final class ScalpelReport {
             return this;
         }
 
+        /**
+         * Attaches phase timing and operation-count instrumentation. The {@code timings} and
+         * {@code operations} objects are emitted only when {@code timings} recorded at least
+         * one phase or counted at least one operation; {@code totalMillis} is the caller's
+         * wall-clock total for the whole analysis.
+         */
+        public Builder timings(Timings timings, long totalMillis) {
+            if (totalMillis < 0) {
+                throw new IllegalArgumentException("totalMillis must be non-negative");
+            }
+            this.timings = timings;
+            this.totalMillis = totalMillis;
+            return this;
+        }
+
         public ScalpelReport build() {
             if (baseBranch == null) {
                 throw new IllegalStateException("baseBranch is required");
@@ -530,7 +619,9 @@ public final class ScalpelReport {
                     unmatchedPomPaths,
                     affectedModules,
                     skippedModules,
-                    excludedUpstreamCount);
+                    excludedUpstreamCount,
+                    timings,
+                    totalMillis);
         }
     }
 }

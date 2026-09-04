@@ -15,7 +15,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.DirectoryStream;
+import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,6 +25,7 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -225,13 +226,14 @@ class PomChangeAnalyzer {
         private final Set<String> changedProperties;
         private final Map<MavenProject, Set<String>> evidence;
         private final List<String> unmatchedPomPaths;
+        private final long resourcesVisited;
 
         Result(
                 Set<MavenProject> affectedProjects,
                 Map<String, Model> oldEffectiveModels,
                 Map<String, Model> newEffectiveModels,
                 Set<String> changedProperties) {
-            this(affectedProjects, oldEffectiveModels, newEffectiveModels, changedProperties, Map.of(), List.of());
+            this(affectedProjects, oldEffectiveModels, newEffectiveModels, changedProperties, Map.of(), List.of(), 0L);
         }
 
         Result(
@@ -240,13 +242,15 @@ class PomChangeAnalyzer {
                 Map<String, Model> newEffectiveModels,
                 Set<String> changedProperties,
                 Map<MavenProject, Set<String>> evidence,
-                List<String> unmatchedPomPaths) {
+                List<String> unmatchedPomPaths,
+                long resourcesVisited) {
             this.affectedProjects = affectedProjects;
             this.oldEffectiveModels = oldEffectiveModels;
             this.newEffectiveModels = newEffectiveModels;
             this.changedProperties = changedProperties;
             this.evidence = evidence;
             this.unmatchedPomPaths = unmatchedPomPaths;
+            this.resourcesVisited = resourcesVisited;
         }
 
         Set<MavenProject> getAffectedProjects() {
@@ -276,6 +280,11 @@ class PomChangeAnalyzer {
         List<String> getUnmatchedPomPaths() {
             return unmatchedPomPaths;
         }
+
+        /** Filesystem entries visited by filtered-resource scans (instrumentation, #99). */
+        long getResourcesVisited() {
+            return resourcesVisited;
+        }
     }
 
     /**
@@ -299,6 +308,8 @@ class PomChangeAnalyzer {
         final Map<MavenProject, Set<String>> evidence = new LinkedHashMap<>();
         final Set<String> allChangedProperties = new LinkedHashSet<>();
         final List<String> unmatchedPomPaths = new ArrayList<>();
+        /** Filesystem entries visited by filtered-resource scans (instrumentation, #99). */
+        long resourcesVisited;
     }
 
     /**
@@ -385,7 +396,8 @@ class PomChangeAnalyzer {
                 ctx.newEffectiveModels,
                 ctx.allChangedProperties,
                 ctx.evidence,
-                ctx.unmatchedPomPaths);
+                ctx.unmatchedPomPaths,
+                ctx.resourcesVisited);
     }
 
     private static void addEvidence(Map<MavenProject, Set<String>> evidence, MavenProject project, String item) {
@@ -417,16 +429,23 @@ class PomChangeAnalyzer {
         // Parent/BOM POM changed: analyze what actually changed
         byte[] oldPomBytes = ctx.oldPomContents.get(changedPomPath);
         if (oldPomBytes == null) {
-            // New POM (didn't exist in base), mark all dependents as affected
+            // No base content: either a genuinely new POM or one skipped for exceeding
+            // scalpel.maxResourceFileSize (the git-side WARN names it); both fail toward affected
             if (logger.isDebugEnabled()) {
-                logger.debug("New parent/BOM POM: {}, marking all dependents as affected", key(project));
+                logger.debug(
+                        "No base content for parent/BOM POM {} (new or oversize-skipped), marking all dependents as affected",
+                        key(project));
             }
             ctx.affected.add(project);
             ctx.affected.addAll(dependents);
             if (ctx.explain) {
-                addEvidence(ctx.evidence, project, "new pom " + changedPomPath);
+                addEvidence(
+                        ctx.evidence, project, "no base content for " + changedPomPath + " (new or oversize-skipped)");
                 for (MavenProject dependent : dependents) {
-                    addEvidence(ctx.evidence, dependent, "new pom " + changedPomPath);
+                    addEvidence(
+                            ctx.evidence,
+                            dependent,
+                            "no base content for " + changedPomPath + " (new or oversize-skipped)");
                 }
             }
             return;
@@ -601,7 +620,7 @@ class PomChangeAnalyzer {
             // parent, not the child), so the raw-model property check above won't catch them.
             if (!childAffected
                     && !changedProperties.isEmpty()
-                    && hasFilteredResourcesWithChangedProperty(child, changedProperties)) {
+                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, ctx)) {
                 logger.debug("Child {} has filtered resources referencing changed properties", key(child));
                 if (ctx.explain) {
                     addEvidence(ctx.evidence, child, "filtered resources referencing changed properties");
@@ -652,7 +671,16 @@ class PomChangeAnalyzer {
         Model oldChildEffective = ctx.oldEffectiveModels.get(childRelPath);
         Model newChildEffective = ctx.newEffectiveModels.get(childRelPath);
         if (oldChildEffective == null || newChildEffective == null) {
-            return false;
+            // Conservative: if either effective model could not be built (IO or parse
+            // failure), assume the child is affected. A green build on untested code
+            // is worse than a redundant rebuild.
+            logger.warn(
+                    "Cannot build {} effective model for child {}, conservatively marking as affected (oldModel={}, newModel={})",
+                    oldChildEffective == null && newChildEffective == null ? "either" : "one of the",
+                    key(child),
+                    oldChildEffective != null,
+                    newChildEffective != null);
+            return true;
         }
 
         boolean changed = false;
@@ -1312,7 +1340,8 @@ class PomChangeAnalyzer {
      * Filtered resources live outside the POM model, so effective model comparison cannot
      * detect property substitutions in resource files.
      */
-    private boolean hasFilteredResourcesWithChangedProperty(MavenProject project, Set<String> changedProperties) {
+    private boolean hasFilteredResourcesWithChangedProperty(
+            MavenProject project, Set<String> changedProperties, AnalysisContext ctx) {
         List<String> refs = new ArrayList<>();
         for (String prop : changedProperties) {
             refs.add("${" + prop + "}");
@@ -1341,7 +1370,7 @@ class PomChangeAnalyzer {
             if (!Files.isDirectory(resourceDir)) {
                 continue;
             }
-            if (scanDirectoryForPropertyRefs(resourceDir, refs)) {
+            if (scanDirectoryForPropertyRefs(resourceDir, refs, ctx)) {
                 logger.debug(
                         "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
                 return true;
@@ -1350,35 +1379,107 @@ class PomChangeAnalyzer {
         return false;
     }
 
-    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs) {
-        List<Path> stack = new ArrayList<>();
-        stack.add(dir);
-        while (!stack.isEmpty()) {
-            Path current = stack.remove(stack.size() - 1);
-            try (DirectoryStream<Path> stream = Files.newDirectoryStream(current)) {
-                for (Path entry : stream) {
-                    if (Files.isDirectory(entry)) {
-                        stack.add(entry);
-                    } else if (Files.isRegularFile(entry) && checkFileForPropertyRefs(entry, refs)) {
-                        return true;
-                    }
-                }
-            } catch (IOException e) {
-                // Skip unreadable directories
-            }
+    private static final int MAX_RESOURCE_WALK_DEPTH = 32;
+    private static final int MAX_RESOURCE_WALK_FILES = 10_000;
+
+    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs, AnalysisContext ctx) {
+        // Does not follow symbolic links: a symlink could loop forever or point
+        // outside the module (leaking file content into the analysis)
+        // Every exit path adds the entries it visited to ctx.resourcesVisited (#99).
+        int[] visitedEntries = new int[1];
+        boolean[] budgetExceeded = new boolean[1];
+        boolean[] depthTruncated = new boolean[1];
+        boolean[] foundRef = new boolean[1];
+        try {
+            Files.walkFileTree(
+                    dir, EnumSet.noneOf(FileVisitOption.class), MAX_RESOURCE_WALK_DEPTH, new SimpleFileVisitor<>() {
+                        @Override
+                        public FileVisitResult preVisitDirectory(Path d, BasicFileAttributes attrs) {
+                            if (++visitedEntries[0] > MAX_RESOURCE_WALK_FILES) {
+                                // Conservative: treat budget overruns as potentially affected
+                                budgetExceeded[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            return FileVisitResult.CONTINUE;
+                        }
+
+                        @Override
+                        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+                            // Count every entry, including symlinks and directories, so the
+                            // budget cannot be bypassed by unvisited entry kinds
+                            if (++visitedEntries[0] > MAX_RESOURCE_WALK_FILES) {
+                                // Conservative: treat budget overruns as potentially affected
+                                budgetExceeded[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            if (attrs.isDirectory()) {
+                                // Without FOLLOW_LINKS this only happens for directories at the
+                                // depth limit, which cannot be descended into: their content is
+                                // unknown, so fail toward affected
+                                logger.warn(
+                                        "Filtered resource scan of {} reached the max walk depth ({})."
+                                                + " Module will be conservatively marked as affected.",
+                                        file,
+                                        MAX_RESOURCE_WALK_DEPTH);
+                                depthTruncated[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            if (attrs.isSymbolicLink()) {
+                                return FileVisitResult.CONTINUE;
+                            }
+                            if (checkFileForPropertyRefs(file, refs)) {
+                                foundRef[0] = true;
+                                return FileVisitResult.TERMINATE;
+                            }
+                            return FileVisitResult.CONTINUE;
+                        }
+                    });
+        } catch (IOException e) {
+            // Conservative: an unreadable directory during the walk means we cannot
+            // know whether it contains a property reference, so treat as affected
+            logger.warn("Cannot walk filtered resource directory {}: {}", dir, e.getMessage());
+            ctx.resourcesVisited += visitedEntries[0];
+            return true;
         }
-        return false;
+        if (budgetExceeded[0]) {
+            logger.warn(
+                    "Filtered resource scan of {} exceeded the entry visit budget ({})."
+                            + " Module will be conservatively marked as affected.",
+                    dir,
+                    MAX_RESOURCE_WALK_FILES);
+            ctx.resourcesVisited += visitedEntries[0];
+            return true;
+        }
+        if (depthTruncated[0]) {
+            logger.warn(
+                    "Filtered resource scan of {} stopped at the max walk depth ({})."
+                            + " Module will be conservatively marked as affected.",
+                    dir,
+                    MAX_RESOURCE_WALK_DEPTH);
+            ctx.resourcesVisited += visitedEntries[0];
+            return true;
+        }
+        ctx.resourcesVisited += visitedEntries[0];
+        return foundRef[0];
     }
 
     private boolean checkFileForPropertyRefs(Path entry, List<String> refs) {
         try {
             long size = Files.size(entry);
-            if (size > 1024 * 1024) {
-                // Skip files larger than 1 MB — unlikely to be property-substituted text
-                return false;
-            }
             if (isBinaryFile(entry, size)) {
                 return false;
+            }
+            if (size > 1024 * 1024) {
+                // Conservative: the pre-#131 analyzer treated filtered resources larger
+                // than the scan limit as affected; keep failing toward affected so an
+                // oversized resource that references a changed property is not silently
+                // missed. (ScalpelConfiguration.maxResourceFileSize is currently not
+                // applied here; the limit is hard-coded.)
+                logger.warn(
+                        "Filtered resource {} ({} bytes) exceeds the 1 MB scan limit, conservatively marking module as affected",
+                        entry,
+                        size);
+                return true;
             }
             String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
             for (String ref : refs) {
@@ -1387,7 +1488,13 @@ class PomChangeAnalyzer {
                 }
             }
         } catch (IOException e) {
-            // Skip unreadable files
+            // Conservative: treat an unreadable file as potentially containing
+            // property references. Under-building is the worst failure mode.
+            logger.warn(
+                    "Cannot read filtered resource {}, conservatively marking module as affected: {}",
+                    entry,
+                    e.getMessage());
+            return true;
         }
         return false;
     }
@@ -1396,7 +1503,7 @@ class PomChangeAnalyzer {
      * Detect binary files using the same heuristic as git: scan for a NUL byte (0x00)
      * in the first 8000 bytes of the file.
      */
-    private static boolean isBinaryFile(Path file, long fileSize) {
+    private boolean isBinaryFile(Path file, long fileSize) {
         int bytesToRead = (int) Math.min(fileSize, 8000);
         if (bytesToRead == 0) {
             return false;
@@ -1410,7 +1517,9 @@ class PomChangeAnalyzer {
                 }
             }
         } catch (IOException e) {
-            // If we can't read the file, treat as non-binary
+            // Treat as non-binary so the caller proceeds to read the full file,
+            // which will also fail and trigger the conservative "mark affected" path.
+            logger.warn("Cannot check binary status of {}: {}", file, e.getMessage());
         }
         return false;
     }
@@ -1603,10 +1712,16 @@ class PomChangeAnalyzer {
                 logger.debug("Partial effective model for old {}: {}", relPath, e.getMessage());
                 return e.getResult().getEffectiveModel();
             }
-            logger.debug("Cannot build effective model for old {}: {}", relPath, e.getMessage());
+            logger.warn(
+                    "Cannot build effective model for {}: {} (downstream comparisons will treat this conservatively)",
+                    relPath,
+                    e.getMessage());
             return null;
         } catch (Exception e) {
-            logger.debug("Cannot build effective model for old {}: {}", relPath, e.getMessage());
+            logger.warn(
+                    "Cannot build effective model for {}: {} (downstream comparisons will treat this conservatively)",
+                    relPath,
+                    e.getMessage());
             return null;
         }
     }

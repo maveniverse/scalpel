@@ -1,0 +1,220 @@
+# Scalpel Report Format
+
+Scalpel's `report` mode writes a JSON report of affected modules to a file without modifying the reactor. All modules are built normally. This is useful when a CI script needs Scalpel's change detection results but wants to control the build flow itself.
+
+## Usage
+
+```bash
+mvn validate -Dscalpel.mode=report -Dscalpel.baseBranch=origin/main
+```
+
+The report is written to `target/scalpel-report.json` by default (configurable via `-Dscalpel.reportFile=<path>`).
+
+## Impacted Module Log
+
+For CI scripts that need a simple flat file (e.g. for GitHub Actions matrix filtering), Scalpel can write a list of directly impacted module paths, one per line:
+
+```bash
+mvn validate -Dscalpel.mode=report -Dscalpel.impactedLog=target/scalpel-impacted.log
+```
+
+Example output:
+
+```text
+module-a
+module-b/sub-module
+```
+
+This works in all modes (`trim`, `skip-tests`, `report`) and is written alongside the JSON report, not as a replacement. It contains only directly affected modules (not upstream or downstream).
+
+**Safety.** Module directory names are chosen by whoever authors the repository (or pull request),
+so the log is written defensively: a path is only written when it consists solely of letters,
+digits, `-`, `_`, `.` and `/`, and does not start with `-`. A path containing anything else
+(spaces, quotes, `$`, backticks, `;`, `|`, glob characters, backslashes, newlines, control
+characters) is skipped with a WARN instead of written. Even so, consume the file defensively:
+unquoted expansion word-splits and glob-expands file contents.
+
+```bash
+# Safe: quoted read loop, one module per line
+while IFS= read -r module; do
+  build_module "$module"
+done < target/scalpel-impacted.log
+
+# Safe (GNU xargs): explicit newline delimiter, no word splitting
+xargs -d '\n' build_module < target/scalpel-impacted.log
+
+# Unsafe: unquoted command substitution word-splits and glob-expands the contents
+build_all $(cat target/scalpel-impacted.log)
+```
+
+## Schema
+
+The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/resources/eu/maveniverse/maven/scalpel/core/scalpel-report-v2.schema.json) is published alongside the code. The current version is **2**.
+
+### Example Report
+
+```json
+{
+  "version": "2",
+  "scalpelVersion": "0.3.10",
+  "baseBranch": "origin/main",
+  "fullBuildTriggered": false,
+  "triggerFile": null,
+  "changedFiles": ["module-a/src/main/java/Foo.java", "module-b/src/test/java/BarTest.java", "gated-module/pom.xml"],
+  "changedProperties": [],
+  "changedManagedDependencies": [],
+  "changedManagedPlugins": [],
+  "unmatchedPomPaths": ["gated-module/pom.xml"],
+  "excludedUpstreamCount": 0,
+  "affectedModules": [
+    {
+      "groupId": "com.example",
+      "artifactId": "module-a",
+      "path": "module-a",
+      "reasons": ["SOURCE_CHANGE"],
+      "category": "DIRECT",
+      "sourceSet": "main",
+      "evidence": ["module-a/src/main/java/Foo.java"]
+    },
+    {
+      "groupId": "com.example",
+      "artifactId": "module-b",
+      "path": "module-b",
+      "reasons": ["TEST_CHANGE"],
+      "category": "DIRECT",
+      "sourceSet": "test"
+    },
+    {
+      "groupId": "com.example",
+      "artifactId": "module-c",
+      "path": "module-c",
+      "reasons": ["DOWNSTREAM_DEPENDENT"],
+      "category": "DOWNSTREAM",
+      "testsSkipped": true,
+      "testsSkippedReason": "EXCLUDED_DOWNSTREAM"
+    }
+  ],
+  "skippedModules": [
+    {
+      "groupId": "com.example",
+      "artifactId": "module-d",
+      "path": "module-d",
+      "reason": "NOT_AFFECTED"
+    }
+  ],
+  "timings": {
+    "totalMillis": 123,
+    "phases": {"repoOpen": 1, "mergeBase": 8, "diff": 30, "moduleMapping": 1, "transitiveResolve": 6}
+  },
+  "operations": {"blobs": 1, "resolves": 10, "resolveCacheHits": 4}
+}
+```
+
+## Top-Level Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | string | Schema version (`"2"`) |
+| `scalpelVersion` | string | Scalpel version that generated this report |
+| `baseBranch` | string | The base branch used for change detection |
+| `fullBuildTriggered` | boolean | `true` if a full build was triggered (e.g., by `fullBuildTriggers`) |
+| `triggerFile` | string or null | Path of the file that triggered a full build; `null` when no full build was triggered |
+| `changedFiles` | string[] | List of changed files (relative to reactor root) |
+| `changedProperties` | string[] | List of property names that changed in POMs |
+| `changedManagedDependencies` | string[] | List of changed managed dependency GAVs |
+| `changedManagedPlugins` | string[] | List of changed managed plugin GAVs |
+| `unmatchedPomPaths` | string[] | Changed POMs that match no reactor project (profile-gated or `-pl`-excluded; their changes are ignored, with a warning) |
+| `excludedUpstreamCount` | integer | Number of upstream build-prerequisite modules excluded from `affectedModules` |
+| `affectedModules` | object[] | Modules included in the build set (see below) |
+| `skippedModules` | object[] | Reactor modules left out of the build set (see below) |
+| `status` | string | *(optional)* Only present when analysis did not complete: `"failed"` or `"skipped"` |
+| `reason` | string | *(optional)* Human-readable explanation when `status` is present |
+| `timings` | object | *(optional)* Phase timing instrumentation (`totalMillis` plus per-phase millis); omitted when no phase was recorded |
+| `operations` | object | *(optional)* Analysis operation counters (git blobs read, dependency resolutions, cache hits); omitted when no operation was counted |
+
+**Status-only reports:** when analysis does not complete (failSafe bail-out, unexpected error) or is deliberately skipped (no changes detected, disabled by configuration, all files excluded by path filters), Scalpel overwrites the report file with this minimal status document so that a previous run's report cannot be mistaken for current results. A `"failed"` status means: do not trust the report contents, read the build log. Both fields are absent from normal full reports.
+
+## Module Object Fields
+
+Each module in `affectedModules` or `skippedModules` contains:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `groupId` | string | Module's groupId |
+| `artifactId` | string | Module's artifactId |
+| `path` | string | Module directory path (relative to reactor root) |
+| `reasons` | string[] | *(affectedModules only)* List of reason codes (see below) |
+| `category` | string | *(affectedModules only)* One of: `DIRECT`, `TRANSITIVE`, `UPSTREAM`, `DOWNSTREAM` |
+| `sourceSet` | string | *(optional)* Present only on directly affected modules with source changes: `"main"` or `"test"` |
+| `evidence` | string[] | *(optional)* Explain-mode inputs behind this module's decision (requires `-Dscalpel.explain=true`) |
+| `testsSkipped` | boolean | *(optional)* Present and `true` when tests are skipped for this module |
+| `testsSkippedReason` | string | *(optional)* Why tests were skipped (see values below) |
+| `reason` | string | *(skippedModules only)* Why the module was skipped: `"NOT_AFFECTED"` |
+
+**Consuming `path` values in scripts:** like the impacted log, the `path` fields of
+`affectedModules` entries carry module directory names chosen by the repository (or pull request)
+author. The values are JSON-encoded, so newlines and quotes cannot corrupt the document, but they
+are not restricted to a safe character set. Keep them quoted end-to-end when feeding them to shell
+commands:
+
+```bash
+# Safe: filter to the same character set as the impacted log, then a quoted read loop.
+# The filter matters: jq -r emits embedded newlines raw, so without it a path value
+# containing a newline would be split into two entries by the read loop.
+jq -r '.affectedModules[].path | select(test("^[A-Za-z0-9._/-]+$"))' target/scalpel-report.json |
+  while IFS= read -r module; do build_module "$module"; done
+```
+
+## Affected Module Reasons
+
+| Reason | Description |
+|--------|-------------|
+| `SOURCE_CHANGE` | A non-POM, non-test file changed in this module's directory |
+| `TEST_CHANGE` | Only test source files (`src/test/**`) changed; production artifact is unchanged |
+| `POM_CHANGE` | This module's POM is affected by a POM change (property, dependency, or plugin) |
+| `TRANSITIVE_DEPENDENCY` | A changed managed dependency reaches this module transitively (compile or runtime scope) |
+| `TRANSITIVE_DEPENDENCY_TEST` | A changed managed dependency reaches this module transitively via test scope only |
+| `TRANSITIVE_DEPENDENCY_UNRESOLVED` | Dependency resolution failed; conservatively treated as affected (genuine transitive change versus resolution failure is indistinguishable) |
+| `MANAGED_PLUGIN` | This module uses a plugin whose managed version changed |
+| `DOWNSTREAM_DEPENDENT` | Included as a downstream dependent (via `alsoMakeDependents`) |
+| `DOWNSTREAM_TEST` | Included as a downstream dependent via test-scoped dependency only |
+| `FORCE_BUILD` | This module was force-included via `forceBuildModules` |
+
+Upstream build-prerequisite modules are split in two: a module that is itself directly or transitively affected but was included in the build set as an upstream prerequisite is listed in `affectedModules` with category `UPSTREAM` and its actual reason. A module included purely as a build-order prerequisite (no affected reason at all) is not listed; those are only counted in `excludedUpstreamCount`.
+
+## Affected Module Source Sets
+
+| Source Set | Description |
+|------------|-------------|
+| `main` | Main source files (`src/main/**`) changed; all downstream dependents are affected |
+| `test` | Only test source files (`src/test/**`) changed; only test-jar dependents are affected |
+
+## Affected Module Categories
+
+| Category | Description |
+|----------|-------------|
+| `DIRECT` | Directly affected by a change |
+| `TRANSITIVE` | Affected by a changed managed dependency or plugin (not directly changed) |
+| `UPSTREAM` | Included as an upstream dependency (via `alsoMake`) |
+| `DOWNSTREAM` | Included as a downstream dependent (via `alsoMakeDependents`) |
+
+## Test-Skip Reasons
+
+| Value | Description |
+|-------|-------------|
+| `EXCLUDED_DOWNSTREAM` | The module is a downstream dependent that matched `skipTestsForDownstreamModules`, so it is built without tests |
+
+## Schema Version History
+
+| Version | Changes |
+|---------|---------|
+| `2` | Added `category`, `sourceSet`, `excludedUpstreamCount`, `testsSkipped`, `testsSkippedReason`. Later additive (no bump): `status`, `reason`, `unmatchedPomPaths`, `skippedModules`, `evidence`, `timings`, `operations` |
+| `1` | Initial schema |
+
+## Compatibility Policy
+
+Within a schema version, Scalpel may add new optional fields and new enum values; consumers must tolerate both (ignore unknown fields, treat unrecognized enum values as unknown). A version bump is required when a change breaks such consumers: removing or renaming a field, changing a field's type, making an optional field required, or removing an enum value that the schema ever declared and could have been emitted.
+
+Removing an enum value that no released schema ever carried and that the code no longer emits does not break any consumer and needs no bump.
+
+Reports are validated against the checked-in schema by `core`'s unit tests, guarding required fields and enum values against drift in both directions; a newly emitted optional field still requires a deliberate schema edit, which the drift guard surfaces through the enum and required-field checks.
