@@ -2,7 +2,7 @@
 
 This document provides worked CI pipeline examples for common platforms using Scalpel.
 
-All recipes that run Scalpel use `fetch-depth: 0` (a full clone). `actions/checkout` defaults to a shallow clone, and Scalpel needs the merge base between the base branch and HEAD; on a shallow clone it falls back to a full build (the fail-safe path) instead of detecting changes incrementally. The alternative is keeping the shallow clone and passing `-Dscalpel.fetchBaseBranch=true`.
+All recipes that run Scalpel need a full clone so that the merge base between the base branch and HEAD is reachable. On a shallow clone, Scalpel falls back to a full build (the fail-safe path) instead of detecting changes incrementally. The platform-specific settings are: `fetch-depth: 0` for GitHub Actions, `GIT_DEPTH: 0` for GitLab CI, and a full `checkout scm` (or an explicit `git fetch --unshallow`) for Jenkins. The alternative on any platform is keeping the shallow clone and passing `-Dscalpel.fetchBaseBranch=true`.
 
 ## GitHub Actions
 
@@ -129,7 +129,7 @@ jobs:
         run: |
           while IFS= read -r module; do
             mvn deploy -pl "$module"
-          done < impacted-log
+          done < scalpel-impacted.log
 ```
 
 The checkout runs before `download-artifact` because `actions/checkout` cleans the workspace (`git clean -ffdx`) and would remove a previously downloaded artifact.
@@ -225,11 +225,14 @@ pipeline {
 
 ## Shallow Clone Handling
 
-In CI environments with shallow clones, ensure the base branch is available with complete history:
+In CI environments with shallow clones, unshallow the checkout first, then fetch the base branch:
 
 ```bash
+git fetch --no-tags --unshallow origin
 git fetch --no-tags origin main
 ```
+
+Without `--unshallow`, `git fetch origin main` updates `origin/main` but leaves `.git/shallow` in place. If the merge base lies outside the shallow boundary, `GitChangeDetector.findMergeBase` returns `null` and Scalpel falls back to a full build.
 
 Or let Scalpel fetch the base ref itself before change detection:
 
