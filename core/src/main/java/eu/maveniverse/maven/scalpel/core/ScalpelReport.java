@@ -364,7 +364,7 @@ public final class ScalpelReport {
                 firstOperation = false;
                 sb.append(jsonString(operation)).append(": ").append(timings.getOperationCount(operation));
             }
-            sb.append("}\n");
+            sb.append("}");
         }
         sb.append("\n}\n");
         return sb.toString();
@@ -556,6 +556,9 @@ public final class ScalpelReport {
          * wall-clock total for the whole analysis.
          */
         public Builder timings(Timings timings, long totalMillis) {
+            if (totalMillis < 0) {
+                throw new IllegalArgumentException("totalMillis must be non-negative");
+            }
             this.timings = timings;
             this.totalMillis = totalMillis;
             return this;

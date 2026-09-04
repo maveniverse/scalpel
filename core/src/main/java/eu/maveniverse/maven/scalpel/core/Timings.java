@@ -46,12 +46,14 @@ public final class Timings {
     private final Map<String, Long> phaseNanos = new LinkedHashMap<>();
     private final Map<String, Long> runningSince = new LinkedHashMap<>();
     private final Map<String, Long> operationCounts = new LinkedHashMap<>();
+    private final Set<String> phaseOrder = new LinkedHashSet<>();
 
     /**
      * Starts (or restarts) the named phase; a phase started twice without an intervening
      * {@link #stop} discards the earlier measurement start.
      */
     public void start(String phase) {
+        phaseOrder.add(phase);
         runningSince.put(phase, System.nanoTime());
     }
 
@@ -89,11 +91,9 @@ public final class Timings {
         return nanos / 1_000_000;
     }
 
-    /** Recorded phase names in first-seen order, whether stopped or still running. */
+    /** Recorded phase names in start order, whether stopped or still running. */
     public Set<String> getPhaseNames() {
-        Set<String> names = new LinkedHashSet<>(phaseNanos.keySet());
-        names.addAll(runningSince.keySet());
-        return names;
+        return new LinkedHashSet<>(phaseOrder);
     }
 
     public long getOperationCount(String operation) {

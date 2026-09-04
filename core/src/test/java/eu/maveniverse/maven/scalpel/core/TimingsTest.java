@@ -10,6 +10,7 @@ package eu.maveniverse.maven.scalpel.core;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.List;
 import org.junit.jupiter.api.Test;
 
 class TimingsTest {
@@ -112,5 +113,17 @@ class TimingsTest {
 
         assertEquals("", timings.toString());
         assertEquals("", timings.formatOperations());
+    }
+
+    @Test
+    void overlappingPhasesRetainStartOrder() {
+        Timings timings = new Timings();
+        timings.start("outer");
+        timings.start("inner");
+        timings.stop("inner");
+
+        // outer was started first, so it must appear first even though inner stopped first
+        assertEquals(List.of("outer", "inner"), List.copyOf(timings.getPhaseNames()));
+        timings.stop("outer");
     }
 }

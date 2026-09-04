@@ -100,6 +100,10 @@
         },
         "phases": {
           "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          },
           "description": "Milliseconds spent per phase (repoOpen, fetch, mergeBase, diff, status, readOldPoms, moduleMapping, pomAnalysis, transitiveResolve, trim, applySkipTests). Only phases that ran are present; phase names may grow additively."
         }
       }

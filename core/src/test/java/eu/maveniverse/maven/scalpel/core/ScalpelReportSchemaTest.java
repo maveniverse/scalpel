@@ -178,6 +178,13 @@ class ScalpelReportSchemaTest {
                 validate(mutate(report, m -> m.put("timings", Map.of("totalMillis", -1L, "phases", Map.of())))).stream()
                         .anyMatch(e -> e.contains("totalMillis")),
                 "negative totalMillis must be rejected");
+        assertTrue(
+                validate(mutate(
+                                report,
+                                m -> m.put("timings", Map.of("totalMillis", 0L, "phases", Map.of("diff", -1L)))))
+                        .stream()
+                        .anyMatch(e -> e.contains("diff")),
+                "negative phase duration must be rejected");
     }
 
     // ---------------------------------------------------------------
@@ -506,6 +513,7 @@ class ScalpelReportSchemaTest {
                 "enum",
                 "required",
                 "properties",
+                "additionalProperties",
                 "items",
                 "minimum",
                 "minItems");
@@ -571,6 +579,15 @@ class ScalpelReportSchemaTest {
                                 object.get(property.getKey()),
                                 path + "." + property.getKey(),
                                 errors);
+                    }
+                }
+                if (schema.containsKey("additionalProperties")) {
+                    Map<String, Object> addlSchema =
+                            cast(schema.get("additionalProperties"), path + ".additionalProperties");
+                    for (Map.Entry<String, Object> entry : object.entrySet()) {
+                        if (!properties.containsKey(entry.getKey())) {
+                            validateSchema(addlSchema, entry.getValue(), path + "." + entry.getKey(), errors);
+                        }
                     }
                 }
             }
