@@ -448,11 +448,32 @@ class ScalpelConfigurationTest {
 
     @Test
     void validModes_accepted() {
-        for (String mode : new String[] {"trim", "skip-tests", "report"}) {
+        for (String mode : new String[] {"trim", "skip-tests", "report", "shadow"}) {
             Properties sys = new Properties();
             sys.setProperty("scalpel.mode", mode);
             ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
             assertEquals(mode, config.getMode());
+        }
+    }
+
+    @Test
+    void isModeShadow_trueOnlyForShadow() {
+        Properties sys = new Properties();
+        sys.setProperty("scalpel.mode", "shadow");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+        assertTrue(config.isModeShadow());
+        assertTrue(config.isModeReport() == false);
+    }
+
+    @Test
+    void isModeShadow_falseForEveryOtherModeAndUnset() {
+        for (String mode : new String[] {"trim", "skip-tests", "report", null}) {
+            Properties sys = new Properties();
+            if (mode != null) {
+                sys.setProperty("scalpel.mode", mode);
+            }
+            ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
+            assertFalse(config.isModeShadow(), "mode=" + mode + " must not be shadow");
         }
     }
 
