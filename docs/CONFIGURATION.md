@@ -22,8 +22,8 @@ Properties defined in a project POM are deliberately not read. Scalpel is config
 | `scalpel.excludePaths` | none | Comma-separated glob patterns. Changed files matching these are ignored |
 | `scalpel.includePaths` | none | Comma-separated glob patterns. Narrows the affected set to matching modules |
 | `scalpel.disableTriggers` | none | Comma-separated glob patterns. If any changed file matches, Scalpel is disabled |
-| `scalpel.reportFile` | `target/scalpel-report.json` | Path for the JSON report, relative to reactor root (written in all modes; must resolve inside the reactor, absolute paths and `..` traversal are rejected) |
-| `scalpel.impactedLog` | none | Write impacted module paths to this file (one per line; must resolve inside the reactor, and module paths outside the safe character set are skipped with a WARN) |
+| `scalpel.reportFile` | `target/scalpel-report.json` | Path for the JSON report, relative to reactor root (written in all modes; absolute paths are rejected, and so is any path whose normalization escapes the reactor; `..` segments that stay inside the project are fine) |
+| `scalpel.impactedLog` | none | Write impacted module paths to this file (one per line; absolute paths and paths escaping the reactor on normalization are rejected, and module paths outside the safe character set are skipped with a WARN) |
 | `scalpel.forceBuildModules` | none | Comma-separated regex patterns. Always include modules whose artifactId matches |
 | `scalpel.buildAllIfNoChanges` | `false` | Build everything when no changes are detected (useful for cron builds) |
 | `scalpel.disableOnBranch` | none | Comma-separated regex patterns. Disable if current branch matches |

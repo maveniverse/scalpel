@@ -197,14 +197,20 @@ class ScalpelReportTest {
     @Test
     void writeToFile_rejectsAbsoluteReportFile() throws IOException {
         ScalpelReport report = minimalReport();
-        Path outside = Files.createTempDirectory("scalpel-outside").resolve("pwned.json");
+        // Created outside JUnit's @TempDir lifecycle, so cleaned up explicitly.
+        Path outsideDir = Files.createTempDirectory("scalpel-outside");
+        try {
+            Path outside = outsideDir.resolve("pwned.json");
 
-        IOException e = assertThrows(IOException.class, () -> report.writeToFile(tempDir, outside.toString()));
+            IOException e = assertThrows(IOException.class, () -> report.writeToFile(tempDir, outside.toString()));
 
-        assertTrue(
-                e.getMessage().contains("scalpel.reportFile"),
-                "The rejection must name the property, got: " + e.getMessage());
-        assertFalse(Files.exists(outside), "Nothing may be written outside the reactor root");
+            assertTrue(
+                    e.getMessage().contains("scalpel.reportFile"),
+                    "The rejection must name the property, got: " + e.getMessage());
+            assertFalse(Files.exists(outside), "Nothing may be written outside the reactor root");
+        } finally {
+            Files.deleteIfExists(outsideDir);
+        }
     }
 
     @Test

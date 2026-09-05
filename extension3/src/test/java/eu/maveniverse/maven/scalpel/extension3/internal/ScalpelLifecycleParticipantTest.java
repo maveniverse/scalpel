@@ -3802,12 +3802,18 @@ class ScalpelLifecycleParticipantTest {
 
     @Test
     void impactedLog_absolutePathIsRejectedNotWritten() throws Exception {
-        Path outside = Files.createTempDirectory("scalpel-outside").resolve("evil-impacted.log");
+        // Created outside JUnit's @TempDir lifecycle, so cleaned up explicitly.
+        Path outsideDir = Files.createTempDirectory("scalpel-outside");
+        try {
+            Path outside = outsideDir.resolve("evil-impacted.log");
 
-        String stderr = runImpactedLogScenario(outside.toString());
+            String stderr = runImpactedLogScenario(outside.toString());
 
-        assertFalse(Files.exists(outside), "An absolute impactedLog path must not be written");
-        assertTrue(stderr.contains("scalpel.impactedLog"), "The rejection must name the property, got: " + stderr);
+            assertFalse(Files.exists(outside), "An absolute impactedLog path must not be written");
+            assertTrue(stderr.contains("scalpel.impactedLog"), "The rejection must name the property, got: " + stderr);
+        } finally {
+            Files.deleteIfExists(outsideDir);
+        }
     }
 
     @Test
