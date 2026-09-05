@@ -210,15 +210,21 @@ class ScalpelReportTest {
     @Test
     void writeToFile_rejectsParentTraversalReportFile() throws IOException {
         ScalpelReport report = minimalReport();
+        // Unique probe name plus an explicit pre-clean: the tempdir layout places sibling
+        // test methods under a shared parent, and a leftover from a previous run must not
+        // be mistaken for this run's write.
+        Path traversalTarget = tempDir.getParent().resolve("scalpel-containment-probe.json");
+        Files.deleteIfExists(traversalTarget);
 
-        IOException e = assertThrows(IOException.class, () -> report.writeToFile(tempDir, "../pwned.json"));
+        IOException e =
+                assertThrows(IOException.class, () -> report.writeToFile(tempDir, "../scalpel-containment-probe.json"));
 
         assertTrue(
                 e.getMessage().contains("scalpel.reportFile"),
                 "The rejection must name the property, got: " + e.getMessage());
         assertFalse(
-                Files.exists(tempDir.getParent().resolve("pwned.json")),
-                "Nothing may be written outside the reactor root");
+                Files.exists(traversalTarget),
+                "Nothing may be written outside the reactor root (probe: " + traversalTarget + ")");
     }
 
     private static ScalpelReport minimalReport() {

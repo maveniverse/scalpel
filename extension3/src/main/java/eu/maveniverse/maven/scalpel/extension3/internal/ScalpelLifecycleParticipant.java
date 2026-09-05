@@ -1501,7 +1501,15 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         if (impactedLog == null || impactedLog.trim().isEmpty()) {
             return;
         }
-        Path logPath = reactorRoot.resolve(impactedLog);
+        Path logPath;
+        try {
+            // The path is PR-controllable through .mvn/maven.config; neither write may
+            // land outside the reactor root (#97).
+            logPath = ScalpelReport.resolveContained(reactorRoot, impactedLog, "scalpel.impactedLog");
+        } catch (IOException e) {
+            handleWriteFailure(config, "Rejected impacted log path", e);
+            return;
+        }
         try {
             Files.createDirectories(logPath.getParent());
             List<String> lines = new ArrayList<>();
