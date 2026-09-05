@@ -227,6 +227,18 @@ class ScalpelReportTest {
                 "Nothing may be written outside the reactor root (probe: " + traversalTarget + ")");
     }
 
+    @Test
+    void writeToFile_rejectsEmptyAndBlankReportFile() {
+        ScalpelReport report = minimalReport();
+
+        for (String empty : new String[] {"", "   "}) {
+            IOException e = assertThrows(IOException.class, () -> report.writeToFile(tempDir, empty));
+            assertTrue(
+                    e.getMessage().contains("scalpel.reportFile"),
+                    "The rejection must name the property, got: " + e.getMessage());
+        }
+    }
+
     private static ScalpelReport minimalReport() {
         return ScalpelReport.builder()
                 .baseBranch("origin/main")

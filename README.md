@@ -80,7 +80,7 @@ mvn validate -Dscalpel.mode=report -Dscalpel.baseBranch=origin/main
 
 The report is written to `target/scalpel-report.json` by default. See [Report Format](docs/REPORT-FORMAT.md) for the schema and all fields.
 
-Note that report mode is not a sandbox: `mvn validate` on untrusted PR content still executes PR-controlled Maven configuration and plugins; report mode only guarantees that Scalpel itself leaves the reactor untouched. Both Scalpel output paths (`scalpel.reportFile`, `scalpel.impactedLog`) are confined to the project directory: absolute paths and parent-directory traversal are rejected.
+Note that report mode is not a sandbox: `mvn validate` on untrusted PR content still executes PR-controlled Maven configuration and plugins; report mode only guarantees that Scalpel itself leaves the reactor untouched. Both Scalpel output paths (`scalpel.reportFile`, `scalpel.impactedLog`) are confined to the project directory: absolute paths and parent-directory traversal are rejected. The confinement is lexical: a symlink inside the project that already points elsewhere is not resolved.
 
 ### `shadow`
 

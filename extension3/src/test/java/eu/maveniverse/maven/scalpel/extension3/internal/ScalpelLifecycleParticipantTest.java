@@ -3802,28 +3802,9 @@ class ScalpelLifecycleParticipantTest {
 
     @Test
     void impactedLog_absolutePathIsRejectedNotWritten() throws Exception {
-        Path root = tempDir.resolve("project");
-        Files.createDirectories(root);
-        writePom(root, "pom.xml", simpleParentPom("module-a"));
-        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
-        MavenProject parentProject =
-                createProject("com.example", "parent", "1.0", root, "pom.xml", simpleParentPom("module-a"));
-        parentProject.getModel().setPackaging("pom");
-        MavenProject moduleA =
-                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
-        moduleA.setParent(parentProject);
-
-        Set<String> changedFiles = new LinkedHashSet<>();
-        changedFiles.add("module-a/src/main/java/Foo.java");
-        when(scalpelCore.detectChanges(any(), any(), any(), any()))
-                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
-        setupEmptyDependencyResolution();
-
-        MavenSession session = createSimpleSession(root, List.of(parentProject, moduleA), "report");
         Path outside = Files.createTempDirectory("scalpel-outside").resolve("evil-impacted.log");
-        session.getSystemProperties().setProperty("scalpel.impactedLog", outside.toString());
 
-        String stderr = captureStderr(() -> assertDoesNotThrow(() -> participant.afterProjectsRead(session)));
+        String stderr = runImpactedLogScenario(outside.toString());
 
         assertFalse(Files.exists(outside), "An absolute impactedLog path must not be written");
         assertTrue(stderr.contains("scalpel.impactedLog"), "The rejection must name the property, got: " + stderr);
@@ -3831,6 +3812,21 @@ class ScalpelLifecycleParticipantTest {
 
     @Test
     void impactedLog_parentTraversalIsRejectedNotWritten() throws Exception {
+        String stderr = runImpactedLogScenario("../evil-impacted.log");
+
+        assertFalse(
+                Files.exists(tempDir.resolve("evil-impacted.log")),
+                "A parent-directory traversal must not escape the reactor root");
+        assertTrue(stderr.contains("scalpel.impactedLog"), "The rejection must name the property, got: " + stderr);
+    }
+
+    /**
+     * One-module report-mode fixture with a change in module-a and the given
+     * {@code scalpel.impactedLog} value; runs {@code afterProjectsRead} and returns the
+     * captured stderr. The reactor root is {@code tempDir/project}, so a parent traversal
+     * lands at {@code tempDir/}.
+     */
+    private String runImpactedLogScenario(String impactedLogValue) throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
         writePom(root, "pom.xml", simpleParentPom("module-a"));
@@ -3849,14 +3845,8 @@ class ScalpelLifecycleParticipantTest {
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, List.of(parentProject, moduleA), "report");
-        session.getSystemProperties().setProperty("scalpel.impactedLog", "../evil-impacted.log");
-
-        String stderr = captureStderr(() -> assertDoesNotThrow(() -> participant.afterProjectsRead(session)));
-
-        assertFalse(
-                Files.exists(root.getParent().resolve("evil-impacted.log")),
-                "A parent-directory traversal must not escape the reactor root");
-        assertTrue(stderr.contains("scalpel.impactedLog"), "The rejection must name the property, got: " + stderr);
+        session.getSystemProperties().setProperty("scalpel.impactedLog", impactedLogValue);
+        return runCapturingStdErr(() -> participant.afterProjectsRead(session));
     }
 
     @Test

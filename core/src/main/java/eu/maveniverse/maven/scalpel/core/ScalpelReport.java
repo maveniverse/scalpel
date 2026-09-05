@@ -462,10 +462,10 @@ public final class ScalpelReport {
      */
     public static Path resolveContained(Path reactorRoot, String configuredPath, String propertyName)
             throws IOException {
-        if (configuredPath == null || configuredPath.trim().isEmpty()) {
+        String trimmed = configuredPath == null ? "" : configuredPath.trim();
+        if (trimmed.isEmpty()) {
             throw new IOException(propertyName + " must not be empty");
         }
-        String trimmed = configuredPath.trim();
         Path root = reactorRoot.toAbsolutePath().normalize();
         Path resolved;
         try {
