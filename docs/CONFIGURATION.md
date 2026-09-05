@@ -15,7 +15,7 @@ Properties defined in a project POM are deliberately not read. Scalpel is config
 | `scalpel.enabled` | `true` | Enable or disable Scalpel |
 | `scalpel.baseBranch` | auto-detected | Base branch to compare against (e.g. `origin/main`) |
 | `scalpel.head` | `HEAD` | The commit to compare (usually left as default) |
-| `scalpel.mode` | `trim` | Operating mode. Use `trim`, `skip-tests`, or `report` |
+| `scalpel.mode` | `trim` | Operating mode. Use `trim`, `skip-tests`, `report`, or `shadow` |
 | `scalpel.alsoMake` | `true` | Include upstream dependencies of affected modules (trim mode) |
 | `scalpel.alsoMakeDependents` | `true` | Include downstream dependents of affected modules (trim mode) |
 | `scalpel.fullBuildTriggers` | `.mvn/**` | Comma-separated glob patterns. If a changed file matches, a full build is triggered |
@@ -73,6 +73,44 @@ In CI environments with shallow clones or forks, the base branch may not exist l
 ```
 
 This parses the base branch reference to extract the remote and branch name, then fetches only that ref.
+
+## Shadow Mode
+
+`-Dscalpel.mode=shadow` is the recommended first step of the adoption path: it measures what Scalpel would save on your reactor from a single full build, with no control group and no extra runner-hours.
+
+Shadow behaves exactly like `report` (full build, reactor untouched, all tests run, JSON report written) and additionally:
+
+1. Computes the trim decision it WOULD have made, using the same build-set computation as `trim` mode on the same diff, so the two decisions agree by construction
+2. Records per-module wall-clock for the full build that actually runs
+3. Joins the two into `estimatedSecondsSaved` (summed duration of the modules it would have skipped), written to `target/scalpel-shadow.json`
+4. Records `wouldHaveSkippedButFailed`: modules it would have skipped that failed in the full build, the false-negative counter, computed for free on every run
+5. Appends one JSONL line per run to `target/scalpel-shadow-history.jsonl`, so a trend accumulates across runs
+
+```bash
+mvn verify -Dscalpel.mode=shadow -Dscalpel.baseBranch=origin/main
+```
+
+Run it on a few representative pull requests, then read `estimatedSecondsSaved` and `wouldHaveSkippedButFailed`: the first tells you whether your topology benefits from trimming, the second whether Scalpel's analysis is safe for it. A shadow run never modifies the reactor and never skips a test.
+
+### `target/scalpel-shadow.json`
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | string | Shadow document version (`"1"`) |
+| `mode` | string | Always `"shadow"` |
+| `scalpelVersion` | string | Scalpel version that generated the document |
+| `baseBranch` | string or null | The base branch used for change detection; `null` when unconfigured |
+| `timestamp` | string | ISO-8601 instant of the session end |
+| `changedFilesCount` | number | Size of the detected changeset |
+| `wouldHaveBuilt` | string[] | Module paths trim mode would have kept in the reactor |
+| `wouldHaveSkipped` | string[] | Module paths trim mode would have dropped; the root aggregator is reported as `.` |
+| `moduleMillis` | object | Measured wall-clock per module path, in millis, for the full build that ran |
+| `estimatedSecondsSaved` | number | Summed duration of the would-have-skipped modules, in seconds |
+| `wouldHaveSkippedButFailed` | string[] | Modules it would have skipped that failed: the false-negative counter |
+
+When a shadow run bails out before any measurement (no base branch, not a git repository, disable triggers, a full-build trigger, or a fail-safe error), the document is overwritten with a minimal status document (`status` and `reason`) so a previous run's measurement can never be mistaken for current results, mirroring the JSON report's semantics. The history file is appended only by measured runs, so a gap there means "not measured", never "measured zero".
+
+One semantic note: `wouldHaveSkipped` mirrors the trim decision (built from the full affected set). The JSON report's `skippedModules`, written in the same run, uses the report's own categorization. The two coincide unless managed-dependency changes transitively affect modules, in which case shadow reports what trim would do and the report keeps its classification.
 
 ## Full Build Triggers
 

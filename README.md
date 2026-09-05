@@ -80,6 +80,16 @@ mvn validate -Dscalpel.mode=report -Dscalpel.baseBranch=origin/main
 
 The report is written to `target/scalpel-report.json` by default. See [Report Format](docs/REPORT-FORMAT.md) for the schema and all fields.
 
+### `shadow`
+
+Behaves exactly like `report` and additionally measures the full build: it records the trim decision it would have made, per-module durations, `estimatedSecondsSaved`, and `wouldHaveSkippedButFailed` (the false-negative counter) to `target/scalpel-shadow.json`, appending one line per run to `target/scalpel-shadow-history.jsonl`. This is the recommended first step of the adoption path: one full build tells you what Scalpel would save on your topology.
+
+```bash
+mvn verify -Dscalpel.mode=shadow -Dscalpel.baseBranch=origin/main
+```
+
+See [Shadow Mode](docs/CONFIGURATION.md#shadow-mode) for details.
+
 ## Impacted Module Log
 
 For CI scripts that need a simple flat file (e.g. for GitHub Actions matrix filtering), Scalpel can write a list of directly impacted module paths, one per line:

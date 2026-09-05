@@ -44,13 +44,15 @@ public final class ScalpelConfiguration {
 
     /**
      * System property {@code scalpel.alsoMake}: include upstream dependencies of affected modules so
-     * they compile. Default: {@code true}. Active in {@code trim} mode; also read in {@code report} mode.
+     * they compile. Default: {@code true}. Active in {@code trim} mode; also read in {@code report}
+     * and {@code shadow} modes.
      */
     public static final String ALSO_MAKE = PREFIX + "alsoMake";
 
     /**
      * System property {@code scalpel.alsoMakeDependents}: include downstream dependents of affected
-     * modules. Default: {@code true}. Active in {@code trim} mode; also read in {@code report} mode.
+     * modules. Default: {@code true}. Active in {@code trim} mode; also read in {@code report}
+     * and {@code shadow} modes.
      */
     public static final String ALSO_MAKE_DEPENDENTS = PREFIX + "alsoMakeDependents";
 
@@ -68,7 +70,8 @@ public final class ScalpelConfiguration {
 
     /**
      * System property {@code scalpel.mode}: operating mode, one of {@link #MODE_TRIM},
-     * {@link #MODE_SKIP_TESTS}, or {@link #MODE_REPORT}. Default: {@code trim}.
+     * {@link #MODE_SKIP_TESTS}, {@link #MODE_REPORT}, or {@link #MODE_SHADOW}.
+     * Default: {@code trim}.
      */
     public static final String MODE = PREFIX + "mode";
 
@@ -189,6 +192,13 @@ public final class ScalpelConfiguration {
 
     /** Mode value selecting {@code report}: write a JSON report without modifying the reactor. */
     public static final String MODE_REPORT = "report";
+
+    /**
+     * Mode value selecting {@code shadow}: behave exactly like {@code report} and additionally
+     * measure the full build, recording the would-be trim decision, per-module durations,
+     * estimated savings, and would-have-skipped failures (#92).
+     */
+    public static final String MODE_SHADOW = "shadow";
 
     /** Default value for {@link #FULL_BUILD_TRIGGERS}: {@code .mvn/**}. */
     private static final String DEFAULT_FULL_BUILD_TRIGGERS = ".mvn/**";
@@ -364,9 +374,12 @@ public final class ScalpelConfiguration {
         String impactedLog = resolve(system, user, IMPACTED_LOG, null);
         boolean failSafe = parseStrictBoolean(FAIL_SAFE, resolve(system, user, FAIL_SAFE, "true"));
         String mode = resolve(system, user, MODE, MODE_TRIM);
-        if (!MODE_TRIM.equals(mode) && !MODE_SKIP_TESTS.equals(mode) && !MODE_REPORT.equals(mode)) {
+        if (!MODE_TRIM.equals(mode)
+                && !MODE_SKIP_TESTS.equals(mode)
+                && !MODE_REPORT.equals(mode)
+                && !MODE_SHADOW.equals(mode)) {
             throw new IllegalArgumentException("Invalid scalpel.mode '" + mode + "', expected one of: " + MODE_TRIM
-                    + ", " + MODE_SKIP_TESTS + ", " + MODE_REPORT);
+                    + ", " + MODE_SKIP_TESTS + ", " + MODE_REPORT + ", " + MODE_SHADOW);
         }
         boolean explain = parseStrictBoolean(EXPLAIN, resolve(system, user, EXPLAIN, "false"));
         String reportFile = resolve(system, user, REPORT_FILE, DEFAULT_REPORT_FILE);
@@ -659,7 +672,7 @@ public final class ScalpelConfiguration {
         return explain;
     }
 
-    /** Returns the operating mode: {@code trim}, {@code skip-tests}, or {@code report}. Default: {@code trim}. */
+    /** Returns the operating mode: {@code trim}, {@code skip-tests}, {@code report}, or {@code shadow}. Default: {@code trim}. */
     public String getMode() {
         return mode;
     }
@@ -677,6 +690,20 @@ public final class ScalpelConfiguration {
     /** Returns whether the operating mode is {@code report}; {@code false} by default. */
     public boolean isModeReport() {
         return MODE_REPORT.equals(mode);
+    }
+
+    /** Returns whether the operating mode is {@code shadow}; {@code false} by default. */
+    public boolean isModeShadow() {
+        return MODE_SHADOW.equals(mode);
+    }
+
+    /**
+     * Returns whether the operating mode leaves the reactor untouched and writes the report
+     * artifact: {@code true} for {@code report} and {@code shadow}. Shadow behaves exactly
+     * like report plus the shadow-specific measurement outputs.
+     */
+    public boolean isPassiveMode() {
+        return isModeReport() || isModeShadow();
     }
 
     /** Returns the JSON report path, relative to the reactor root. Default: {@code target/scalpel-report.json}. */
