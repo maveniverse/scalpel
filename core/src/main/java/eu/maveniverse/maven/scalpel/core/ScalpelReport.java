@@ -12,6 +12,7 @@ import static java.util.Objects.requireNonNull;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -446,9 +447,38 @@ public final class ScalpelReport {
     }
 
     public void writeToFile(Path reactorRoot, String reportFile) throws IOException {
-        Path path = reactorRoot.resolve(reportFile);
+        Path path = resolveContained(reactorRoot, reportFile, "scalpel.reportFile");
         Files.createDirectories(path.getParent());
         Files.write(path, toJson().getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * Resolves {@code configuredPath} against {@code reactorRoot} and returns the normalized
+     * target, refusing any path that escapes the reactor root. Absolute paths are rejected
+     * outright, as are parent-directory traversals, with an {@link IOException} naming
+     * {@code propertyName}: output paths are PR-controllable through {@code .mvn/maven.config},
+     * so neither write may land outside the project (#97). The check is lexical (a
+     * pre-existing symlink inside the root pointing elsewhere is not followed).
+     */
+    public static Path resolveContained(Path reactorRoot, String configuredPath, String propertyName)
+            throws IOException {
+        String trimmed = configuredPath == null ? "" : configuredPath.trim();
+        if (trimmed.isEmpty()) {
+            throw new IOException(propertyName + " must not be empty");
+        }
+        Path root = reactorRoot.toAbsolutePath().normalize();
+        Path resolved;
+        try {
+            resolved = root.resolve(trimmed).normalize();
+        } catch (InvalidPathException e) {
+            throw new IOException(propertyName + " '" + configuredPath + "' is not a valid path", e);
+        }
+        if (root.getFileSystem().getPath(trimmed).isAbsolute() || !resolved.startsWith(root)) {
+            throw new IOException(propertyName + " '" + configuredPath
+                    + "' resolves outside the reactor root; absolute paths and parent-directory"
+                    + " traversal are not allowed");
+        }
+        return resolved;
     }
 
     private static String jsonString(String value) {

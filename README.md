@@ -80,6 +80,8 @@ mvn validate -Dscalpel.mode=report -Dscalpel.baseBranch=origin/main
 
 The report is written to `target/scalpel-report.json` by default. See [Report Format](docs/REPORT-FORMAT.md) for the schema and all fields.
 
+Note that report mode is not a sandbox: `mvn validate` on untrusted PR content still executes PR-controlled Maven configuration and plugins; report mode only guarantees that Scalpel itself leaves the reactor untouched. Both Scalpel output paths (`scalpel.reportFile`, `scalpel.impactedLog`) are confined to the project directory: absolute paths are rejected, as is any path that normalizes outside the project (`..` segments that stay inside are fine). The confinement is lexical: a symlink inside the project that already points elsewhere is not resolved.
+
 ### `shadow`
 
 Behaves exactly like `report` and additionally measures the full build: it records the trim decision it would have made, per-module durations, `estimatedSecondsSaved`, and `wouldHaveSkippedButFailed` (the false-negative counter) to `target/scalpel-shadow.json`, appending one line per run to `target/scalpel-shadow-history.jsonl`. This is the recommended first step of the adoption path: one full build tells you what Scalpel would save on your topology.

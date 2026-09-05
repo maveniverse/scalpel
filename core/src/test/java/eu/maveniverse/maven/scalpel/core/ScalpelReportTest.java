@@ -195,6 +195,64 @@ class ScalpelReportTest {
     }
 
     @Test
+    void writeToFile_rejectsAbsoluteReportFile() throws IOException {
+        ScalpelReport report = minimalReport();
+        // Created outside JUnit's @TempDir lifecycle, so cleaned up explicitly.
+        Path outsideDir = Files.createTempDirectory("scalpel-outside");
+        try {
+            Path outside = outsideDir.resolve("pwned.json");
+
+            IOException e = assertThrows(IOException.class, () -> report.writeToFile(tempDir, outside.toString()));
+
+            assertTrue(
+                    e.getMessage().contains("scalpel.reportFile"),
+                    "The rejection must name the property, got: " + e.getMessage());
+            assertFalse(Files.exists(outside), "Nothing may be written outside the reactor root");
+        } finally {
+            Files.deleteIfExists(outsideDir);
+        }
+    }
+
+    @Test
+    void writeToFile_rejectsParentTraversalReportFile() throws IOException {
+        ScalpelReport report = minimalReport();
+        // Unique probe name plus an explicit pre-clean: the tempdir layout places sibling
+        // test methods under a shared parent, and a leftover from a previous run must not
+        // be mistaken for this run's write.
+        Path traversalTarget = tempDir.getParent().resolve("scalpel-containment-probe.json");
+        Files.deleteIfExists(traversalTarget);
+
+        IOException e =
+                assertThrows(IOException.class, () -> report.writeToFile(tempDir, "../scalpel-containment-probe.json"));
+
+        assertTrue(
+                e.getMessage().contains("scalpel.reportFile"),
+                "The rejection must name the property, got: " + e.getMessage());
+        assertFalse(
+                Files.exists(traversalTarget),
+                "Nothing may be written outside the reactor root (probe: " + traversalTarget + ")");
+    }
+
+    @Test
+    void writeToFile_rejectsEmptyAndBlankReportFile() {
+        ScalpelReport report = minimalReport();
+
+        for (String empty : new String[] {"", "   "}) {
+            IOException e = assertThrows(IOException.class, () -> report.writeToFile(tempDir, empty));
+            assertTrue(
+                    e.getMessage().contains("scalpel.reportFile"),
+                    "The rejection must name the property, got: " + e.getMessage());
+        }
+    }
+
+    private static ScalpelReport minimalReport() {
+        return ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .build();
+    }
+
+    @Test
     void toJson_sourceSetIncludedWhenPresent() {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
