@@ -195,6 +195,40 @@ class ScalpelReportTest {
     }
 
     @Test
+    void writeToFile_rejectsAbsoluteReportFile() throws IOException {
+        ScalpelReport report = minimalReport();
+        Path outside = Files.createTempDirectory("scalpel-outside").resolve("pwned.json");
+
+        IOException e = assertThrows(IOException.class, () -> report.writeToFile(tempDir, outside.toString()));
+
+        assertTrue(
+                e.getMessage().contains("scalpel.reportFile"),
+                "The rejection must name the property, got: " + e.getMessage());
+        assertFalse(Files.exists(outside), "Nothing may be written outside the reactor root");
+    }
+
+    @Test
+    void writeToFile_rejectsParentTraversalReportFile() throws IOException {
+        ScalpelReport report = minimalReport();
+
+        IOException e = assertThrows(IOException.class, () -> report.writeToFile(tempDir, "../pwned.json"));
+
+        assertTrue(
+                e.getMessage().contains("scalpel.reportFile"),
+                "The rejection must name the property, got: " + e.getMessage());
+        assertFalse(
+                Files.exists(tempDir.getParent().resolve("pwned.json")),
+                "Nothing may be written outside the reactor root");
+    }
+
+    private static ScalpelReport minimalReport() {
+        return ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .build();
+    }
+
+    @Test
     void toJson_sourceSetIncludedWhenPresent() {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
