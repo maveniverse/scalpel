@@ -25,6 +25,7 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -1118,42 +1119,56 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
      * were never built. Soften those producers: drop maven.test.skip and use skipTests=true
      * instead, which only disables the surefire/failsafe execution while leaving test-compile
      * (and jar:test-jar) intact. Softening a producer can itself depend on another skipped
-     * producer's test-jar (chained test-jar consumers), so this iterates to a fixpoint.
+     * producer's test-jar (chained test-jar consumers), so the algorithm uses a worklist BFS
+     * to propagate transitively in O(M × D) total rather than a fixpoint restart loop.
      */
     private Set<MavenProject> softenTestJarProducers(
             List<MavenProject> testProjects, List<MavenProject> skippedProjects) {
-        Set<MavenProject> compilingTests = new LinkedHashSet<>(testProjects);
+
+        // Index skipped projects by coordinates so we can look up producers in O(1).
+        Map<String, MavenProject> skippedByGa = new LinkedHashMap<>(skippedProjects.size());
+        for (MavenProject sp : skippedProjects) {
+            skippedByGa.put(sp.getGroupId() + ":" + sp.getArtifactId(), sp);
+        }
+
         Set<MavenProject> softenedProjects = new LinkedHashSet<>();
-        boolean changed = true;
-        while (changed) {
-            changed = false;
-            for (MavenProject candidate : skippedProjects) {
-                if (softenedProjects.contains(candidate)) {
+
+        // Worklist BFS: seed with the projects that will compile tests.  For each consumer,
+        // find skipped producers whose test-jar it requires, soften them, and enqueue them
+        // (a softened producer compiles its own tests, so its own test-jar deps must be
+        // checked in turn).  Each project is enqueued at most once, giving O(M × D) total.
+        ArrayDeque<MavenProject> worklist = new ArrayDeque<>(testProjects);
+        Set<MavenProject> visited = new HashSet<>(testProjects);
+        while (!worklist.isEmpty()) {
+            MavenProject consumer = worklist.poll();
+            for (org.apache.maven.model.Dependency dep : consumer.getDependencies()) {
+                if (!"test-jar".equals(dep.getType())) {
                     continue;
                 }
-                // Iterate a snapshot: compilingTests grows in the loop body as softened producers
-                // become potential consumers for later candidates, and mutating the live set during
-                // iteration would throw ConcurrentModificationException.
-                for (MavenProject consumer : new ArrayList<>(compilingTests)) {
-                    if (reactorTrimmer.hasTestJarDependency(consumer, candidate)) {
-                        candidate.getProperties().remove(MAVEN_TEST_SKIP);
-                        candidate.getProperties().setProperty(SKIP_TESTS, "true");
-                        softenedProjects.add(candidate);
-                        compilingTests.add(candidate);
-                        if (logger.isDebugEnabled()) {
-                            logger.debug(
-                                    "Scalpel: Keeping test-compile for {} because its test-jar is consumed"
-                                            + " in-reactor by {} (softened: skipTests=true instead of"
-                                            + " maven.test.skip=true)",
-                                    key(candidate),
-                                    key(consumer));
-                        }
-                        changed = true;
-                        break;
-                    }
+                String ga = dep.getGroupId() + ":" + dep.getArtifactId();
+                MavenProject producer = skippedByGa.get(ga);
+                if (producer == null || softenedProjects.contains(producer)) {
+                    continue;
+                }
+                // Soften: keep test-compile but skip surefire/failsafe execution.
+                producer.getProperties().remove(MAVEN_TEST_SKIP);
+                producer.getProperties().setProperty(SKIP_TESTS, "true");
+                softenedProjects.add(producer);
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Scalpel: Keeping test-compile for {} because its test-jar is consumed"
+                                    + " in-reactor by {} (softened: skipTests=true instead of"
+                                    + " maven.test.skip=true)",
+                            key(producer),
+                            key(consumer));
+                }
+                // Enqueue the newly softened producer so its own test-jar deps are checked.
+                if (visited.add(producer)) {
+                    worklist.add(producer);
                 }
             }
         }
+
         skippedProjects.removeAll(softenedProjects);
         if (!softenedProjects.isEmpty()) {
             logger.info(
