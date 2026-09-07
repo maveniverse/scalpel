@@ -2586,8 +2586,8 @@ class PomChangeAnalyzerTest {
         Path root = setupReactorRoot();
         List<MavenProject> projects = createReactorWithPropertyUsage(root);
 
-        // Create a resource directory with a binary file that contains ${dep.version}
-        // after a NUL byte — should be skipped as binary
+        // Set up a resource directory with a binary file whose content includes a
+        // property reference after a NUL byte. The file should be skipped as binary.
         Path resourceDir = root.resolve("module-a/src/main/resources");
         Files.createDirectories(resourceDir);
         byte[] binaryContent = new byte[100];
@@ -2635,7 +2635,7 @@ class PomChangeAnalyzerTest {
         Path root = setupReactorRoot();
         List<MavenProject> projects = createReactorWithPropertyUsage(root);
 
-        // Create a resource directory with a text file referencing ${dep.version}
+        // Set up a resource directory with a text file that references a changed property.
         Path resourceDir = root.resolve("module-a/src/main/resources");
         Files.createDirectories(resourceDir);
         Files.write(

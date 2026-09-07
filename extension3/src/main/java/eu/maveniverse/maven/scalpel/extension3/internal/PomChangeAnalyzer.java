@@ -1354,13 +1354,7 @@ class PomChangeAnalyzer {
     private boolean hasFilteredResourcesWithChangedProperty(
             MavenProject project, Set<String> changedProperties, AnalysisContext ctx) {
         // Determine which properties still need scanning (cross-parent memoization)
-        Set<String> alreadyScanned = ctx.resourceScannedProperties.getOrDefault(project, Set.of());
-        Set<String> unscanned = new LinkedHashSet<>();
-        for (String prop : changedProperties) {
-            if (!alreadyScanned.contains(prop)) {
-                unscanned.add(prop);
-            }
-        }
+        Set<String> unscanned = filterUnscannedProperties(project, changedProperties, ctx);
         if (unscanned.isEmpty()) {
             return false;
         }
@@ -1370,6 +1364,37 @@ class PomChangeAnalyzer {
             refs.add("${" + prop + "}");
         }
 
+        if (scanFilteredResources(project, refs, ctx)) {
+            return true;
+        }
+        // No match found — record scanned properties for memoization (#114)
+        ctx.resourceScannedProperties
+                .computeIfAbsent(project, k -> new LinkedHashSet<>())
+                .addAll(unscanned);
+        return false;
+    }
+
+    /**
+     * Return the subset of {@code changedProperties} that have not yet been scanned
+     * for this project (cross-parent memoization, #114).
+     */
+    private Set<String> filterUnscannedProperties(
+            MavenProject project, Set<String> changedProperties, AnalysisContext ctx) {
+        Set<String> alreadyScanned = ctx.resourceScannedProperties.getOrDefault(project, Set.of());
+        Set<String> unscanned = new LinkedHashSet<>();
+        for (String prop : changedProperties) {
+            if (!alreadyScanned.contains(prop)) {
+                unscanned.add(prop);
+            }
+        }
+        return unscanned;
+    }
+
+    /**
+     * Scan all filtered resource directories of the given project for any of the given
+     * property references.
+     */
+    private boolean scanFilteredResources(MavenProject project, List<String> refs, AnalysisContext ctx) {
         List<Resource> allResources = new ArrayList<>();
         if (project.getResources() != null) {
             allResources.addAll(project.getResources());
@@ -1399,10 +1424,6 @@ class PomChangeAnalyzer {
                 return true;
             }
         }
-        // No match found — record scanned properties for memoization (#114)
-        ctx.resourceScannedProperties
-                .computeIfAbsent(project, k -> new LinkedHashSet<>())
-                .addAll(unscanned);
         return false;
     }
 
@@ -1516,7 +1537,7 @@ class PomChangeAnalyzer {
             }
             byte[] bytes = Files.readAllBytes(entry);
             // Binary detection: scan for NUL byte in the first 8000 bytes (git heuristic)
-            int binaryCheckLen = (int) Math.min(bytes.length, 8000);
+            int binaryCheckLen = Math.min(bytes.length, 8000);
             for (int i = 0; i < binaryCheckLen; i++) {
                 if (bytes[i] == 0) {
                     return false; // binary file — skip
