@@ -117,6 +117,7 @@ The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/res
 | `version` | string | Schema version (`"2"`) |
 | `scalpelVersion` | string | Scalpel version that generated this report |
 | `baseBranch` | string | The base branch used for change detection |
+| `decisionId` | string | *(optional)* Stable SHA-256 identity of the decision (merge-base, head, decision-shaping config, build set); quotable in bug reports |
 | `fullBuildTriggered` | boolean | `true` if a full build was triggered (e.g., by `fullBuildTriggers`) |
 | `triggerFile` | string or null | Path of the file that triggered a full build; `null` when no full build was triggered |
 | `changedFiles` | string[] | List of changed files (relative to reactor root) |

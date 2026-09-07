@@ -231,6 +231,7 @@ class ScalpelReportSchemaTest {
         timings.increment(Timings.OP_GIT_BLOBS_READ, 1);
         ScalpelReport maximalReport = ScalpelReport.builder()
                 .baseBranch("origin/main")
+                .decisionId("deadbeef")
                 .status("skipped")
                 .reason("drift guard fixture")
                 .fullBuildTriggered(false)

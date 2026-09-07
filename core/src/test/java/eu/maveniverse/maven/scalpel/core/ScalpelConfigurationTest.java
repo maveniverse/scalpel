@@ -9,6 +9,7 @@ package eu.maveniverse.maven.scalpel.core;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -477,6 +478,52 @@ class ScalpelConfigurationTest {
             assertFalse(config.isModeShadow(), "mode=" + mode + " must not be shadow");
             assertEquals("report".equals(mode), config.isPassiveMode(), "only report is passive besides shadow");
         }
+    }
+
+    @Test
+    void verifyFullBuild_falseByDefaultAndStrictlyParsed() {
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(new Properties(), new Properties());
+        assertFalse(config.isVerifyFullBuild(), "verifyFullBuild must default to false when unset");
+
+        Properties on = new Properties();
+        on.setProperty("scalpel.verifyFullBuild", "true");
+        assertTrue(ScalpelConfiguration.fromProperties(on, new Properties()).isVerifyFullBuild());
+
+        Properties garbage = new Properties();
+        garbage.setProperty("scalpel.verifyFullBuild", "yes");
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ScalpelConfiguration.fromProperties(garbage, new Properties()),
+                "verifyFullBuild must be strictly boolean like every other flag");
+    }
+
+    @Test
+    void decisionFingerprint_isStableAndSensitiveToDecisionInputs() {
+        Properties base = new Properties();
+        base.setProperty("scalpel.baseBranch", "origin/main");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(base, new Properties());
+        assertEquals(
+                config.decisionFingerprint(),
+                ScalpelConfiguration.fromProperties(base, new Properties()).decisionFingerprint(),
+                "same resolved config must yield the same fingerprint");
+
+        Properties withInclude = new Properties();
+        withInclude.setProperty("scalpel.baseBranch", "origin/main");
+        withInclude.setProperty("scalpel.includePaths", "module-a/**");
+        assertNotEquals(
+                config.decisionFingerprint(),
+                ScalpelConfiguration.fromProperties(withInclude, new Properties())
+                        .decisionFingerprint(),
+                "a decision-shaping property must change the fingerprint");
+
+        Properties withReportFile = new Properties();
+        withReportFile.setProperty("scalpel.baseBranch", "origin/main");
+        withReportFile.setProperty("scalpel.reportFile", "elsewhere/report.json");
+        assertEquals(
+                config.decisionFingerprint(),
+                ScalpelConfiguration.fromProperties(withReportFile, new Properties())
+                        .decisionFingerprint(),
+                "an output-shaping property must NOT change the fingerprint");
     }
 
     // ---------------------------------------------------------------

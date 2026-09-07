@@ -36,6 +36,9 @@ final class AnalysisContext {
      */
     final List<MavenProject> filteredBuildSet;
 
+    /** The stable decision identity for this run, or null when not computed (#101). */
+    final String decisionId;
+
     private AnalysisContext(Builder builder) {
         this.changedFiles = builder.changedFiles;
         this.changedProperties = builder.changedProperties;
@@ -51,6 +54,8 @@ final class AnalysisContext {
         this.evidence = builder.evidence;
         this.trimResult = builder.trimResult;
         this.filteredBuildSet = builder.filteredBuildSet;
+
+        this.decisionId = builder.decisionId;
     }
 
     static Builder builder(
@@ -71,9 +76,11 @@ final class AnalysisContext {
             Set<String> changedProperties,
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
-            Set<String> unmatchedPomPaths) {
+            Set<String> unmatchedPomPaths,
+            String decisionId) {
         return builder(changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
                 .unmatchedPomPaths(unmatchedPomPaths)
+                .decisionId(decisionId)
                 .build();
     }
 
@@ -92,6 +99,8 @@ final class AnalysisContext {
         private Map<MavenProject, List<String>> evidence = Map.of();
         private TrimResult trimResult;
         private List<MavenProject> filteredBuildSet;
+
+        private String decisionId;
 
         private Builder() {}
 
@@ -142,6 +151,11 @@ final class AnalysisContext {
 
         Builder filteredBuildSet(List<MavenProject> filteredBuildSet) {
             this.filteredBuildSet = filteredBuildSet;
+            return this;
+        }
+
+        Builder decisionId(String decisionId) {
+            this.decisionId = decisionId;
             return this;
         }
 

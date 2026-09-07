@@ -39,6 +39,7 @@ Properties defined in a project POM are deliberately not read. Scalpel is config
 | `scalpel.failSafe` | `true` | On error, fall back to a full build instead of failing |
 | `scalpel.maxResourceFileSize` | `10 MB` | Maximum size in bytes for a resource file (resources larger than this are skipped with a warning) |
 | `scalpel.explain` | `false` | Enable explain mode. This adds per-module decision evidence to the report |
+| `scalpel.verifyFullBuild` | `false` | Run the full build under the shadow observation and fail it when a module Scalpel would have skipped fails, naming the module, its skip reason and the decisionId. Overrides reactor-modifying modes |
 
 ## Local Developer Usage
 
@@ -100,6 +101,7 @@ Run it on a few representative pull requests, then read `estimatedSecondsSaved` 
 | `mode` | string | Always `"shadow"` |
 | `scalpelVersion` | string | Scalpel version that generated the document |
 | `baseBranch` | string or null | The base branch used for change detection; `null` when unconfigured |
+| `decisionId` | string or null | The stable decision identity, present whenever a decision was computed |
 | `timestamp` | string | ISO-8601 instant of the session end |
 | `changedFilesCount` | number | Size of the detected changeset |
 | `wouldHaveBuilt` | string[] | Module paths trim mode would have kept in the reactor |
@@ -111,6 +113,16 @@ Run it on a few representative pull requests, then read `estimatedSecondsSaved` 
 When a shadow run bails out before any measurement (no base branch, not a git repository, disable triggers, a full-build trigger, or a fail-safe error), the document is overwritten with a minimal status document (`status` and `reason`) so a previous run's measurement can never be mistaken for current results, mirroring the JSON report's semantics. The history file is appended only by measured runs, so a gap there means "not measured", never "measured zero".
 
 One semantic note: `wouldHaveSkipped` mirrors the trim decision (built from the full affected set). The JSON report's `skippedModules`, written in the same run, uses the report's own categorization. The two coincide unless managed-dependency changes transitively affect modules, in which case shadow reports what trim would do and the report keeps its classification.
+
+## Verify Full Build
+
+`-Dscalpel.verifyFullBuild=true` answers "was Scalpel right?" from a single scheduled run: the full build executes under the shadow observation (reactor untouched, all tests run, whatever the configured mode was; trim and skip-tests are overridden with a warning), and at the end the run fails if any module Scalpel would have skipped failed, naming each module, the reason it was judged skippable, and the `decisionId` so the failure is quotable and correlatable in a bug report.
+
+```bash
+mvn verify -Dscalpel.verifyFullBuild=true -Dscalpel.baseBranch=origin/main
+```
+
+Every run in every mode also emits a `decisionId` in the JSON report (and in the shadow document and history line): the SHA-256 identity of the merge-base commit, the head commit, the resolved decision-shaping configuration, and the resulting build set. The same decision always produces the same id; a changed diff, configuration or build set produces a different one.
 
 ## Full Build Triggers
 

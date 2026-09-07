@@ -25,6 +25,8 @@ public final class ChangeDetectionResult {
 
     private final Set<String> changedFiles;
     private final Map<String, byte[]> oldPomContents;
+    private final String mergeBaseId;
+    private final String headId;
 
     /**
      * Constructs a change-detection result.
@@ -33,8 +35,22 @@ public final class ChangeDetectionResult {
      * @param oldPomContents base-commit contents of changed POMs, keyed by path
      */
     public ChangeDetectionResult(Set<String> changedFiles, Map<String, byte[]> oldPomContents) {
+        this(changedFiles, oldPomContents, null, null);
+    }
+
+    /**
+     * Constructs a change-detection result carrying the commit identities behind the diff,
+     * used to compute a stable {@code decisionId} (#101).
+     *
+     * @param mergeBaseId the merge-base commit id, or null when unavailable
+     * @param headId the head commit id, or null when unavailable
+     */
+    public ChangeDetectionResult(
+            Set<String> changedFiles, Map<String, byte[]> oldPomContents, String mergeBaseId, String headId) {
         this.changedFiles = Collections.unmodifiableSet(new LinkedHashSet<>(changedFiles));
         this.oldPomContents = Collections.unmodifiableMap(new LinkedHashMap<>(oldPomContents));
+        this.mergeBaseId = mergeBaseId;
+        this.headId = headId;
     }
 
     /** Returns the changed file paths detected in the diff. */
@@ -45,5 +61,15 @@ public final class ChangeDetectionResult {
     /** Returns the base-commit contents of changed POMs, keyed by path. */
     public Map<String, byte[]> getOldPomContents() {
         return oldPomContents;
+    }
+
+    /** Returns the merge-base commit id, or null when the detection did not carry one. */
+    public String getMergeBaseId() {
+        return mergeBaseId;
+    }
+
+    /** Returns the head commit id, or null when the detection did not carry one. */
+    public String getHeadId() {
+        return headId;
     }
 }

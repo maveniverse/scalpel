@@ -211,7 +211,7 @@ public class ScalpelCore {
 
             if (changedFiles.isEmpty()) {
                 logger.info("Scalpel: No changes detected between {} and {}", baseBranch, head);
-                return new ChangeDetectionResult(changedFiles, Map.of());
+                return new ChangeDetectionResult(changedFiles, Map.of(), mergeBase.name(), headId.name());
             }
 
             // Read old POM files for comparison — only read the ones that actually changed,
@@ -232,7 +232,7 @@ public class ScalpelCore {
             }
             timings.increment(Timings.OP_GIT_BLOBS_READ, oldPomContents.size());
 
-            return new ChangeDetectionResult(changedFiles, oldPomContents);
+            return new ChangeDetectionResult(changedFiles, oldPomContents, mergeBase.name(), headId.name());
         } catch (ScalpelException e) {
             throw e;
         } catch (Exception e) {

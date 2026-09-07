@@ -15,6 +15,7 @@ import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -71,11 +72,39 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     private final List<String> changedFiles;
     private final LongSupplier nanoClock;
     private final Function<MavenProject, String> moduleKey;
+    private final String decisionId;
+    private final boolean verify;
+    private final Map<String, String> skipReasons;
 
     private final ConcurrentMap<String, Long> startNanos = new ConcurrentHashMap<>();
+
     private final ConcurrentMap<String, Long> durationNanos = new ConcurrentHashMap<>();
     private final Set<String> failedModules = ConcurrentHashMap.newKeySet();
 
+    public ShadowBuildMonitor(
+            ExecutionListener delegate,
+            Path reactorRoot,
+            String scalpelVersion,
+            String baseBranch,
+            Collection<String> changedFiles,
+            LongSupplier nanoClock,
+            Function<MavenProject, String> moduleKey,
+            ShadowDecision decision) {
+        this.delegate = delegate == null ? NOOP : delegate;
+        this.reactorRoot = reactorRoot;
+        this.wouldHaveBuilt = new ArrayList<>(decision.getWouldHaveBuilt());
+        this.wouldHaveSkipped = new LinkedHashSet<>(decision.getWouldHaveSkipped());
+        this.scalpelVersion = scalpelVersion;
+        this.baseBranch = baseBranch;
+        this.changedFiles = changedFiles == null ? List.of() : new ArrayList<>(changedFiles);
+        this.nanoClock = nanoClock;
+        this.moduleKey = moduleKey;
+        this.decisionId = decision.getDecisionId();
+        this.verify = decision.isVerify();
+        this.skipReasons = new LinkedHashMap<>(decision.getSkipReasons());
+    }
+
+    @Deprecated
     public ShadowBuildMonitor(
             ExecutionListener delegate,
             Path reactorRoot,
@@ -86,15 +115,15 @@ public final class ShadowBuildMonitor implements ExecutionListener {
             Collection<String> changedFiles,
             LongSupplier nanoClock,
             Function<MavenProject, String> moduleKey) {
-        this.delegate = delegate == null ? NOOP : delegate;
-        this.reactorRoot = reactorRoot;
-        this.wouldHaveBuilt = new ArrayList<>(wouldHaveBuilt);
-        this.wouldHaveSkipped = new LinkedHashSet<>(wouldHaveSkipped);
-        this.scalpelVersion = scalpelVersion;
-        this.baseBranch = baseBranch;
-        this.changedFiles = changedFiles == null ? List.of() : new ArrayList<>(changedFiles);
-        this.nanoClock = nanoClock;
-        this.moduleKey = moduleKey;
+        this(
+                delegate,
+                reactorRoot,
+                scalpelVersion,
+                baseBranch,
+                changedFiles,
+                nanoClock,
+                moduleKey,
+                ShadowDecision.measuring(wouldHaveBuilt, wouldHaveSkipped, null));
     }
 
     // ------------------------------------------------------------------
@@ -178,17 +207,59 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     @Override
     public void sessionEnded(ExecutionEvent event) {
         delegate.sessionEnded(event);
+        Set<String> falseNegatives = getWouldHaveSkippedButFailed();
         try {
-            writeOutputs();
+            writeOutputs(falseNegatives);
         } catch (IOException e) {
             // Shadow measurement must never fail the build it is observing.
             logger.warn("Scalpel: Failed to write shadow outputs: {}", e.getMessage());
             logger.debug("Shadow output failure details", e);
         }
+        if (verify && !falseNegatives.isEmpty()) {
+            failBuildOnFalseNegatives(event, falseNegatives);
+        }
+    }
+
+    /**
+     * Verify mode (#101): the whole point of the run was to answer "was Scalpel right", and
+     * the answer is no, so the build exits non-zero naming each module Scalpel would have
+     * skipped and why it was judged skippable. The module's own failure has usually already
+     * failed the build; this makes the Scalpel verdict explicit and survives {@code -fn}
+     * style invocations by marking the session result.
+     */
+    private void failBuildOnFalseNegatives(ExecutionEvent event, Set<String> falseNegatives) {
+        StringBuilder modules = new StringBuilder();
+        for (String module : falseNegatives) {
+            logger.error(
+                    "Scalpel: verifyFullBuild: module '{}' FAILED but Scalpel would have skipped it (skip reason: {});"
+                            + " the trim decision for this changeset was wrong",
+                    module,
+                    skipReasonFor(module));
+            if (modules.length() > 0) {
+                modules.append(", ");
+            }
+            modules.append(module);
+        }
+        if (event.getSession() != null && event.getSession().getResult() != null) {
+            event.getSession()
+                    .getResult()
+                    .addException(new org.apache.maven.MavenExecutionException(
+                            "Scalpel verifyFullBuild: " + falseNegatives.size()
+                                    + " module(s) Scalpel would have skipped failed: " + modules
+                                    + " (decisionId " + (decisionId == null ? "unavailable" : decisionId) + ")",
+                            (Throwable) null));
+        }
+    }
+
+    private String skipReasonFor(String module) {
+        return skipReasons.getOrDefault(module, "NOT_AFFECTED");
     }
 
     void writeOutputs() throws IOException {
-        Set<String> wouldHaveSkippedButFailed = getWouldHaveSkippedButFailed();
+        writeOutputs(getWouldHaveSkippedButFailed());
+    }
+
+    void writeOutputs(Set<String> wouldHaveSkippedButFailed) throws IOException {
         String estimatedSecondsSaved = String.format(Locale.ROOT, "%.3f", getEstimatedSecondsSaved());
         Files.createDirectories(reactorRoot.resolve(SHADOW_FILE).getParent());
         Files.write(
@@ -208,6 +279,9 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         fields.add(field("mode", "shadow"));
         fields.add(field("scalpelVersion", scalpelVersion));
         fields.add(field("baseBranch", baseBranch));
+        if (decisionId != null) {
+            fields.add(field("decisionId", decisionId));
+        }
         fields.add(field("timestamp", Instant.now().toString()));
         fields.add("\"changedFilesCount\": " + changedFiles.size());
         fields.add(arrayField("wouldHaveBuilt", wouldHaveBuilt));
@@ -256,6 +330,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         return "{"
                 + "\"timestamp\": " + jsonString(Instant.now().toString())
                 + ", \"baseBranch\": " + jsonString(baseBranch)
+                + (decisionId == null ? "" : ", \"decisionId\": " + jsonString(decisionId))
                 + ", \"changedFilesCount\": " + changedFiles.size()
                 + ", \"estimatedSecondsSaved\": " + estimatedSecondsSaved
                 + ", \"wouldHaveBuiltCount\": " + wouldHaveBuilt.size()

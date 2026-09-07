@@ -10,6 +10,7 @@ package eu.maveniverse.maven.scalpel.core;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -21,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -695,5 +697,64 @@ class ScalpelReportTest {
             String schema = new String(is.readAllBytes(), StandardCharsets.UTF_8);
             assertTrue(schema.contains("\"const\": \"2\""), "schema must declare version 2");
         }
+    }
+
+    // ---------------------------------------------------------------
+    // decisionId (#101): a stable, quotable fingerprint of one decision
+    // ---------------------------------------------------------------
+
+    @Test
+    void computeDecisionId_isDeterministicAndSensitiveToEveryInput() {
+        List<String> buildSet = List.of("module-b", "module-a");
+
+        String id = ScalpelReport.computeDecisionId("mergebase1", "head1", "fingerprint1", buildSet);
+        assertEquals(
+                id,
+                ScalpelReport.computeDecisionId("mergebase1", "head1", "fingerprint1", buildSet),
+                "same inputs must yield the same id");
+        assertEquals(
+                64,
+                id.length(),
+                "the id is the SHA-256 hex digest so a prefix collision cannot be mistaken for a repeat decision");
+        assertTrue(id.matches("[0-9a-f]{64}"), "hex digest");
+        assertNotEquals(id, ScalpelReport.computeDecisionId("mergebase2", "head1", "fingerprint1", buildSet));
+        assertNotEquals(id, ScalpelReport.computeDecisionId("mergebase1", "head2", "fingerprint1", buildSet));
+        assertNotEquals(id, ScalpelReport.computeDecisionId("mergebase1", "head1", "fingerprint2", buildSet));
+        assertNotEquals(
+                id, ScalpelReport.computeDecisionId("mergebase1", "head1", "fingerprint1", List.of("module-a")));
+    }
+
+    @Test
+    void computeDecisionId_isOrderInsensitiveOverTheBuildSet() {
+        assertEquals(
+                ScalpelReport.computeDecisionId("m", "h", "f", List.of("module-a", "module-b")),
+                ScalpelReport.computeDecisionId("m", "h", "f", List.of("module-b", "module-a")),
+                "reactor order must not change the decision identity");
+    }
+
+    @Test
+    void computeDecisionId_toleratesNullGitIdsForUnmeasuredRuns() {
+        assertDoesNotThrow(() -> ScalpelReport.computeDecisionId(null, null, "f", List.of("module-a")));
+    }
+
+    @Test
+    void toJson_decisionIdRoundTripsAndIsOmittedWhenAbsent() {
+        ScalpelReport withId = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .decisionId("abc123")
+                .build();
+        assertEquals("abc123", parsed(withId).get("decisionId"));
+
+        ScalpelReport withoutId = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .build();
+        assertFalse(parsed(withoutId).containsKey("decisionId"), "decisionId must be omitted when not computed");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> parsed(ScalpelReport report) {
+        return (Map<String, Object>) ScalpelReportSchemaTest.Json.parse(report.toJson());
     }
 }

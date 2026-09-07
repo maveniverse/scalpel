@@ -237,4 +237,105 @@ class ShadowBuildMonitorTest {
         assertTrue(Files.exists(shadowJson), "shadow json is still written with nothing measured");
         assertFalse(Files.readString(shadowJson).contains("estimatedSecondsSaved\": null"), "savings stay numeric");
     }
+
+    // ---------------------------------------------------------------
+    // Verify mode (#101): false negatives fail the build; decisionId is quotable
+    // ---------------------------------------------------------------
+
+    @Test
+    void verifyMode_failsTheSessionWhenASkippedModuleFails(@TempDir Path tmp) throws IOException {
+        Path reactorRoot = tmp.resolve("reactor");
+        Files.createDirectories(reactorRoot);
+        ShadowBuildMonitor monitor = new ShadowBuildMonitor(
+                null,
+                reactorRoot,
+                "0.3.11",
+                "base",
+                Arrays.asList("module-b/src/Foo.java"),
+                new SteppingClock(),
+                MavenProject::getArtifactId,
+                ShadowDecision.verifying(
+                        Arrays.asList("module-b"),
+                        Arrays.asList("module-a"),
+                        java.util.Map.of("module-a", "NOT_AFFECTED"),
+                        "decision-id-1"));
+
+        MavenProject a = project(reactorRoot, "module-a");
+        MavenProject b = project(reactorRoot, "module-b");
+        // module-a is the would-have-SKIPPED module, so its failure is the false negative
+        monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, b));
+        monitor.projectSucceeded(event(ExecutionEvent.Type.ProjectSucceeded, b));
+        monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, a));
+        monitor.projectFailed(event(ExecutionEvent.Type.ProjectFailed, a));
+
+        MavenSession session = org.mockito.Mockito.mock(MavenSession.class);
+        org.apache.maven.execution.MavenExecutionResult result =
+                org.mockito.Mockito.mock(org.apache.maven.execution.MavenExecutionResult.class);
+        org.mockito.Mockito.when(session.getResult()).thenReturn(result);
+        monitor.sessionEnded(eventWithSession(ExecutionEvent.Type.SessionEnded, session));
+
+        org.mockito.Mockito.verify(result)
+                .addException(org.mockito.ArgumentMatchers.argThat(
+                        ex -> ex.getMessage() != null && ex.getMessage().contains("module-a")));
+        String json = Files.readString(reactorRoot.resolve("target/scalpel-shadow.json"));
+        assertTrue(json.contains("decision-id-1"), "the shadow document must quote the decisionId");
+    }
+
+    @Test
+    void verifyMode_noFailureLeavesTheSessionResultAlone(@TempDir Path tmp) throws IOException {
+        Path reactorRoot = tmp.resolve("reactor");
+        Files.createDirectories(reactorRoot);
+        ShadowBuildMonitor monitor = new ShadowBuildMonitor(
+                null,
+                reactorRoot,
+                "0.3.11",
+                "base",
+                Arrays.asList("module-b/src/Foo.java"),
+                new SteppingClock(),
+                MavenProject::getArtifactId,
+                ShadowDecision.verifying(
+                        Arrays.asList("module-b"),
+                        Arrays.asList("module-a"),
+                        java.util.Map.of("module-a", "NOT_AFFECTED"),
+                        "decision-id-2"));
+
+        MavenProject b = project(reactorRoot, "module-b");
+        monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, b));
+        monitor.projectSucceeded(event(ExecutionEvent.Type.ProjectSucceeded, b));
+
+        MavenSession session = org.mockito.Mockito.mock(MavenSession.class);
+        org.apache.maven.execution.MavenExecutionResult result =
+                org.mockito.Mockito.mock(org.apache.maven.execution.MavenExecutionResult.class);
+        org.mockito.Mockito.when(session.getResult()).thenReturn(result);
+        monitor.sessionEnded(eventWithSession(ExecutionEvent.Type.SessionEnded, session));
+
+        org.mockito.Mockito.verify(result, org.mockito.Mockito.never())
+                .addException(org.mockito.ArgumentMatchers.any());
+        String history = Files.readString(reactorRoot.resolve("target/scalpel-shadow-history.jsonl"));
+        assertTrue(history.contains("decision-id-2"), "the history line must quote the decisionId");
+    }
+
+    private static ExecutionEvent eventWithSession(ExecutionEvent.Type type, MavenSession session) {
+        return new ExecutionEvent() {
+            public ExecutionEvent.Type getType() {
+                return type;
+            }
+
+            public MavenSession getSession() {
+                return session;
+            }
+
+            public MavenProject getProject() {
+                return null;
+            }
+
+            public org.apache.maven.plugin.MojoExecution getMojoExecution() {
+                return null;
+            }
+
+            public Exception getException() {
+                return null;
+            }
+        };
+    }
 }

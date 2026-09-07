@@ -223,6 +223,41 @@ pipeline {
 }
 ```
 
+## Scheduled Verification Job
+
+A nightly job proving the trim decision against the full build (issue #101): every module builds and tests; if a module Scalpel would have skipped fails, the job fails naming the module, the skip reason and the `decisionId`.
+
+```yaml
+name: scalpel-verify
+on:
+  schedule:
+    - cron: "23 2 * * *" # nightly; avoid the top of the hour
+  workflow_dispatch: {}
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+      - name: Full build with Scalpel verification
+        run: mvn verify -Dscalpel.verifyFullBuild=true -Dscalpel.baseBranch=origin/main
+      - name: Upload shadow artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scalpel-shadow
+          path: |
+            target/scalpel-shadow.json
+            target/scalpel-shadow-history.jsonl
+```
+
 ## Shallow Clone Handling
 
 In CI environments with shallow clones, unshallow the checkout first, then fetch the base branch:

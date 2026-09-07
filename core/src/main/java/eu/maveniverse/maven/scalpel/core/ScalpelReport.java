@@ -76,6 +76,7 @@ public final class ScalpelReport {
             Set.of(CATEGORY_DIRECT, CATEGORY_UPSTREAM, CATEGORY_DOWNSTREAM, CATEGORY_TRANSITIVE);
 
     private final String baseBranch;
+    private final String decisionId;
     private final String status;
     private final String reason;
     private final boolean fullBuildTriggered;
@@ -93,6 +94,7 @@ public final class ScalpelReport {
 
     private ScalpelReport(
             String baseBranch,
+            String decisionId,
             String status,
             String reason,
             boolean fullBuildTriggered,
@@ -108,6 +110,7 @@ public final class ScalpelReport {
             Timings timings,
             long totalMillis) {
         this.baseBranch = baseBranch;
+        this.decisionId = decisionId;
         this.status = status;
         this.reason = reason;
         this.fullBuildTriggered = fullBuildTriggered;
@@ -315,6 +318,39 @@ public final class ScalpelReport {
         }
     }
 
+    /**
+     * Computes the stable decision identity (#101): the SHA-256 hex digest of the merge-base
+     * commit, the head commit, the resolved decision-shaping configuration fingerprint and
+     * the module paths of the resulting build set, sorted so reactor order does not change
+     * the identity. Null git ids are tolerated (unmeasured runs hash the placeholder
+     * {@code "-"}). The id is emitted in every mode's report so a decision is quotable in a
+     * bug report and correlatable with a post-merge failure.
+     */
+    public static String computeDecisionId(
+            String mergeBaseId, String headId, String configFingerprint, Collection<String> buildSetPaths) {
+        StringBuilder canonical = new StringBuilder("v1|");
+        canonical
+                .append(mergeBaseId == null ? "-" : mergeBaseId)
+                .append('|')
+                .append(headId == null ? "-" : headId)
+                .append('|')
+                .append(configFingerprint)
+                .append('|');
+        buildSetPaths.stream().sorted().forEach(path -> canonical.append(path).append('\n'));
+        try {
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(canonical.toString().getBytes(StandardCharsets.UTF_8));
+            StringBuilder hex = new StringBuilder(hash.length * 2);
+            for (byte b : hash) {
+                hex.append("%02x".formatted(b));
+            }
+            return hex.toString();
+        } catch (java.security.NoSuchAlgorithmException e) {
+            // SHA-256 is mandated for every Java platform; unreachable.
+            throw new IllegalStateException("SHA-256 unavailable", e);
+        }
+    }
+
     public String toJson() {
         StringBuilder sb = new StringBuilder();
         sb.append("{\n");
@@ -323,6 +359,9 @@ public final class ScalpelReport {
                 .append(jsonString(Version.version()))
                 .append(",\n");
         sb.append("  \"baseBranch\": ").append(jsonString(baseBranch)).append(",\n");
+        if (decisionId != null) {
+            sb.append("  \"decisionId\": ").append(jsonString(decisionId)).append(",\n");
+        }
         if (status != null) {
             sb.append("  \"status\": ").append(jsonString(status)).append(",\n");
         }
@@ -537,6 +576,7 @@ public final class ScalpelReport {
 
     public static class Builder {
         private String baseBranch;
+        private String decisionId;
         private String status;
         private String reason;
         private boolean fullBuildTriggered;
@@ -554,6 +594,11 @@ public final class ScalpelReport {
 
         public Builder baseBranch(String baseBranch) {
             this.baseBranch = baseBranch;
+            return this;
+        }
+
+        public Builder decisionId(String decisionId) {
+            this.decisionId = decisionId;
             return this;
         }
 
@@ -638,6 +683,7 @@ public final class ScalpelReport {
             }
             return new ScalpelReport(
                     baseBranch,
+                    decisionId,
                     status,
                     reason,
                     fullBuildTriggered,
