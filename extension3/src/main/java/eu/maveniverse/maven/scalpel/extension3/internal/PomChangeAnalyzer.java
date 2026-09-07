@@ -1562,9 +1562,8 @@ class PomChangeAnalyzer {
      * compared to the previous O(P × len) approach of calling {@code contains()} per property.
      */
     static boolean containsAnyPropertyRef(String content, Set<String> propertyNames) {
-        int len = content.length();
         int i = 0;
-        while (i < len - 2) { // need at least "${}"
+        while (true) {
             int start = content.indexOf("${", i);
             if (start < 0) {
                 break;
