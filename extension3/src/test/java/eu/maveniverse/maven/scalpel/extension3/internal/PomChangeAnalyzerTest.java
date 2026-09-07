@@ -2363,6 +2363,67 @@ class PomChangeAnalyzerTest {
                 "parent should NOT be self-affected for a property-only change");
     }
 
+    // --- containsAnyPropertyRef single-pass scan tests (#112) ---
+
+    @Test
+    void containsAnyPropertyRef_matchesSingleProperty() {
+        assertTrue(PomChangeAnalyzer.containsAnyPropertyRef("app.version=${dep.version}", Set.of("dep.version")));
+    }
+
+    @Test
+    void containsAnyPropertyRef_matchesOneOfMany() {
+        assertTrue(PomChangeAnalyzer.containsAnyPropertyRef(
+                "v=${dep.version}", Set.of("other.prop", "dep.version", "foo")));
+    }
+
+    @Test
+    void containsAnyPropertyRef_noMatchWhenDifferentProperty() {
+        assertFalse(PomChangeAnalyzer.containsAnyPropertyRef("v=${some.other}", Set.of("dep.version")));
+    }
+
+    @Test
+    void containsAnyPropertyRef_noMatchOnEmptyContent() {
+        assertFalse(PomChangeAnalyzer.containsAnyPropertyRef("", Set.of("dep.version")));
+    }
+
+    @Test
+    void containsAnyPropertyRef_noMatchOnEmptyPropertySet() {
+        assertFalse(PomChangeAnalyzer.containsAnyPropertyRef("v=${dep.version}", Set.of()));
+    }
+
+    @Test
+    void containsAnyPropertyRef_handlesMultiplePlaceholders() {
+        String content = "a=${foo} b=${bar} c=${baz}";
+        assertTrue(PomChangeAnalyzer.containsAnyPropertyRef(content, Set.of("bar")));
+        assertFalse(PomChangeAnalyzer.containsAnyPropertyRef(content, Set.of("qux")));
+    }
+
+    @Test
+    void containsAnyPropertyRef_handlesUnterminatedPlaceholder() {
+        // "${foo" with no closing brace should not match
+        assertFalse(PomChangeAnalyzer.containsAnyPropertyRef("v=${foo", Set.of("foo")));
+    }
+
+    @Test
+    void containsAnyPropertyRef_handlesNestedDollarSigns() {
+        // "$$" is not a placeholder
+        assertFalse(PomChangeAnalyzer.containsAnyPropertyRef("v=$$", Set.of("$")));
+        assertTrue(PomChangeAnalyzer.containsAnyPropertyRef("v=$${prop}", Set.of("prop")));
+    }
+
+    @Test
+    void containsAnyPropertyRef_handlesEmptyPlaceholder() {
+        // "${}" has an empty name, should match if empty string is in the set
+        assertTrue(PomChangeAnalyzer.containsAnyPropertyRef("v=${}", Set.of("")));
+        assertFalse(PomChangeAnalyzer.containsAnyPropertyRef("v=${}", Set.of("x")));
+    }
+
+    @Test
+    void containsAnyPropertyRef_handlesAdjacentPlaceholders() {
+        assertTrue(PomChangeAnalyzer.containsAnyPropertyRef("${a}${b}${c}", Set.of("c")));
+        assertFalse(PomChangeAnalyzer.containsAnyPropertyRef("${a}${b}${c}", Set.of("d")));
+    }
+
     // --- IO error conservative handling tests ---
     //
     // The #131 effective-model rework removed readPomText; the equivalent failure

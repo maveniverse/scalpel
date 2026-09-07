@@ -647,13 +647,13 @@ class PomChangeAnalyzer {
             }
         }
 
-        int affectedCount = 0;
-        for (MavenProject dep : dependentProjects) {
-            if (ctx.affected.contains(dep)) {
-                affectedCount++;
-            }
-        }
         if (logger.isDebugEnabled()) {
+            int affectedCount = 0;
+            for (MavenProject dep : dependentProjects) {
+                if (ctx.affected.contains(dep)) {
+                    affectedCount++;
+                }
+            }
             logger.debug(
                     "Parent {} analysis complete: {} of {} dependents affected",
                     key(parentProject),
@@ -1359,12 +1359,7 @@ class PomChangeAnalyzer {
             return false;
         }
 
-        List<String> refs = new ArrayList<>();
-        for (String prop : unscanned) {
-            refs.add("${" + prop + "}");
-        }
-
-        if (scanFilteredResources(project, refs, ctx)) {
+        if (scanFilteredResources(project, unscanned, ctx)) {
             return true;
         }
         // No match found — record scanned properties for memoization (#114)
@@ -1394,7 +1389,7 @@ class PomChangeAnalyzer {
      * Scan all filtered resource directories of the given project for any of the given
      * property references.
      */
-    private boolean scanFilteredResources(MavenProject project, List<String> refs, AnalysisContext ctx) {
+    private boolean scanFilteredResources(MavenProject project, Set<String> changedPropertyNames, AnalysisContext ctx) {
         List<Resource> allResources = new ArrayList<>();
         if (project.getResources() != null) {
             allResources.addAll(project.getResources());
@@ -1418,7 +1413,7 @@ class PomChangeAnalyzer {
             if (!Files.isDirectory(resourceDir)) {
                 continue;
             }
-            if (scanDirectoryForPropertyRefs(resourceDir, refs, ctx)) {
+            if (scanDirectoryForPropertyRefs(resourceDir, changedPropertyNames, ctx)) {
                 logger.debug(
                         "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
                 return true;
@@ -1430,7 +1425,7 @@ class PomChangeAnalyzer {
     private static final int MAX_RESOURCE_WALK_DEPTH = 32;
     private static final int MAX_RESOURCE_WALK_FILES = 10_000;
 
-    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs, AnalysisContext ctx) {
+    private boolean scanDirectoryForPropertyRefs(Path dir, Set<String> changedPropertyNames, AnalysisContext ctx) {
         // Does not follow symbolic links: a symlink could loop forever or point
         // outside the module (leaking file content into the analysis)
         // Every exit path adds the entries it visited to ctx.resourcesVisited (#99).
@@ -1475,7 +1470,7 @@ class PomChangeAnalyzer {
                             if (attrs.isSymbolicLink()) {
                                 return FileVisitResult.CONTINUE;
                             }
-                            if (checkFileForPropertyRefs(file, attrs, refs)) {
+                            if (checkFileForPropertyRefs(file, attrs, changedPropertyNames)) {
                                 foundRef[0] = true;
                                 return FileVisitResult.TERMINATE;
                             }
@@ -1518,9 +1513,10 @@ class PomChangeAnalyzer {
      * {@link BasicFileAttributes} provided by {@code walkFileTree} (no extra stat),
      * and the content is read once with {@code Files.readAllBytes}. Binary detection
      * (NUL-byte scan, same heuristic as git) is performed in-memory on the first
-     * 8000 bytes of the already-read buffer.
+     * 8000 bytes of the already-read buffer. Property matching uses a single-pass
+     * scan (#112): O(len + P) instead of O(P × len).
      */
-    private boolean checkFileForPropertyRefs(Path entry, BasicFileAttributes attrs, List<String> refs) {
+    private boolean checkFileForPropertyRefs(Path entry, BasicFileAttributes attrs, Set<String> changedPropertyNames) {
         try {
             long size = attrs.size();
             if (size > 1024 * 1024) {
@@ -1544,11 +1540,9 @@ class PomChangeAnalyzer {
                 }
             }
             String content = new String(bytes, StandardCharsets.UTF_8);
-            for (String ref : refs) {
-                if (content.contains(ref)) {
-                    return true;
-                }
-            }
+            // Single-pass scan: extract all ${...} placeholder names and check
+            // intersection with changed property names (#112)
+            return containsAnyPropertyRef(content, changedPropertyNames);
         } catch (IOException e) {
             // Conservative: treat an unreadable file as potentially containing
             // property references. Under-building is the worst failure mode.
@@ -1557,6 +1551,33 @@ class PomChangeAnalyzer {
                     entry,
                     e.getMessage());
             return true;
+        }
+    }
+
+    /**
+     * Single-pass scan of {@code content} for Maven property placeholders {@code ${name}}.
+     * Extracts every placeholder token and checks if any appears in {@code propertyNames}.
+     * <p>
+     * Complexity: O(len + P) where len is content length and P is |propertyNames|,
+     * compared to the previous O(P × len) approach of calling {@code contains()} per property.
+     */
+    static boolean containsAnyPropertyRef(String content, Set<String> propertyNames) {
+        int len = content.length();
+        int i = 0;
+        while (i < len - 2) { // need at least "${}"
+            int start = content.indexOf("${", i);
+            if (start < 0) {
+                break;
+            }
+            int end = content.indexOf('}', start + 2);
+            if (end < 0) {
+                break;
+            }
+            String name = content.substring(start + 2, end);
+            if (propertyNames.contains(name)) {
+                return true;
+            }
+            i = end + 1;
         }
         return false;
     }
