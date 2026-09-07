@@ -300,7 +300,9 @@ class PomChangeAnalyzer {
         Set<MavenProject> parents;
         Map<MavenProject, List<MavenProject>> bomImporters;
         List<MavenProject> allProjects;
-        Path reactorRoot;
+        /** Already-normalized reactor root — avoids redundant normalization in loops (#113). */
+        Path normalizedRoot;
+
         boolean explain;
 
         // Accumulators — populated during analysis
@@ -342,10 +344,12 @@ class PomChangeAnalyzer {
             ModelResolutionContext resolutionCtx) {
 
         // Build a map of relative POM path -> MavenProject
+        // Normalize the reactor root once rather than per project (#113)
+        Path normalizedRoot = reactorRoot.toAbsolutePath().normalize();
         Map<String, MavenProject> projectByPomPath = new LinkedHashMap<>();
         for (MavenProject project : allProjects) {
             Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
-            Path relativePom = reactorRoot.toAbsolutePath().normalize().relativize(pomPath);
+            Path relativePom = normalizedRoot.relativize(pomPath);
             projectByPomPath.put(relativePom.toString().replace('\\', '/'), project);
         }
 
@@ -372,7 +376,7 @@ class PomChangeAnalyzer {
         ctx.parents = parents;
         ctx.bomImporters = bomImporters;
         ctx.allProjects = allProjects;
-        ctx.reactorRoot = reactorRoot;
+        ctx.normalizedRoot = normalizedRoot;
         ctx.explain = explain;
 
         for (String changedPomPath : changedPomPaths) {
@@ -543,9 +547,7 @@ class PomChangeAnalyzer {
         // Use effective models for property and managed dep/plugin diffs.
         // Effective models have properties interpolated and profiles merged.
         Model newEffectiveModel = ctx.newEffectiveModels.getOrDefault(
-                ctx.reactorRoot
-                        .toAbsolutePath()
-                        .normalize()
+                ctx.normalizedRoot
                         .relativize(parentProject
                                 .getFile()
                                 .toPath()
@@ -591,7 +593,7 @@ class PomChangeAnalyzer {
                     changedManagedPlugins);
         }
 
-        Path absReactorRoot = ctx.reactorRoot.toAbsolutePath().normalize();
+        Path absReactorRoot = ctx.normalizedRoot;
 
         // Check each dependent (child or BOM importer) for impact.
         // Compare effective dependencies and plugins (the resolved dependency tree and

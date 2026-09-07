@@ -129,6 +129,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         logger.debug("Configuration: {}", config);
 
         Path reactorRoot = session.getRequest().getMultiModuleProjectDirectory().toPath();
+        // Normalize the reactor root once — hoisted out of all per-project loops (#113)
+        Path normalizedRoot = reactorRoot.toAbsolutePath().normalize();
         List<MavenProject> allProjects = session.getProjects();
 
         Timings timings = new Timings();
@@ -138,7 +140,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> allPomPaths = new LinkedHashSet<>();
             for (MavenProject project : allProjects) {
                 Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
-                Path relativePom = reactorRoot.toAbsolutePath().normalize().relativize(pomPath);
+                Path relativePom = normalizedRoot.relativize(pomPath);
                 allPomPaths.add(relativePom.toString().replace('\\', '/'));
             }
 
@@ -324,7 +326,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                     writeReport(
                             config,
-                            reactorRoot,
+                            normalizedRoot,
                             allProjects,
                             AnalysisContext.empty(
                                     changedFiles,
@@ -390,7 +392,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                     writeReport(
                             config,
-                            reactorRoot,
+                            normalizedRoot,
                             allProjects,
                             AnalysisContext.empty(
                                     changedFiles,
@@ -417,8 +419,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             List<PathMatcher> includeMatchers = compileGlobMatchers(config.getIncludePaths());
             if (!includeMatchers.isEmpty()) {
                 int beforeCount = allAffected.size();
-                directlyAffected.removeIf(p -> !matchesIncludePaths(p, includeMatchers, reactorRoot));
-                transitivelyAffected.keySet().removeIf(p -> !matchesIncludePaths(p, includeMatchers, reactorRoot));
+                directlyAffected.removeIf(p -> !matchesIncludePaths(p, includeMatchers, normalizedRoot));
+                transitivelyAffected.keySet().removeIf(p -> !matchesIncludePaths(p, includeMatchers, normalizedRoot));
                 testOnlyModules.retainAll(directlyAffected);
                 forceIncluded.retainAll(directlyAffected);
 
@@ -438,7 +440,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         }
                         writeReport(
                                 config,
-                                reactorRoot,
+                                normalizedRoot,
                                 allProjects,
                                 AnalysisContext.empty(
                                         changedFiles,
@@ -457,7 +459,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Write impacted module log if configured
             if (config.getImpactedLog() != null) {
-                writeImpactedLog(config, reactorRoot, allAffected);
+                writeImpactedLog(config, normalizedRoot, allAffected);
             }
 
             if (config.isPassiveMode()) {
@@ -480,7 +482,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
                 writeReport(
                         config,
-                        reactorRoot,
+                        normalizedRoot,
                         allProjects,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
@@ -527,7 +529,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                     Set<String> wouldHaveBuilt = new LinkedHashSet<>();
                     java.util.function.Function<MavenProject, String> moduleKey = project -> {
-                        String path = relativePath(reactorRoot, project);
+                        String path = relativePath(normalizedRoot, project);
                         // The root aggregator relativizes to the empty string; report it as
                         // "." like the impacted log does (#84) so every module has a name.
                         return path.isEmpty() ? "." : path;
@@ -541,7 +543,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         decisionBuildSet = new ArrayList<>(decisionBuildSet);
                         decisionBuildSet.removeIf(project -> !affected.contains(project)
                                 && !decision.getUpstreamOnly().contains(project)
-                                && !matchesIncludePaths(project, includeMatchers, reactorRoot));
+                                && !matchesIncludePaths(project, includeMatchers, normalizedRoot));
                     }
                     for (MavenProject project : decisionBuildSet) {
                         wouldHaveBuilt.add(moduleKey.apply(project));
@@ -597,7 +599,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             oldEffectiveModels,
                             newEffectiveModels,
                             includeMatchers,
-                            reactorRoot,
+                            normalizedRoot,
                             collectCache,
                             oldCollectCache,
                             timings);
@@ -617,7 +619,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     buildSet = new ArrayList<>(buildSet);
                     buildSet.removeIf(p -> !finalAllAffected.contains(p)
                             && !trimResult.getUpstreamOnly().contains(p)
-                            && !matchesIncludePaths(p, includeMatchers, reactorRoot));
+                            && !matchesIncludePaths(p, includeMatchers, normalizedRoot));
                 }
                 logger.info(
                         "Scalpel: Building {} of {} modules: {}", buildSet.size(), allProjects.size(), keys(buildSet));
@@ -631,7 +633,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 // minus buildSet) is reviewable alongside the green trimmed build (#91)
                 writeReport(
                         config,
-                        reactorRoot,
+                        normalizedRoot,
                         allProjects,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
@@ -1899,10 +1901,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
     }
 
-    private static String relativePath(Path reactorRoot, MavenProject project) {
-        return reactorRoot
-                .toAbsolutePath()
-                .normalize()
+    private static String relativePath(Path normalizedRoot, MavenProject project) {
+        return normalizedRoot
                 .relativize(project.getBasedir().toPath().toAbsolutePath().normalize())
                 .toString()
                 .replace('\\', '/');

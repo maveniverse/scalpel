@@ -167,6 +167,149 @@ class ModuleMapperTest {
                 "src/ files at root should map to the root project");
     }
 
+    // --- Tests for the hash-lookup algorithm (#113) ---
+
+    @Test
+    void mapToProjectsClassified_nestedModulesMapToDeepest() {
+        Path root = tempDir;
+        // parent > parent/child > parent/child/grandchild
+        MavenProject rootProject =
+                createProject("com.example", "root", root.resolve("pom.xml").toFile());
+        MavenProject parentModule = createProject(
+                "com.example", "parent", root.resolve("parent/pom.xml").toFile());
+        MavenProject childModule = createProject(
+                "com.example", "child", root.resolve("parent/child/pom.xml").toFile());
+        MavenProject grandchild = createProject(
+                "com.example",
+                "grandchild",
+                root.resolve("parent/child/grandchild/pom.xml").toFile());
+        List<MavenProject> projects = List.of(rootProject, parentModule, childModule, grandchild);
+
+        // A file in grandchild should map to grandchild, not parent or child
+        Set<String> changedFiles = new LinkedHashSet<>(List.of("parent/child/grandchild/src/main/java/App.java"));
+
+        ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
+
+        assertEquals(1, result.getMainAffected().size());
+        assertTrue(
+                result.getMainAffected().contains(grandchild),
+                "file in deeply nested module should map to the deepest matching module");
+    }
+
+    @Test
+    void mapToProjectsClassified_fileInIntermediateModuleMapsCorrectly() {
+        Path root = tempDir;
+        MavenProject rootProject =
+                createProject("com.example", "root", root.resolve("pom.xml").toFile());
+        MavenProject parentModule = createProject(
+                "com.example", "parent", root.resolve("parent/pom.xml").toFile());
+        MavenProject childModule = createProject(
+                "com.example", "child", root.resolve("parent/child/pom.xml").toFile());
+        List<MavenProject> projects = List.of(rootProject, parentModule, childModule);
+
+        // A file in parent (not in child) should map to parent
+        Set<String> changedFiles = new LinkedHashSet<>(List.of("parent/src/main/java/ParentApp.java"));
+
+        ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
+
+        assertEquals(1, result.getMainAffected().size());
+        assertTrue(
+                result.getMainAffected().contains(parentModule),
+                "file in parent module should map to parent, not child");
+    }
+
+    @Test
+    void mapToProjectsClassified_largeFileSetPerformance() {
+        Path root = tempDir;
+        // Simulate a large reactor with many modules
+        List<MavenProject> projects = new java.util.ArrayList<>();
+        MavenProject rootProject =
+                createProject("com.example", "root", root.resolve("pom.xml").toFile());
+        projects.add(rootProject);
+        for (int i = 0; i < 200; i++) {
+            String moduleName = "module-" + i;
+            projects.add(createProject(
+                    "com.example",
+                    moduleName,
+                    root.resolve(moduleName + "/pom.xml").toFile()));
+        }
+
+        // 2000 changed files across various modules
+        Set<String> changedFiles = new LinkedHashSet<>();
+        for (int i = 0; i < 2000; i++) {
+            String module = "module-" + (i % 200);
+            changedFiles.add(module + "/src/main/java/com/example/Class" + i + ".java");
+        }
+
+        // This should complete quickly with hash-based lookup
+        long start = System.nanoTime();
+        ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
+        long elapsed = System.nanoTime() - start;
+
+        // All 200 modules should be affected
+        assertEquals(200, result.getAllAffected().size());
+        // Should complete in well under 1 second (hash lookups are O(1))
+        assertTrue(
+                elapsed < 1_000_000_000L,
+                "Large file set should complete in <1s but took " + (elapsed / 1_000_000) + "ms");
+    }
+
+    @Test
+    void mapToProjectsClassified_fileUnderNonModuleDir_fallsToRoot() {
+        Path root = tempDir;
+        MavenProject rootProject =
+                createProject("com.example", "root", root.resolve("pom.xml").toFile());
+        MavenProject moduleA = createProject(
+                "com.example", "module-a", root.resolve("module-a/pom.xml").toFile());
+        List<MavenProject> projects = List.of(rootProject, moduleA);
+
+        // A file under a directory that isn't a module should fall back to root
+        Set<String> changedFiles = new LinkedHashSet<>(List.of("scripts/build.sh"));
+
+        ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
+
+        assertEquals(1, result.getMainAffected().size());
+        assertTrue(
+                result.getMainAffected().contains(rootProject),
+                "file in non-module dir should fall back to root project");
+    }
+
+    @Test
+    void mapToProjectsClassified_explainDisabled_noTriggeringFiles() {
+        Path root = tempDir;
+        List<MavenProject> projects = createProjects(root);
+
+        Set<String> changedFiles = new LinkedHashSet<>(List.of("module-a/src/main/java/Foo.java"));
+
+        ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root, false);
+
+        assertEquals(1, result.getMainAffected().size());
+        assertTrue(result.getTriggeringFiles().isEmpty(), "triggering files should be empty when explain=false");
+    }
+
+    @Test
+    void getRelativePath_normalizedRootOptimization() {
+        Path root = tempDir;
+        Path normalizedRoot = root.toAbsolutePath().normalize();
+        MavenProject project = createProject(
+                "com.example", "module-a", root.resolve("module-a/pom.xml").toFile());
+
+        // Static getRelativePath should work with pre-normalized root
+        String relPath = ModuleMapper.getRelativePath(project, normalizedRoot);
+        assertEquals("module-a", relPath);
+    }
+
+    @Test
+    void getRelativePath_rootProject() {
+        Path root = tempDir;
+        Path normalizedRoot = root.toAbsolutePath().normalize();
+        MavenProject project =
+                createProject("com.example", "root", root.resolve("pom.xml").toFile());
+
+        String relPath = ModuleMapper.getRelativePath(project, normalizedRoot);
+        assertEquals("", relPath, "root project should have empty relative path");
+    }
+
     private List<MavenProject> createProjects(Path root) {
         MavenProject parent =
                 createProject("com.example", "parent", root.resolve("pom.xml").toFile());
