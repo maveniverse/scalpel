@@ -184,6 +184,44 @@ public final class ScalpelConfiguration {
      */
     public static final String MAX_RESOURCE_FILE_SIZE = PREFIX + "maxResourceFileSize";
 
+    /**
+     * System property {@code scalpel.excludeChanges}: comma-separated glob patterns over change
+     * paths that should be excluded from the effective model comparison. Excluded changes are
+     * treated as if they did not happen — a module is not marked as affected by them.
+     *
+     * <p>Change paths follow a normalized scheme:
+     * <ul>
+     *   <li>{@code properties/<name>} — e.g. {@code properties/build.timestamp}</li>
+     *   <li>{@code dependencies/<groupId>:<artifactId>} — e.g. {@code dependencies/com.foo:bar}</li>
+     *   <li>{@code plugins/<groupId>:<artifactId>}</li>
+     *   <li>{@code managedDependencies/<groupId>:<artifactId>}</li>
+     *   <li>{@code managedPlugins/<groupId>:<artifactId>}</li>
+     *   <li>{@code resources/<path>} — filtered resource files referencing changed properties</li>
+     * </ul>
+     *
+     * <p>Default: {@code properties/build.timestamp,properties/project.build.outputTimestamp}
+     * (volatile properties that change on every build and don't affect compilation).
+     *
+     * @see #INCLUDE_CHANGES
+     */
+    public static final String EXCLUDE_CHANGES = PREFIX + "excludeChanges";
+
+    /**
+     * System property {@code scalpel.includeChanges}: comma-separated glob patterns over change
+     * paths that force inclusion in the effective model comparison, even if the change would
+     * normally be ignored (e.g. because the property is inherited but not in the child's raw model).
+     *
+     * <p>Include patterns are applied after exclude patterns and override them: a change matching
+     * both an exclude and an include pattern is included.
+     *
+     * <p>Uses the same change path scheme as {@link #EXCLUDE_CHANGES}.
+     *
+     * <p>Default: none.
+     *
+     * @see #EXCLUDE_CHANGES
+     */
+    public static final String INCLUDE_CHANGES = PREFIX + "includeChanges";
+
     /** Mode value selecting {@code trim}: drop unaffected modules from the reactor. */
     public static final String MODE_TRIM = "trim";
 
@@ -205,6 +243,13 @@ public final class ScalpelConfiguration {
 
     /** Default value for {@link #REPORT_FILE}: {@code target/scalpel-report.json}. */
     private static final String DEFAULT_REPORT_FILE = "target/scalpel-report.json";
+
+    /**
+     * Default value for {@link #EXCLUDE_CHANGES}: volatile timestamp properties that change on
+     * every build and do not affect compilation output.
+     */
+    private static final String DEFAULT_EXCLUDE_CHANGES =
+            "properties/build.timestamp,properties/project.build.outputTimestamp";
 
     /** Default value for {@link #MAX_RESOURCE_FILE_SIZE}: ten mebibytes ({@code 10 * 1024 * 1024}). */
     public static final long DEFAULT_MAX_RESOURCE_FILE_SIZE = 10L * 1024 * 1024; // 10 MB
@@ -236,7 +281,9 @@ public final class ScalpelConfiguration {
             BUILD_ALL_IF_NO_CHANGES,
             IMPACTED_LOG,
             REPORT_FILE,
-            MAX_RESOURCE_FILE_SIZE)));
+            MAX_RESOURCE_FILE_SIZE,
+            EXCLUDE_CHANGES,
+            INCLUDE_CHANGES)));
 
     private final boolean enabled;
     private final String baseBranch;
@@ -265,6 +312,8 @@ public final class ScalpelConfiguration {
     private final boolean explain;
     private final String reportFile;
     private final long maxResourceFileSize;
+    private final List<String> excludeChanges;
+    private final List<String> includeChanges;
     private final List<String> warnings;
 
     private ScalpelConfiguration(
@@ -295,6 +344,8 @@ public final class ScalpelConfiguration {
             boolean explain,
             String reportFile,
             long maxResourceFileSize,
+            List<String> excludeChanges,
+            List<String> includeChanges,
             List<String> warnings) {
         this.enabled = enabled;
         this.baseBranch = baseBranch;
@@ -323,6 +374,8 @@ public final class ScalpelConfiguration {
         this.explain = explain;
         this.reportFile = reportFile;
         this.maxResourceFileSize = maxResourceFileSize;
+        this.excludeChanges = excludeChanges;
+        this.includeChanges = includeChanges;
         this.warnings = warnings;
     }
 
@@ -398,6 +451,9 @@ public final class ScalpelConfiguration {
             }
         }
 
+        List<String> excludeChanges = parseList(resolve(system, user, EXCLUDE_CHANGES, DEFAULT_EXCLUDE_CHANGES));
+        List<String> includeChanges = parseList(resolve(system, user, INCLUDE_CHANGES, null));
+
         List<String> warnings = detectUnknownKeys(system, user);
 
         return new ScalpelConfiguration(
@@ -428,6 +484,8 @@ public final class ScalpelConfiguration {
                 explain,
                 reportFile,
                 maxResourceFileSize,
+                excludeChanges,
+                includeChanges,
                 warnings);
     }
 
@@ -721,6 +779,26 @@ public final class ScalpelConfiguration {
     }
 
     /**
+     * Returns the glob patterns over change paths that are excluded from effective model comparison.
+     * Default: {@code properties/build.timestamp,properties/project.build.outputTimestamp}.
+     *
+     * @see #EXCLUDE_CHANGES
+     */
+    public List<String> getExcludeChanges() {
+        return excludeChanges;
+    }
+
+    /**
+     * Returns the glob patterns over change paths that force inclusion in effective model comparison.
+     * Default: none.
+     *
+     * @see #INCLUDE_CHANGES
+     */
+    public List<String> getIncludeChanges() {
+        return includeChanges;
+    }
+
+    /**
      * Returns configuration warnings collected during parsing (e.g. unknown {@code scalpel.*} keys
      * with a "did you mean" suggestion). Empty when the configuration is clean.
      */
@@ -758,6 +836,8 @@ public final class ScalpelConfiguration {
                 + ", failSafe=" + failSafe
                 + ", reportFile='" + reportFile + '\''
                 + ", maxResourceFileSize=" + maxResourceFileSize
+                + ", excludeChanges=" + excludeChanges
+                + ", includeChanges=" + includeChanges
                 + ", warnings=" + warnings
                 + '}';
     }

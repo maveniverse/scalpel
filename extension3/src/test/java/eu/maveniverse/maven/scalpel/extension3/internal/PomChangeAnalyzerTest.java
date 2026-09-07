@@ -125,6 +125,25 @@ class PomChangeAnalyzerTest {
                 changedPomPaths, oldPomContents, allProjects, reactorRoot, true, defaultResolutionCtx);
     }
 
+    /** Convenience wrapper with change filter patterns. */
+    private PomChangeAnalyzer.Result analyzeChanges(
+            Set<String> changedPomPaths,
+            Map<String, byte[]> oldPomContents,
+            List<MavenProject> allProjects,
+            Path reactorRoot,
+            List<String> excludeChangePatterns,
+            List<String> includeChangePatterns) {
+        return analyzer.analyzeChanges(
+                changedPomPaths,
+                oldPomContents,
+                allProjects,
+                reactorRoot,
+                true,
+                defaultResolutionCtx,
+                excludeChangePatterns,
+                includeChangePatterns);
+    }
+
     /**
      * Derive changed managed dependency GAs from result's effective models.
      * Mirrors ScalpelLifecycleParticipant.deriveChangedManagedDeps for test assertions.
@@ -2701,6 +2720,335 @@ class PomChangeAnalyzerTest {
         projects.add(moduleA);
         projects.add(moduleB);
         return projects;
+    }
+
+    // --- Change filter (include/exclude) tests (#148) ---
+
+    @Test
+    void changeFilter_acceptsAll_whenEmpty() {
+        PomChangeAnalyzer.ChangeFilter filter = new PomChangeAnalyzer.ChangeFilter(List.of(), List.of());
+        assertTrue(filter.accepts("properties/foo.version"));
+        assertTrue(filter.accepts("dependencies/com.foo:bar"));
+        assertFalse(filter.isActive());
+    }
+
+    @Test
+    void changeFilter_excludesMatchingPattern() {
+        PomChangeAnalyzer.ChangeFilter filter =
+                new PomChangeAnalyzer.ChangeFilter(List.of("properties/build.*"), List.of());
+        assertFalse(filter.accepts("properties/build.timestamp"));
+        assertFalse(filter.accepts("properties/build.number"));
+        assertTrue(filter.accepts("properties/dep.version"));
+        assertTrue(filter.isActive());
+    }
+
+    @Test
+    void changeFilter_excludeGlobStar() {
+        PomChangeAnalyzer.ChangeFilter filter =
+                new PomChangeAnalyzer.ChangeFilter(List.of("managedDependencies/**"), List.of());
+        assertFalse(filter.accepts("managedDependencies/com.foo:bar"));
+        assertTrue(filter.accepts("dependencies/com.foo:bar"));
+    }
+
+    @Test
+    void changeFilter_includeOverridesExclude() {
+        PomChangeAnalyzer.ChangeFilter filter =
+                new PomChangeAnalyzer.ChangeFilter(List.of("properties/*"), List.of("properties/maven.compiler.*"));
+        assertFalse(filter.accepts("properties/foo.version"));
+        assertTrue(filter.accepts("properties/maven.compiler.source"));
+        assertTrue(filter.accepts("properties/maven.compiler.target"));
+    }
+
+    @Test
+    void changeFilter_multipleExcludePatterns() {
+        PomChangeAnalyzer.ChangeFilter filter = new PomChangeAnalyzer.ChangeFilter(
+                List.of("properties/build.timestamp", "properties/project.build.outputTimestamp", "properties/git.*"),
+                List.of());
+        assertFalse(filter.accepts("properties/build.timestamp"));
+        assertFalse(filter.accepts("properties/project.build.outputTimestamp"));
+        assertFalse(filter.accepts("properties/git.commit.id"));
+        assertTrue(filter.accepts("properties/dep.version"));
+    }
+
+    @Test
+    void analyzeChanges_excludeVolatileProperty() throws Exception {
+        // Parent has dep.version property that changes. Child's my.ref depends on it.
+        // With excludeChanges for properties/my.*, child should NOT be affected.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root, "dep.version");
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>1.0</dep.version>
+                  </properties>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        // Without filter: module-b is affected (my.dep.version.ref changes)
+        Set<MavenProject> affectedNoFilter =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+        MavenProject moduleB = projects.get(2);
+        assertTrue(affectedNoFilter.contains(moduleB), "Without filter, module-b should be affected");
+
+        // With excludeChanges for the child's property: module-b should NOT be affected
+        Set<MavenProject> affectedWithFilter = analyzeChanges(
+                        changedPoms, oldPoms, projects, root, List.of("properties/my.dep.version.ref"), List.of())
+                .getAffectedProjects();
+        assertFalse(
+                affectedWithFilter.contains(moduleB),
+                "With excludeChanges for properties/my.dep.version.ref, module-b should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_excludeGitProperties() throws Exception {
+        // Parent has git.version property that changes. Child has my.git.version.ref that depends on it.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root, "git.version");
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <git.version>abc123</git.version>
+                  </properties>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected = analyzeChanges(
+                        changedPoms, oldPoms, projects, root, List.of("properties/my.git.version.ref"), List.of())
+                .getAffectedProjects();
+        MavenProject moduleB = projects.get(2);
+        assertFalse(affected.contains(moduleB), "my.git.version.ref excluded by explicit pattern");
+    }
+
+    @Test
+    void analyzeChanges_includeOverridesExclude() throws Exception {
+        // Exclude all child properties matching my.*, but include my.app.source.ref specifically
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root, "app.source");
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <app.source>11</app.source>
+                  </properties>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        // Exclude all 'my.*' properties, but include 'my.app.source.*' — child should still be affected
+        Set<MavenProject> affected = analyzeChanges(
+                        changedPoms,
+                        oldPoms,
+                        projects,
+                        root,
+                        List.of("properties/my.*"),
+                        List.of("properties/my.app.source.*"))
+                .getAffectedProjects();
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleB),
+                "my.app.source.ref should override the exclude pattern and affect module-b");
+    }
+
+    @Test
+    void analyzeChanges_excludeManagedDependency() throws Exception {
+        // Exclude all managed dependency changes
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithDepMgmtUsage(root);
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId>
+                      <artifactId>lib-x</artifactId>
+                      <version>1.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        // Without filter: module-b is affected
+        Set<MavenProject> affectedNoFilter =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+        MavenProject moduleB = projects.get(2);
+        assertTrue(affectedNoFilter.contains(moduleB), "Without filter, module-b uses lib-x and should be affected");
+
+        // With excludeChanges for dependencies/com.example:lib-x
+        Set<MavenProject> affected = analyzeChanges(
+                        changedPoms, oldPoms, projects, root, List.of("dependencies/com.example:lib-x"), List.of())
+                .getAffectedProjects();
+        assertFalse(
+                affected.contains(moduleB),
+                "With dependencies/com.example:lib-x excluded, module-b should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_excludePropertyAlsoExcludesFromFilteredResources() throws Exception {
+        // When a property is excluded by change filter, it should also be excluded
+        // from the filtered resource check
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root, "build.timestamp");
+
+        // Create a filtered resource that uses the property
+        Path resourceDir = root.resolve("module-b/src/main/resources");
+        Files.createDirectories(resourceDir);
+        Files.writeString(resourceDir.resolve("version.properties"), "built.at=${build.timestamp}");
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <build.timestamp>2024-01-01T00:00:00Z</build.timestamp>
+                  </properties>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        // The property is excluded: even though filtered resources reference it,
+        // the property should not be in changedProperties
+        PomChangeAnalyzer.Result result =
+                analyzeChanges(changedPoms, oldPoms, projects, root, List.of("properties/build.timestamp"), List.of());
+        assertFalse(
+                result.getChangedProperties().contains("build.timestamp"),
+                "Excluded property should not appear in changedProperties");
+    }
+
+    @Test
+    void analyzeChanges_modulesChangeDoesNotAffectChildren() throws Exception {
+        // Adding a new module to the parent should NOT affect existing children
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+
+        // Old POM had only module-a
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module></modules>
+                </project>
+                """;
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+        assertFalse(affected.contains(moduleA), "Adding a new module should NOT affect existing module-a");
+        assertFalse(affected.contains(moduleB), "Adding a new module should NOT affect existing module-b");
+    }
+
+    /**
+     * Create a reactor where module-b defines a property that the parent also defines.
+     * The parent's new value differs from the old value, causing the child's effective
+     * property value to change. Module-b redeclares the property so the effective model
+     * comparison finds the change under the exact property name.
+     */
+    private List<MavenProject> createReactorWithPropertyUsage(Path root, String propertyName) throws IOException {
+        // Current (new) parent has the property with a new value
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <%s>new-value</%s>
+                  </properties>
+                </project>
+                """.formatted(propertyName, propertyName);
+        writePom(root.resolve("pom.xml"), parentPomXml);
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+
+        // module-b uses the property in a dependency version; the property is also
+        // declared in the child's properties so hasEffectiveChanges can detect it
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <properties>
+                    <my.%s.ref>${%s}</my.%s.ref>
+                  </properties>
+                </project>
+                """.formatted(propertyName, propertyName, propertyName);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        return buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
     }
 
     private Path setupReactorRoot() throws IOException {
