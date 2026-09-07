@@ -1505,7 +1505,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         try {
             // The path is PR-controllable through .mvn/maven.config; neither write may
             // land outside the reactor root (#97).
-            logPath = ScalpelReport.resolveContained(reactorRoot, impactedLog, "scalpel.impactedLog");
+            logPath = ScalpelReport.resolveContained(reactorRoot, impactedLog, ScalpelConfiguration.IMPACTED_LOG);
         } catch (IOException e) {
             handleWriteFailure(config, "Rejected impacted log path", e);
             return;

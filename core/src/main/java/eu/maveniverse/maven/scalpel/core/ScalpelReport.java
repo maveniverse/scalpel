@@ -447,7 +447,7 @@ public final class ScalpelReport {
     }
 
     public void writeToFile(Path reactorRoot, String reportFile) throws IOException {
-        Path path = resolveContained(reactorRoot, reportFile, "scalpel.reportFile");
+        Path path = resolveContained(reactorRoot, reportFile, ScalpelConfiguration.REPORT_FILE);
         Files.createDirectories(path.getParent());
         Files.write(path, toJson().getBytes(StandardCharsets.UTF_8));
     }
