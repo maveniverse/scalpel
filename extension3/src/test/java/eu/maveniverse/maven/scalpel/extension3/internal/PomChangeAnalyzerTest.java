@@ -2575,6 +2575,264 @@ class PomChangeAnalyzerTest {
                         + " should be conservatively marked as affected");
     }
 
+    // --- Issue #114 optimization tests ---
+
+    @Test
+    void analyzeChanges_singleReadOptimization_binaryFileSkipped() throws Exception {
+        // Binary files (containing NUL bytes) should still be skipped by the
+        // single-read optimization: the NUL-check on the read buffer must detect
+        // them and return false (not affected) even though the file's text-decoded
+        // content might match a property ref pattern.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root);
+
+        // Create a resource directory with a binary file that contains ${dep.version}
+        // after a NUL byte — should be skipped as binary
+        Path resourceDir = root.resolve("module-a/src/main/resources");
+        Files.createDirectories(resourceDir);
+        byte[] binaryContent = new byte[100];
+        binaryContent[50] = 0; // NUL byte at position 50
+        byte[] propRef = "${dep.version}".getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(propRef, 0, binaryContent, 60, propRef.length);
+        Files.write(resourceDir.resolve("data.bin"), binaryContent);
+
+        MavenProject moduleA = projects.get(1);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleA.getModel().setBuild(build);
+
+        // Old parent POM had dep.version=1.0
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>1.0</dep.version>
+                  </properties>
+                </project>
+                """;
+
+        PomChangeAnalyzer.Result result = analyzeChanges(
+                Set.of("pom.xml"), Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)), projects, root);
+
+        assertFalse(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a with only a binary resource file (NUL byte in first 8000 bytes) should NOT be marked as affected");
+    }
+
+    @Test
+    void analyzeChanges_singleReadOptimization_textFileDetectsPropertyRef() throws Exception {
+        // Text files (no NUL bytes) should be scanned for property refs.
+        // The single-read optimization must still detect property references.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createReactorWithPropertyUsage(root);
+
+        // Create a resource directory with a text file referencing ${dep.version}
+        Path resourceDir = root.resolve("module-a/src/main/resources");
+        Files.createDirectories(resourceDir);
+        Files.write(
+                resourceDir.resolve("application.properties"),
+                "app.version=${dep.version}\n".getBytes(StandardCharsets.UTF_8));
+
+        MavenProject moduleA = projects.get(1);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleA.getModel().setBuild(build);
+
+        // Old parent POM had dep.version=1.0
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>1.0</dep.version>
+                  </properties>
+                </project>
+                """;
+
+        PomChangeAnalyzer.Result result = analyzeChanges(
+                Set.of("pom.xml"), Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)), projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a with a text resource referencing ${dep.version} should be marked as affected");
+    }
+
+    @Test
+    void analyzeChanges_crossParentMemoization_sharedChildScannedOnce() throws Exception {
+        // When two parent POMs change and share a child, the cross-parent memoization
+        // should prevent re-scanning the child's resource tree for properties already
+        // checked. The resourcesVisited count should reflect only one scan, not two.
+        Path root = tempDir.resolve("memo-project");
+        Files.createDirectories(root);
+        Files.createDirectories(root.resolve("mid"));
+        Files.createDirectories(root.resolve("leaf"));
+
+        // Structure: root-parent -> mid-parent -> leaf
+        // root-parent changes root.prop and shared.prop.
+        // mid-parent inherits from root-parent and adds no own properties.
+        // When both POMs are in the changed set, the effective property diff for
+        // mid-parent is a subset of root-parent's (both see root.prop, shared.prop
+        // via inheritance), so the second scan of leaf should be skipped by memoization.
+
+        String rootParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>root-parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>mid</module><module>leaf</module></modules>
+                  <properties>
+                    <root.prop>2.0</root.prop>
+                    <shared.prop>new-value</shared.prop>
+                  </properties>
+                </project>
+                """;
+        writePom(root.resolve("pom.xml"), rootParentPom);
+
+        // mid-parent inherits root-parent's properties, adds no new ones.
+        String midParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>root-parent</artifactId><version>1.0</version></parent>
+                  <artifactId>mid-parent</artifactId>
+                  <packaging>pom</packaging>
+                </project>
+                """;
+        writePom(root.resolve("mid/pom.xml"), midParentPom);
+
+        String leafPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>mid-parent</artifactId><version>1.0</version></parent>
+                  <artifactId>leaf-module</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("leaf/pom.xml"), leafPom);
+
+        // Create a filtered resource in leaf that does NOT reference any changed property
+        Path leafResourceDir = root.resolve("leaf/src/main/resources");
+        Files.createDirectories(leafResourceDir);
+        Files.write(
+                leafResourceDir.resolve("config.properties"),
+                "app.name=my-app\nversion=fixed\n".getBytes(StandardCharsets.UTF_8));
+
+        // Register reactor pom files
+        reactorPomFiles.put(
+                "com.example:root-parent:1.0", root.resolve("pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:mid-parent:1.0", root.resolve("mid/pom.xml").toFile());
+        reactorPomFiles.put(
+                "com.example:leaf-module:1.0", root.resolve("leaf/pom.xml").toFile());
+
+        MavenProject rootProject = createProject(
+                "com.example", "root-parent", "1.0", root.resolve("pom.xml").toFile());
+        rootProject.setOriginalModel(parseModel(rootParentPom));
+        rootProject.getModel().setPackaging("pom");
+        setEffectiveModel(rootProject, rootParentPom);
+
+        MavenProject midProject = createProject(
+                "com.example", "mid-parent", "1.0", root.resolve("mid/pom.xml").toFile());
+        midProject.setOriginalModel(parseModel(midParentPom));
+        midProject.setParent(rootProject);
+        midProject.getModel().setPackaging("pom");
+        setEffectiveModel(midProject, midParentPom);
+
+        MavenProject leafProject = createProject(
+                "com.example",
+                "leaf-module",
+                "1.0",
+                root.resolve("leaf/pom.xml").toFile());
+        leafProject.setOriginalModel(parseModel(leafPom));
+        leafProject.setParent(midProject);
+        setEffectiveModel(leafProject, leafPom);
+
+        // Add filtered resources to leaf
+        Resource resource = new Resource();
+        resource.setDirectory(leafResourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        leafProject.getModel().setBuild(build);
+
+        List<MavenProject> allProjects = List.of(rootProject, midProject, leafProject);
+
+        // Old POMs: root-parent had root.prop=1.0, shared.prop=old-value
+        // mid-parent was the same structure (no own properties, only inheritance)
+        String oldRootParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>root-parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>mid</module><module>leaf</module></modules>
+                  <properties>
+                    <root.prop>1.0</root.prop>
+                    <shared.prop>old-value</shared.prop>
+                  </properties>
+                </project>
+                """;
+
+        // mid-parent's old POM has the same structure (no own properties)
+        String oldMidParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>root-parent</artifactId><version>1.0</version></parent>
+                  <artifactId>mid-parent</artifactId>
+                  <packaging>pom</packaging>
+                </project>
+                """;
+
+        // Both parents changed — but mid-parent's effective property diff is a subset
+        // of root-parent's (both see root.prop, shared.prop via inheritance).
+        // Memoization should skip the second scan of leaf.
+        PomChangeAnalyzer.Result result = analyzeChanges(
+                Set.of("pom.xml", "mid/pom.xml"),
+                Map.of(
+                        "pom.xml", oldRootParentPom.getBytes(StandardCharsets.UTF_8),
+                        "mid/pom.xml", oldMidParentPom.getBytes(StandardCharsets.UTF_8)),
+                allProjects,
+                root);
+
+        // The leaf doesn't reference any changed properties, so it shouldn't be affected
+        assertFalse(
+                result.getAffectedProjects().contains(leafProject),
+                "leaf-module should not be affected (no property reference in resources)");
+
+        // The key assertion: resourcesVisited should show efficiency from memoization.
+        // Without memoization, leaf's resource dir would be walked twice (once per parent).
+        // With memoization, the second walk is skipped because root.prop and shared.prop
+        // were already scanned during the root-parent analysis.
+        // One traversal visits 2 entries (the directory + 1 file).
+        long visited = result.getResourcesVisited();
+        assertTrue(
+                visited <= 2,
+                "Cross-parent memoization should prevent double-scanning: expected ≤2 entries visited, got " + visited);
+    }
+
     // --- Helper methods ---
 
     private Path setupReactorRootWithBom() throws IOException {

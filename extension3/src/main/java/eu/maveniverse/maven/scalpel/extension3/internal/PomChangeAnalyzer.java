@@ -13,7 +13,6 @@ import static java.util.Objects.requireNonNull;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
@@ -310,6 +309,14 @@ class PomChangeAnalyzer {
         final List<String> unmatchedPomPaths = new ArrayList<>();
         /** Filesystem entries visited by filtered-resource scans (instrumentation, #99). */
         long resourcesVisited;
+
+        /**
+         * Cross-parent memoization for filtered-resource scans (#114).
+         * Tracks which property refs have already been scanned per child project.
+         * When multiple parent POMs change, the same child's resource tree is not
+         * re-walked for properties that were already checked.
+         */
+        final Map<MavenProject, Set<String>> resourceScannedProperties = new LinkedHashMap<>();
     }
 
     /**
@@ -1339,11 +1346,27 @@ class PomChangeAnalyzer {
      * Check if a project has filtered resources that reference any of the changed properties.
      * Filtered resources live outside the POM model, so effective model comparison cannot
      * detect property substitutions in resource files.
+     * <p>
+     * Cross-parent memoization (#114): tracks which properties have already been scanned
+     * per child project. Only unscanned properties trigger a new walk; if all requested
+     * properties were already checked (and found no match), the walk is skipped entirely.
      */
     private boolean hasFilteredResourcesWithChangedProperty(
             MavenProject project, Set<String> changedProperties, AnalysisContext ctx) {
-        List<String> refs = new ArrayList<>();
+        // Determine which properties still need scanning (cross-parent memoization)
+        Set<String> alreadyScanned = ctx.resourceScannedProperties.getOrDefault(project, Set.of());
+        Set<String> unscanned = new LinkedHashSet<>();
         for (String prop : changedProperties) {
+            if (!alreadyScanned.contains(prop)) {
+                unscanned.add(prop);
+            }
+        }
+        if (unscanned.isEmpty()) {
+            return false;
+        }
+
+        List<String> refs = new ArrayList<>();
+        for (String prop : unscanned) {
             refs.add("${" + prop + "}");
         }
 
@@ -1376,6 +1399,10 @@ class PomChangeAnalyzer {
                 return true;
             }
         }
+        // No match found — record scanned properties for memoization (#114)
+        ctx.resourceScannedProperties
+                .computeIfAbsent(project, k -> new LinkedHashSet<>())
+                .addAll(unscanned);
         return false;
     }
 
@@ -1427,7 +1454,7 @@ class PomChangeAnalyzer {
                             if (attrs.isSymbolicLink()) {
                                 return FileVisitResult.CONTINUE;
                             }
-                            if (checkFileForPropertyRefs(file, refs)) {
+                            if (checkFileForPropertyRefs(file, attrs, refs)) {
                                 foundRef[0] = true;
                                 return FileVisitResult.TERMINATE;
                             }
@@ -1463,12 +1490,18 @@ class PomChangeAnalyzer {
         return foundRef[0];
     }
 
-    private boolean checkFileForPropertyRefs(Path entry, List<String> refs) {
+    /**
+     * Check whether a file contains any of the given property references.
+     * <p>
+     * Uses a single filesystem read (#114): the file size comes from
+     * {@link BasicFileAttributes} provided by {@code walkFileTree} (no extra stat),
+     * and the content is read once with {@code Files.readAllBytes}. Binary detection
+     * (NUL-byte scan, same heuristic as git) is performed in-memory on the first
+     * 8000 bytes of the already-read buffer.
+     */
+    private boolean checkFileForPropertyRefs(Path entry, BasicFileAttributes attrs, List<String> refs) {
         try {
-            long size = Files.size(entry);
-            if (isBinaryFile(entry, size)) {
-                return false;
-            }
+            long size = attrs.size();
             if (size > 1024 * 1024) {
                 // Conservative: the pre-#131 analyzer treated filtered resources larger
                 // than the scan limit as affected; keep failing toward affected so an
@@ -1481,7 +1514,15 @@ class PomChangeAnalyzer {
                         size);
                 return true;
             }
-            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
+            byte[] bytes = Files.readAllBytes(entry);
+            // Binary detection: scan for NUL byte in the first 8000 bytes (git heuristic)
+            int binaryCheckLen = (int) Math.min(bytes.length, 8000);
+            for (int i = 0; i < binaryCheckLen; i++) {
+                if (bytes[i] == 0) {
+                    return false; // binary file — skip
+                }
+            }
+            String content = new String(bytes, StandardCharsets.UTF_8);
             for (String ref : refs) {
                 if (content.contains(ref)) {
                     return true;
@@ -1495,31 +1536,6 @@ class PomChangeAnalyzer {
                     entry,
                     e.getMessage());
             return true;
-        }
-        return false;
-    }
-
-    /**
-     * Detect binary files using the same heuristic as git: scan for a NUL byte (0x00)
-     * in the first 8000 bytes of the file.
-     */
-    private boolean isBinaryFile(Path file, long fileSize) {
-        int bytesToRead = (int) Math.min(fileSize, 8000);
-        if (bytesToRead == 0) {
-            return false;
-        }
-        byte[] buffer = new byte[bytesToRead];
-        try (InputStream in = Files.newInputStream(file)) {
-            int read = in.read(buffer, 0, bytesToRead);
-            for (int i = 0; i < read; i++) {
-                if (buffer[i] == 0) {
-                    return true;
-                }
-            }
-        } catch (IOException e) {
-            // Treat as non-binary so the caller proceeds to read the full file,
-            // which will also fail and trigger the conservative "mark affected" path.
-            logger.warn("Cannot check binary status of {}: {}", file, e.getMessage());
         }
         return false;
     }
