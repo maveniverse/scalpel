@@ -1138,7 +1138,6 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         // (a softened producer compiles its own tests, so its own test-jar deps must be
         // checked in turn).  Each project is enqueued at most once, giving O(M × D) total.
         ArrayDeque<MavenProject> worklist = new ArrayDeque<>(testProjects);
-        Set<MavenProject> visited = new HashSet<>(testProjects);
         while (!worklist.isEmpty()) {
             MavenProject consumer = worklist.poll();
             for (org.apache.maven.model.Dependency dep : consumer.getDependencies()) {
@@ -1163,9 +1162,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             key(consumer));
                 }
                 // Enqueue the newly softened producer so its own test-jar deps are checked.
-                if (visited.add(producer)) {
-                    worklist.add(producer);
-                }
+                // No re-enqueue guard needed: testProjects and skippedProjects are disjoint
+                // by construction, and softenedProjects.contains() above prevents re-processing.
+                worklist.add(producer);
             }
         }
 
