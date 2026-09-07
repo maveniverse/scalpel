@@ -105,13 +105,12 @@ class ShadowBuildMonitorTest {
         ShadowBuildMonitor monitor = new ShadowBuildMonitor(
                 recordingDelegate(delegateCalls),
                 reactorRoot,
-                Arrays.asList("module-b"),
-                Arrays.asList("module-a", "module-c"),
                 "0.3.11",
                 "base",
                 Arrays.asList("module-b/src/Foo.java"),
                 clock,
-                MavenProject::getArtifactId);
+                MavenProject::getArtifactId,
+                ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a", "module-c"), null));
 
         MavenProject a = project(reactorRoot, "module-a");
         MavenProject b = project(reactorRoot, "module-b");
@@ -193,13 +192,12 @@ class ShadowBuildMonitorTest {
             ShadowBuildMonitor monitor = new ShadowBuildMonitor(
                     null,
                     reactorRoot,
-                    Arrays.asList("module-b"),
-                    Arrays.asList("module-a"),
                     "0.3.11",
                     "base",
                     Arrays.asList("module-b/src/Foo.java"),
                     clock,
-                    MavenProject::getArtifactId);
+                    MavenProject::getArtifactId,
+                    ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), null));
             MavenProject b = project(reactorRoot, "module-b");
             monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, b));
             monitor.projectSucceeded(event(ExecutionEvent.Type.ProjectSucceeded, b));
@@ -218,13 +216,12 @@ class ShadowBuildMonitorTest {
         ShadowBuildMonitor monitor = new ShadowBuildMonitor(
                 null,
                 reactorRoot,
-                Arrays.asList("module-b"),
-                Arrays.asList("module-a"),
                 "0.3.11",
                 null,
                 null,
                 new SteppingClock(),
-                MavenProject::getArtifactId);
+                MavenProject::getArtifactId,
+                ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), null));
 
         monitor.sessionEnded(event(ExecutionEvent.Type.SessionEnded, null));
 

@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
+import eu.maveniverse.maven.scalpel.core.ScalpelReport;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -102,28 +103,6 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         this.decisionId = decision.getDecisionId();
         this.verify = decision.isVerify();
         this.skipReasons = new LinkedHashMap<>(decision.getSkipReasons());
-    }
-
-    @Deprecated
-    public ShadowBuildMonitor(
-            ExecutionListener delegate,
-            Path reactorRoot,
-            Collection<String> wouldHaveBuilt,
-            Collection<String> wouldHaveSkipped,
-            String scalpelVersion,
-            String baseBranch,
-            Collection<String> changedFiles,
-            LongSupplier nanoClock,
-            Function<MavenProject, String> moduleKey) {
-        this(
-                delegate,
-                reactorRoot,
-                scalpelVersion,
-                baseBranch,
-                changedFiles,
-                nanoClock,
-                moduleKey,
-                ShadowDecision.measuring(wouldHaveBuilt, wouldHaveSkipped, null));
     }
 
     // ------------------------------------------------------------------
@@ -252,7 +231,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     }
 
     private String skipReasonFor(String module) {
-        return skipReasons.getOrDefault(module, "NOT_AFFECTED");
+        return skipReasons.getOrDefault(module, ScalpelReport.SKIP_REASON_NOT_AFFECTED);
     }
 
     void writeOutputs() throws IOException {

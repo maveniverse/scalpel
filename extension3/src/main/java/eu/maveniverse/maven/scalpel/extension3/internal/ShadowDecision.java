@@ -46,11 +46,6 @@ final class ShadowDecision {
         return wouldHaveSkipped;
     }
 
-    /** The skip reason for a would-have-skipped module path, for the verify failure report. */
-    String skipReasonFor(String modulePath) {
-        return skipReasons.getOrDefault(modulePath, "NOT_AFFECTED");
-    }
-
     Map<String, String> getSkipReasons() {
         return skipReasons;
     }

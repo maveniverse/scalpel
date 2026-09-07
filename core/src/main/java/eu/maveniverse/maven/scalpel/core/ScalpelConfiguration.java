@@ -707,14 +707,21 @@ public final class ScalpelConfiguration {
         appendFingerprintPart(sb, "head", head);
         appendFingerprintPart(sb, "alsoMake", String.valueOf(alsoMake));
         appendFingerprintPart(sb, "alsoMakeDependents", String.valueOf(alsoMakeDependents));
-        appendFingerprintPart(sb, "fullBuildTriggers", String.join(",", fullBuildTriggers));
-        appendFingerprintPart(sb, "excludePaths", String.join(",", excludePaths));
-        appendFingerprintPart(sb, "includePaths", String.join(",", includePaths));
-        appendFingerprintPart(sb, "disableTriggers", String.join(",", disableTriggers));
-        appendFingerprintPart(sb, "forceBuildModules", String.join(",", forceBuildModules));
+        appendFingerprintPart(sb, "fullBuildTriggers", sortedJoin(fullBuildTriggers));
+        appendFingerprintPart(sb, "excludePaths", sortedJoin(excludePaths));
+        appendFingerprintPart(sb, "includePaths", sortedJoin(includePaths));
+        appendFingerprintPart(sb, "disableTriggers", sortedJoin(disableTriggers));
+        appendFingerprintPart(sb, "forceBuildModules", sortedJoin(forceBuildModules));
+        appendFingerprintPart(sb, "maxResourceFileSize", String.valueOf(maxResourceFileSize));
         appendFingerprintPart(sb, "uncommitted", String.valueOf(uncommitted));
         appendFingerprintPart(sb, "untracked", String.valueOf(untracked));
         return sb.toString();
+    }
+
+    private static String sortedJoin(List<String> values) {
+        List<String> sorted = new ArrayList<>(values);
+        sorted.sort(java.util.Comparator.naturalOrder());
+        return String.join(",", sorted);
     }
 
     private static void appendFingerprintPart(StringBuilder sb, String name, String value) {

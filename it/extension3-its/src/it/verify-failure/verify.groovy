@@ -20,6 +20,8 @@ assert log.contains('BUILD FAILURE')
 // reason and the decision identity quoted so the failure is correlatable (#101)
 assert log.contains('module-c') : "the false negative must be named"
 assert log.contains('NOT_AFFECTED') : "the skip reason must be named"
+assert log.contains("FAILED but Scalpel would have skipped it") : \
+    "the verify verdict must come from the Scalpel monitor, not just the surefire failure"
 assert log.contains('decisionId') : "the decision identity must be quotable"
 
 // Both artifacts of the observed run
