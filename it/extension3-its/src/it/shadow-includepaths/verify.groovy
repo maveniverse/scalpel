@@ -20,18 +20,13 @@ assert !log.contains('Scalpel: Building ') : "shadow mode must not trim the reac
 // duration counts toward the savings estimate.
 File shadowFile = new File(basedir, 'target/scalpel-shadow.json')
 assert shadowFile.exists() : "shadow json should be written"
-String shadow = shadowFile.text
-def skipStart = shadow.indexOf('"wouldHaveSkipped": [')
-def skipOpen = shadow.indexOf('[', skipStart)
-def skipClose = shadow.indexOf(']', skipOpen)
-def skipSet = shadow.substring(skipOpen, skipClose)
-assert skipSet.contains('module-b') : "downstream module-b outside includePaths must be in the would-skip set"
-def builtStart = shadow.indexOf('"wouldHaveBuilt": [')
-def builtOpen = shadow.indexOf('[', builtStart)
-def builtClose = shadow.indexOf(']', builtOpen)
-def builtSet = shadow.substring(builtOpen, builtClose)
-assert builtSet.contains('module-a') : "the changed module must be in the would-build set"
-assert !builtSet.contains('module-b') : "module-b outside includePaths scope must not be in the would-build set"
+def shadow = new groovy.json.JsonSlurper().parseText(shadowFile.text)
+assert shadow.wouldHaveSkipped.any { it.contains('module-b') } : \
+    "downstream module-b outside includePaths must be in the would-skip set"
+assert shadow.wouldHaveBuilt.any { it.contains('module-a') } : \
+    "the changed module must be in the would-build set"
+assert !shadow.wouldHaveBuilt.any { it.contains('module-b') } : \
+    "module-b outside includePaths scope must not be in the would-build set"
 
 File history = new File(basedir, 'target/scalpel-shadow-history.jsonl')
 assert history.exists()
