@@ -8,8 +8,7 @@
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -70,29 +69,39 @@ class ModuleMapper {
         // Track which changed file triggered each project (explain-mode evidence)
         Map<MavenProject, Set<String>> triggeringFiles = new LinkedHashMap<>();
 
-        // Sort projects by basedir depth (most specific first)
-        List<MavenProject> sortedProjects = new ArrayList<>(projects);
-        sortedProjects.sort(Comparator.comparingInt(
-                        (MavenProject p) -> getRelativePath(p, reactorRoot).length())
-                .reversed());
+        // Precompute the relative path per project once; normalize the reactor root
+        // once rather than on every call. Build a lookup map keyed by module directory
+        // so each changed file can find its owning module via parent-directory walks
+        // instead of a linear scan: O(M) setup + O(F × depth) lookups.
+        Path rootDir = reactorRoot.toAbsolutePath().normalize();
+        Map<String, MavenProject> moduleByDir = new HashMap<>();
+        Map<MavenProject, String> pathByProject = new HashMap<>();
+        MavenProject rootProject = null;
+        for (MavenProject project : projects) {
+            String projectPath = getRelativePath(project, rootDir);
+            if (projectPath.isEmpty()) {
+                rootProject = project;
+            } else {
+                moduleByDir.put(projectPath, project);
+                pathByProject.put(project, projectPath);
+            }
+        }
 
         for (String changedFile : changedFiles) {
-            for (MavenProject project : sortedProjects) {
-                String projectPath = getRelativePath(project, reactorRoot);
-                if (isFileInProjectSubtree(changedFile, projectPath)) {
-                    boolean isTest = isTestPath(changedFile, projectPath);
-                    Boolean existing = hasMainChange.get(project);
-                    if (existing == null) {
-                        hasMainChange.put(project, !isTest);
-                    } else if (!isTest) {
-                        hasMainChange.put(project, Boolean.TRUE);
-                    }
-                    if (explain) {
-                        triggeringFiles
-                                .computeIfAbsent(project, k -> new LinkedHashSet<>())
-                                .add(changedFile);
-                    }
-                    break;
+            MavenProject matched = findOwningModule(changedFile, moduleByDir, rootProject);
+            if (matched != null) {
+                String projectPath = matched == rootProject ? "" : pathByProject.get(matched);
+                boolean isTest = isTestPath(changedFile, projectPath);
+                Boolean existing = hasMainChange.get(matched);
+                if (existing == null) {
+                    hasMainChange.put(matched, !isTest);
+                } else if (!isTest) {
+                    hasMainChange.put(matched, Boolean.TRUE);
+                }
+                if (explain) {
+                    triggeringFiles
+                            .computeIfAbsent(matched, k -> new LinkedHashSet<>())
+                            .add(changedFile);
                 }
             }
         }
@@ -114,6 +123,35 @@ class ModuleMapper {
         return mapToProjectsClassified(changedFiles, projects, reactorRoot).getAllAffected();
     }
 
+    /**
+     * Finds the owning module for a changed file by walking its parent directories from
+     * deepest to root, doing hash lookups. The first match is the most specific (deepest-nested)
+     * module, preserving the same semantics as the previous length-descending sort approach.
+     *
+     * @return the owning project, or {@code null} if no module owns this file
+     */
+    private static MavenProject findOwningModule(
+            String changedFile, Map<String, MavenProject> moduleByDir, MavenProject rootProject) {
+        // Walk parent directories from deepest to shallowest
+        int slash = changedFile.lastIndexOf('/');
+        if (slash <= 0) {
+            // No directory separator (bare file like "README.md") or only at position 0:
+            // root project only matches files in subdirectories, not bare root files
+            return null;
+        }
+        while (slash > 0) {
+            String dir = changedFile.substring(0, slash);
+            MavenProject project = moduleByDir.get(dir);
+            if (project != null) {
+                return project;
+            }
+            slash = dir.lastIndexOf('/');
+        }
+        // No module directory matched; fall back to root project for files
+        // that are in subdirectories (src/main/..., scripts/..., etc.)
+        return rootProject;
+    }
+
     static boolean isTestPath(String changedFile, String projectPath) {
         String relativeToProject;
         if (projectPath.isEmpty()) {
@@ -124,21 +162,16 @@ class ModuleMapper {
         return relativeToProject.startsWith("src/test/");
     }
 
-    private static boolean isFileInProjectSubtree(String changedFile, String projectPath) {
-        if (projectPath.isEmpty()) {
-            // Root project: only match files in subdirectories (src/main/...),
-            // not bare repo-root files (README.md, .gitignore)
-            return changedFile.contains("/");
-        }
-        return changedFile.startsWith(projectPath + "/");
-    }
-
-    private String getRelativePath(MavenProject project, Path reactorRoot) {
+    /**
+     * Computes the relative path of a project directory against an already-normalized reactor root.
+     * The caller must pass {@code reactorRoot.toAbsolutePath().normalize()} to avoid redundant
+     * normalization on every call.
+     */
+    static String getRelativePath(MavenProject project, Path normalizedRoot) {
         Path projectDir = project.getBasedir().toPath().toAbsolutePath().normalize();
-        Path rootDir = reactorRoot.toAbsolutePath().normalize();
-        if (projectDir.equals(rootDir)) {
+        if (projectDir.equals(normalizedRoot)) {
             return "";
         }
-        return rootDir.relativize(projectDir).toString().replace('\\', '/');
+        return normalizedRoot.relativize(projectDir).toString().replace('\\', '/');
     }
 }

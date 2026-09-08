@@ -20,15 +20,13 @@ assert !log.contains('Scalpel: Building ') : "shadow mode must not trim the reac
 // module-a is an upstream prerequisite of the changed module-b and must NOT be flagged.
 File shadowFile = new File(basedir, 'target/scalpel-shadow.json')
 assert shadowFile.exists() : "shadow json must be written even when the build fails"
-String shadow = shadowFile.text
-assert shadow.contains('module-b')
-def fnStart = shadow.indexOf('"wouldHaveSkippedButFailed": [')
-assert fnStart >= 0 : "shadow json must carry wouldHaveSkippedButFailed"
-def fnOpen = shadow.indexOf('[', fnStart)
-def fnClose = shadow.indexOf(']', fnOpen)
-def fnSet = shadow.substring(fnOpen, fnClose)
-assert fnSet.contains('module-c') : "module-c must be flagged as would-have-skipped-but-failed"
-assert !fnSet.contains('module-a') : "module-a would have been built and must not be flagged"
+def shadow = new groovy.json.JsonSlurper().parseText(shadowFile.text)
+assert shadow.wouldHaveBuilt.any { it.contains('module-b') }
+assert shadow.wouldHaveSkippedButFailed != null : "shadow json must carry wouldHaveSkippedButFailed"
+assert shadow.wouldHaveSkippedButFailed.any { it.contains('module-c') } : \
+    "module-c must be flagged as would-have-skipped-but-failed"
+assert !shadow.wouldHaveSkippedButFailed.any { it.contains('module-a') } : \
+    "module-a would have been built and must not be flagged"
 
 File history = new File(basedir, 'target/scalpel-shadow-history.jsonl')
 assert history.exists() : "history jsonl must be appended even on failure"

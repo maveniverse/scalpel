@@ -13,12 +13,14 @@ import static java.util.Objects.requireNonNull;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.PathMatcher;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
@@ -300,8 +302,11 @@ class PomChangeAnalyzer {
         Set<MavenProject> parents;
         Map<MavenProject, List<MavenProject>> bomImporters;
         List<MavenProject> allProjects;
-        Path reactorRoot;
+        /** Already-normalized reactor root — avoids redundant normalization in loops (#113). */
+        Path normalizedRoot;
+
         boolean explain;
+        ChangeFilter changeFilter;
 
         // Accumulators — populated during analysis
         final Set<MavenProject> affected = new LinkedHashSet<>();
@@ -310,6 +315,72 @@ class PomChangeAnalyzer {
         final List<String> unmatchedPomPaths = new ArrayList<>();
         /** Filesystem entries visited by filtered-resource scans (instrumentation, #99). */
         long resourcesVisited;
+
+        /**
+         * Cross-parent memoization for filtered-resource scans (#114).
+         * Tracks which property refs have already been scanned per child project.
+         * When multiple parent POMs change, the same child's resource tree is not
+         * re-walked for properties that were already checked.
+         */
+        final Map<MavenProject, Set<String>> resourceScannedProperties = new LinkedHashMap<>();
+    }
+
+    /**
+     * Filters change paths against user-configured include/exclude glob patterns.
+     * A change path is a normalized string like {@code properties/foo.version} or
+     * {@code dependencies/com.foo:bar}.
+     *
+     * <p>Evaluation order: a change path that matches any exclude pattern is excluded,
+     * UNLESS it also matches an include pattern (include overrides exclude).
+     *
+     * <p>When both lists are empty, all changes are accepted (the filter is a no-op).
+     */
+    static class ChangeFilter {
+        private static final String GLOB_PREFIX = "glob:";
+
+        private final List<PathMatcher> excludeMatchers;
+        private final List<PathMatcher> includeMatchers;
+
+        ChangeFilter(List<String> excludePatterns, List<String> includePatterns) {
+            FileSystem fs = FileSystems.getDefault();
+            this.excludeMatchers = compileMatchers(excludePatterns, fs);
+            this.includeMatchers = compileMatchers(includePatterns, fs);
+        }
+
+        /** Returns {@code true} if the change path should be considered (not excluded). */
+        boolean accepts(String changePath) {
+            if (excludeMatchers.isEmpty() && includeMatchers.isEmpty()) {
+                return true;
+            }
+            Path path = Path.of(changePath);
+            // Include overrides exclude
+            for (PathMatcher m : includeMatchers) {
+                if (m.matches(path)) {
+                    return true;
+                }
+            }
+            for (PathMatcher m : excludeMatchers) {
+                if (m.matches(path)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        boolean isActive() {
+            return !excludeMatchers.isEmpty() || !includeMatchers.isEmpty();
+        }
+
+        private static List<PathMatcher> compileMatchers(List<String> patterns, FileSystem fs) {
+            if (patterns == null || patterns.isEmpty()) {
+                return List.of();
+            }
+            List<PathMatcher> matchers = new ArrayList<>(patterns.size());
+            for (String pattern : patterns) {
+                matchers.add(fs.getPathMatcher(GLOB_PREFIX + pattern));
+            }
+            return matchers;
+        }
     }
 
     /**
@@ -340,12 +411,42 @@ class PomChangeAnalyzer {
             Path reactorRoot,
             boolean explain,
             ModelResolutionContext resolutionCtx) {
+        return analyzeChanges(
+                changedPomPaths,
+                oldPomContents,
+                allProjects,
+                reactorRoot,
+                explain,
+                resolutionCtx,
+                List.of(),
+                List.of());
+    }
+
+    /**
+     * Analyze POM changes with user-configured include/exclude change filters.
+     * <p>
+     * Change paths matching {@code excludeChangePatterns} are ignored unless they also
+     * match an {@code includeChangePatterns} pattern (include overrides exclude).
+     *
+     * @see #analyzeChanges(Set, Map, List, Path, boolean, ModelResolutionContext)
+     */
+    public Result analyzeChanges(
+            Set<String> changedPomPaths,
+            Map<String, byte[]> oldPomContents,
+            List<MavenProject> allProjects,
+            Path reactorRoot,
+            boolean explain,
+            ModelResolutionContext resolutionCtx,
+            List<String> excludeChangePatterns,
+            List<String> includeChangePatterns) {
 
         // Build a map of relative POM path -> MavenProject
+        // Normalize the reactor root once rather than per project (#113)
+        Path normalizedRoot = reactorRoot.toAbsolutePath().normalize();
         Map<String, MavenProject> projectByPomPath = new LinkedHashMap<>();
         for (MavenProject project : allProjects) {
             Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
-            Path relativePom = reactorRoot.toAbsolutePath().normalize().relativize(pomPath);
+            Path relativePom = normalizedRoot.relativize(pomPath);
             projectByPomPath.put(relativePom.toString().replace('\\', '/'), project);
         }
 
@@ -372,8 +473,9 @@ class PomChangeAnalyzer {
         ctx.parents = parents;
         ctx.bomImporters = bomImporters;
         ctx.allProjects = allProjects;
-        ctx.reactorRoot = reactorRoot;
+        ctx.normalizedRoot = normalizedRoot;
         ctx.explain = explain;
+        ctx.changeFilter = new ChangeFilter(excludeChangePatterns, includeChangePatterns);
 
         for (String changedPomPath : changedPomPaths) {
             analyzeChangedPom(changedPomPath, ctx);
@@ -543,9 +645,7 @@ class PomChangeAnalyzer {
         // Use effective models for property and managed dep/plugin diffs.
         // Effective models have properties interpolated and profiles merged.
         Model newEffectiveModel = ctx.newEffectiveModels.getOrDefault(
-                ctx.reactorRoot
-                        .toAbsolutePath()
-                        .normalize()
+                ctx.normalizedRoot
                         .relativize(parentProject
                                 .getFile()
                                 .toPath()
@@ -569,8 +669,14 @@ class PomChangeAnalyzer {
         Set<String> activeProfileIds = getActiveProfileIds(parentProject);
         parentSelfAffected = parentSelfAffected || analyzeProfileChanges(oldModel, newModel, activeProfileIds);
 
-        // Collect all changed properties
-        ctx.allChangedProperties.addAll(changedProperties);
+        // Collect all changed properties (filtered by change filter)
+        Set<String> filteredChangedProperties = new LinkedHashSet<>();
+        for (String prop : changedProperties) {
+            if (ctx.changeFilter.accepts("properties/" + prop)) {
+                ctx.allChangedProperties.add(prop);
+                filteredChangedProperties.add(prop);
+            }
+        }
 
         if (parentSelfAffected) {
             ctx.affected.add(parentProject);
@@ -591,7 +697,7 @@ class PomChangeAnalyzer {
                     changedManagedPlugins);
         }
 
-        Path absReactorRoot = ctx.reactorRoot.toAbsolutePath().normalize();
+        Path absReactorRoot = ctx.normalizedRoot;
 
         // Check each dependent (child or BOM importer) for impact.
         // Compare effective dependencies and plugins (the resolved dependency tree and
@@ -619,8 +725,8 @@ class PomChangeAnalyzer {
             // Properties used in filtered resources are often inherited (defined in the
             // parent, not the child), so the raw-model property check above won't catch them.
             if (!childAffected
-                    && !changedProperties.isEmpty()
-                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, ctx)) {
+                    && !filteredChangedProperties.isEmpty()
+                    && hasFilteredResourcesWithChangedProperty(child, filteredChangedProperties, ctx)) {
                 logger.debug("Child {} has filtered resources referencing changed properties", key(child));
                 if (ctx.explain) {
                     addEvidence(ctx.evidence, child, "filtered resources referencing changed properties");
@@ -640,13 +746,13 @@ class PomChangeAnalyzer {
             }
         }
 
-        int affectedCount = 0;
-        for (MavenProject dep : dependentProjects) {
-            if (ctx.affected.contains(dep)) {
-                affectedCount++;
-            }
-        }
         if (logger.isDebugEnabled()) {
+            int affectedCount = 0;
+            for (MavenProject dep : dependentProjects) {
+                if (ctx.affected.contains(dep)) {
+                    affectedCount++;
+                }
+            }
             logger.debug(
                     "Parent {} analysis complete: {} of {} dependents affected",
                     key(parentProject),
@@ -664,6 +770,10 @@ class PomChangeAnalyzer {
      * Both old and new effective models are built by the same {@link ModelBuilder}
      * so lifecycle default plugin versions are identical on both sides, making direct
      * comparison safe without GA filtering.
+     * <p>
+     * When a {@link ChangeFilter} is active, each detected change is translated to a
+     * normalized change path (e.g. {@code properties/foo.version}, {@code dependencies/g:a})
+     * and filtered before deciding whether the child is affected (issue #148).
      */
     private boolean hasEffectiveChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
         Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
@@ -684,6 +794,7 @@ class PomChangeAnalyzer {
         }
 
         boolean changed = false;
+        ChangeFilter filter = ctx.changeFilter;
 
         // Compare effective dependencies — dependencyManagement versions are injected
         // into <dependencies> during model building, so this catches managed dep version
@@ -691,15 +802,26 @@ class PomChangeAnalyzer {
         Set<String> changedDeps =
                 diffEffectiveDependencies(oldChildEffective.getDependencies(), newChildEffective.getDependencies());
         if (!changedDeps.isEmpty()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Child {} has changed effective dependencies: {}", key(child), changedDeps);
-            }
-            if (ctx.explain) {
-                for (String ga : changedDeps) {
-                    addEvidence(ctx.evidence, child, "effective dep " + ga);
+            // Apply change filter: generate change paths for each changed dep
+            Set<String> acceptedDeps = new LinkedHashSet<>();
+            for (String ga : changedDeps) {
+                if (filter.accepts("dependencies/" + ga)) {
+                    acceptedDeps.add(ga);
+                } else if (logger.isDebugEnabled()) {
+                    logger.debug("Child {} effective dep {} excluded by change filter", key(child), ga);
                 }
             }
-            changed = true;
+            if (!acceptedDeps.isEmpty()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Child {} has changed effective dependencies: {}", key(child), acceptedDeps);
+                }
+                if (ctx.explain) {
+                    for (String ga : acceptedDeps) {
+                        addEvidence(ctx.evidence, child, "effective dep " + ga);
+                    }
+                }
+                changed = true;
+            }
         }
 
         // Compare effective plugin VERSIONS only (not configuration/executions).
@@ -710,15 +832,25 @@ class PomChangeAnalyzer {
         Set<String> changedPlugins = diffManagedPluginVersions(
                 getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
         if (!changedPlugins.isEmpty()) {
-            if (logger.isDebugEnabled()) {
-                logger.debug("Child {} has changed effective plugins: {}", key(child), changedPlugins);
-            }
-            if (ctx.explain) {
-                for (String ga : changedPlugins) {
-                    addEvidence(ctx.evidence, child, "effective plugin " + ga);
+            Set<String> acceptedPlugins = new LinkedHashSet<>();
+            for (String ga : changedPlugins) {
+                if (filter.accepts("plugins/" + ga)) {
+                    acceptedPlugins.add(ga);
+                } else if (logger.isDebugEnabled()) {
+                    logger.debug("Child {} effective plugin {} excluded by change filter", key(child), ga);
                 }
             }
-            changed = true;
+            if (!acceptedPlugins.isEmpty()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug("Child {} has changed effective plugins: {}", key(child), acceptedPlugins);
+                }
+                if (ctx.explain) {
+                    for (String ga : acceptedPlugins) {
+                        addEvidence(ctx.evidence, child, "effective plugin " + ga);
+                    }
+                }
+                changed = true;
+            }
         }
 
         // Compare effective values of properties explicitly defined in the child's
@@ -736,6 +868,15 @@ class PomChangeAnalyzer {
                 String oldValue = oldEffectiveProps != null ? oldEffectiveProps.getProperty(propName) : null;
                 String newValue = newEffectiveProps != null ? newEffectiveProps.getProperty(propName) : null;
                 if (!Objects.equals(oldValue, newValue)) {
+                    if (!filter.accepts("properties/" + propName)) {
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(
+                                    "Child {} property {} effective value changed but excluded by change filter",
+                                    key(child),
+                                    propName);
+                        }
+                        continue;
+                    }
                     if (logger.isDebugEnabled()) {
                         logger.debug(
                                 "Child {} property {} effective value changed: {} -> {}",
@@ -773,18 +914,28 @@ class PomChangeAnalyzer {
                         filterByGA(getManagedDependencies(oldChildEffective), rawManagedGAs),
                         filterByGA(getManagedDependencies(newChildEffective), rawManagedGAs));
                 if (!changedRawManagedDeps.isEmpty()) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug(
-                                "Child {} has changed effective managed deps (defined in raw model): {}",
-                                key(child),
-                                changedRawManagedDeps);
-                    }
-                    if (ctx.explain) {
-                        for (String ga : changedRawManagedDeps) {
-                            addEvidence(ctx.evidence, child, "effective managed dep " + ga);
+                    Set<String> acceptedManagedDeps = new LinkedHashSet<>();
+                    for (String ga : changedRawManagedDeps) {
+                        if (filter.accepts("managedDependencies/" + ga)) {
+                            acceptedManagedDeps.add(ga);
+                        } else if (logger.isDebugEnabled()) {
+                            logger.debug("Child {} effective managed dep {} excluded by change filter", key(child), ga);
                         }
                     }
-                    changed = true;
+                    if (!acceptedManagedDeps.isEmpty()) {
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(
+                                    "Child {} has changed effective managed deps (defined in raw model): {}",
+                                    key(child),
+                                    acceptedManagedDeps);
+                        }
+                        if (ctx.explain) {
+                            for (String ga : acceptedManagedDeps) {
+                                addEvidence(ctx.evidence, child, "effective managed dep " + ga);
+                            }
+                        }
+                        changed = true;
+                    }
                 }
             }
         }
@@ -802,18 +953,29 @@ class PomChangeAnalyzer {
                         filterPluginsByGA(getManagedPlugins(oldChildEffective), rawPluginGAs),
                         filterPluginsByGA(getManagedPlugins(newChildEffective), rawPluginGAs));
                 if (!changedRawManagedPlugins.isEmpty()) {
-                    if (logger.isDebugEnabled()) {
-                        logger.debug(
-                                "Child {} has changed effective managed plugins (defined in raw model): {}",
-                                key(child),
-                                changedRawManagedPlugins);
-                    }
-                    if (ctx.explain) {
-                        for (String ga : changedRawManagedPlugins) {
-                            addEvidence(ctx.evidence, child, "effective managed plugin " + ga);
+                    Set<String> acceptedManagedPlugins = new LinkedHashSet<>();
+                    for (String ga : changedRawManagedPlugins) {
+                        if (filter.accepts("managedPlugins/" + ga)) {
+                            acceptedManagedPlugins.add(ga);
+                        } else if (logger.isDebugEnabled()) {
+                            logger.debug(
+                                    "Child {} effective managed plugin {} excluded by change filter", key(child), ga);
                         }
                     }
-                    changed = true;
+                    if (!acceptedManagedPlugins.isEmpty()) {
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(
+                                    "Child {} has changed effective managed plugins (defined in raw model): {}",
+                                    key(child),
+                                    acceptedManagedPlugins);
+                        }
+                        if (ctx.explain) {
+                            for (String ga : acceptedManagedPlugins) {
+                                addEvidence(ctx.evidence, child, "effective managed plugin " + ga);
+                            }
+                        }
+                        changed = true;
+                    }
                 }
             }
         }
@@ -1339,14 +1501,50 @@ class PomChangeAnalyzer {
      * Check if a project has filtered resources that reference any of the changed properties.
      * Filtered resources live outside the POM model, so effective model comparison cannot
      * detect property substitutions in resource files.
+     * <p>
+     * Cross-parent memoization (#114): tracks which properties have already been scanned
+     * per child project. Only unscanned properties trigger a new walk; if all requested
+     * properties were already checked (and found no match), the walk is skipped entirely.
      */
     private boolean hasFilteredResourcesWithChangedProperty(
             MavenProject project, Set<String> changedProperties, AnalysisContext ctx) {
-        List<String> refs = new ArrayList<>();
-        for (String prop : changedProperties) {
-            refs.add("${" + prop + "}");
+        // Determine which properties still need scanning (cross-parent memoization)
+        Set<String> unscanned = filterUnscannedProperties(project, changedProperties, ctx);
+        if (unscanned.isEmpty()) {
+            return false;
         }
 
+        if (scanFilteredResources(project, unscanned, ctx)) {
+            return true;
+        }
+        // No match found — record scanned properties for memoization (#114)
+        ctx.resourceScannedProperties
+                .computeIfAbsent(project, k -> new LinkedHashSet<>())
+                .addAll(unscanned);
+        return false;
+    }
+
+    /**
+     * Return the subset of {@code changedProperties} that have not yet been scanned
+     * for this project (cross-parent memoization, #114).
+     */
+    private Set<String> filterUnscannedProperties(
+            MavenProject project, Set<String> changedProperties, AnalysisContext ctx) {
+        Set<String> alreadyScanned = ctx.resourceScannedProperties.getOrDefault(project, Set.of());
+        Set<String> unscanned = new LinkedHashSet<>();
+        for (String prop : changedProperties) {
+            if (!alreadyScanned.contains(prop)) {
+                unscanned.add(prop);
+            }
+        }
+        return unscanned;
+    }
+
+    /**
+     * Scan all filtered resource directories of the given project for any of the given
+     * property references.
+     */
+    private boolean scanFilteredResources(MavenProject project, Set<String> changedPropertyNames, AnalysisContext ctx) {
         List<Resource> allResources = new ArrayList<>();
         if (project.getResources() != null) {
             allResources.addAll(project.getResources());
@@ -1370,7 +1568,7 @@ class PomChangeAnalyzer {
             if (!Files.isDirectory(resourceDir)) {
                 continue;
             }
-            if (scanDirectoryForPropertyRefs(resourceDir, refs, ctx)) {
+            if (scanDirectoryForPropertyRefs(resourceDir, changedPropertyNames, ctx)) {
                 logger.debug(
                         "Found property reference in filtered resources of {} (dir={})", key(project), resourceDir);
                 return true;
@@ -1382,7 +1580,7 @@ class PomChangeAnalyzer {
     private static final int MAX_RESOURCE_WALK_DEPTH = 32;
     private static final int MAX_RESOURCE_WALK_FILES = 10_000;
 
-    private boolean scanDirectoryForPropertyRefs(Path dir, List<String> refs, AnalysisContext ctx) {
+    private boolean scanDirectoryForPropertyRefs(Path dir, Set<String> changedPropertyNames, AnalysisContext ctx) {
         // Does not follow symbolic links: a symlink could loop forever or point
         // outside the module (leaking file content into the analysis)
         // Every exit path adds the entries it visited to ctx.resourcesVisited (#99).
@@ -1427,7 +1625,7 @@ class PomChangeAnalyzer {
                             if (attrs.isSymbolicLink()) {
                                 return FileVisitResult.CONTINUE;
                             }
-                            if (checkFileForPropertyRefs(file, refs)) {
+                            if (checkFileForPropertyRefs(file, attrs, changedPropertyNames)) {
                                 foundRef[0] = true;
                                 return FileVisitResult.TERMINATE;
                             }
@@ -1463,12 +1661,19 @@ class PomChangeAnalyzer {
         return foundRef[0];
     }
 
-    private boolean checkFileForPropertyRefs(Path entry, List<String> refs) {
+    /**
+     * Check whether a file contains any of the given property references.
+     * <p>
+     * Uses a single filesystem read (#114): the file size comes from
+     * {@link BasicFileAttributes} provided by {@code walkFileTree} (no extra stat),
+     * and the content is read once with {@code Files.readAllBytes}. Binary detection
+     * (NUL-byte scan, same heuristic as git) is performed in-memory on the first
+     * 8000 bytes of the already-read buffer. Property matching uses a single-pass
+     * scan (#112): O(len + P) instead of O(P × len).
+     */
+    private boolean checkFileForPropertyRefs(Path entry, BasicFileAttributes attrs, Set<String> changedPropertyNames) {
         try {
-            long size = Files.size(entry);
-            if (isBinaryFile(entry, size)) {
-                return false;
-            }
+            long size = attrs.size();
             if (size > 1024 * 1024) {
                 // Conservative: the pre-#131 analyzer treated filtered resources larger
                 // than the scan limit as affected; keep failing toward affected so an
@@ -1481,12 +1686,18 @@ class PomChangeAnalyzer {
                         size);
                 return true;
             }
-            String content = new String(Files.readAllBytes(entry), StandardCharsets.UTF_8);
-            for (String ref : refs) {
-                if (content.contains(ref)) {
-                    return true;
+            byte[] bytes = Files.readAllBytes(entry);
+            // Binary detection: scan for NUL byte in the first 8000 bytes (git heuristic)
+            int binaryCheckLen = Math.min(bytes.length, 8000);
+            for (int i = 0; i < binaryCheckLen; i++) {
+                if (bytes[i] == 0) {
+                    return false; // binary file — skip
                 }
             }
+            String content = new String(bytes, StandardCharsets.UTF_8);
+            // Single-pass scan: extract all ${...} placeholder names and check
+            // intersection with changed property names (#112)
+            return containsAnyPropertyRef(content, changedPropertyNames);
         } catch (IOException e) {
             // Conservative: treat an unreadable file as potentially containing
             // property references. Under-building is the worst failure mode.
@@ -1496,30 +1707,32 @@ class PomChangeAnalyzer {
                     e.getMessage());
             return true;
         }
-        return false;
     }
 
     /**
-     * Detect binary files using the same heuristic as git: scan for a NUL byte (0x00)
-     * in the first 8000 bytes of the file.
+     * Single-pass scan of {@code content} for Maven property placeholders {@code ${name}}.
+     * Extracts every placeholder token and checks if any appears in {@code propertyNames}.
+     * <p>
+     * Complexity: O(len + P) where len is content length and P is |propertyNames|,
+     * compared to the previous O(P × len) approach of calling {@code contains()} per property.
      */
-    private boolean isBinaryFile(Path file, long fileSize) {
-        int bytesToRead = (int) Math.min(fileSize, 8000);
-        if (bytesToRead == 0) {
-            return false;
-        }
-        byte[] buffer = new byte[bytesToRead];
-        try (InputStream in = Files.newInputStream(file)) {
-            int read = in.read(buffer, 0, bytesToRead);
-            for (int i = 0; i < read; i++) {
-                if (buffer[i] == 0) {
-                    return true;
-                }
+    @SuppressWarnings("java:S135") // two breaks are clearer than a convoluted loop condition
+    static boolean containsAnyPropertyRef(String content, Set<String> propertyNames) {
+        int i = 0;
+        while (true) {
+            int start = content.indexOf("${", i);
+            if (start < 0) {
+                break;
             }
-        } catch (IOException e) {
-            // Treat as non-binary so the caller proceeds to read the full file,
-            // which will also fail and trigger the conservative "mark affected" path.
-            logger.warn("Cannot check binary status of {}: {}", file, e.getMessage());
+            int end = content.indexOf('}', start + 2);
+            if (end < 0) {
+                break;
+            }
+            String name = content.substring(start + 2, end);
+            if (propertyNames.contains(name)) {
+                return true;
+            }
+            i = end + 1;
         }
         return false;
     }
