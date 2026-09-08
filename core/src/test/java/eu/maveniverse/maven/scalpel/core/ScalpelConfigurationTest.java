@@ -498,6 +498,25 @@ class ScalpelConfigurationTest {
     }
 
     @Test
+    void decisionFingerprint_valuesContainingDelimitersCannotCollide() {
+        // The encoding uses '=' and ';' structurally; both are legal in list-valued
+        // properties (paths with ';', patterns with '='), so two distinct resolved
+        // configurations must still produce distinct fingerprints (#177 review).
+        Properties first = new Properties();
+        first.setProperty("scalpel.fullBuildTriggers", "x;excludePaths=y");
+        first.setProperty("scalpel.excludePaths", "z");
+
+        Properties second = new Properties();
+        second.setProperty("scalpel.fullBuildTriggers", "x");
+        second.setProperty("scalpel.excludePaths", "y;excludePaths=z");
+
+        assertNotEquals(
+                ScalpelConfiguration.fromProperties(first, new Properties()).decisionFingerprint(),
+                ScalpelConfiguration.fromProperties(second, new Properties()).decisionFingerprint(),
+                "delimiter characters inside values must not make two configs collide");
+    }
+
+    @Test
     void decisionFingerprint_isStableAndSensitiveToDecisionInputs() {
         Properties base = new Properties();
         base.setProperty("scalpel.baseBranch", "origin/main");

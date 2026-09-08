@@ -725,7 +725,19 @@ public final class ScalpelConfiguration {
     }
 
     private static void appendFingerprintPart(StringBuilder sb, String name, String value) {
-        sb.append(name).append('=').append(value == null ? "" : value).append(';');
+        // Values are hex-encoded: list-valued properties legally contain the structural
+        // delimiters (';' in paths, '=' in patterns), and a raw concatenation let two
+        // distinct resolved configurations collide into one fingerprint (#177 review).
+        sb.append(name).append('=').append(hex(value == null ? "" : value)).append(';');
+    }
+
+    private static String hex(String value) {
+        byte[] bytes = value.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        StringBuilder sb = new StringBuilder(bytes.length * 2);
+        for (byte b : bytes) {
+            sb.append("%02x".formatted(b));
+        }
+        return sb.toString();
     }
 
     /** Returns the operating mode: {@code trim}, {@code skip-tests}, {@code report}, or {@code shadow}. Default: {@code trim}. */

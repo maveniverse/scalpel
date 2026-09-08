@@ -697,10 +697,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (config.isFailSafe()) {
                 logger.warn("Scalpel: {}, building all modules", e.getMessage());
                 logger.debug("ScalpelException details", e);
-                if (config.isModeShadow()
-                        || config
-                                .isVerifyFullBuild()) { // The monitor is the last thing the passive branch installs, so
-                    // an
+                if (monitoredRun(config)) {
+                    // The monitor is the last thing the passive branch installs, so an
                     // exception reaching here means nothing was measured; a previous run's
                     // shadow document must not survive the bail-out.
                     writeShadowStatus(reactorRoot, "failed", e.getMessage());
