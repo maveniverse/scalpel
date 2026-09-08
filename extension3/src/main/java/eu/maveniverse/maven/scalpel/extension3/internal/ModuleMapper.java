@@ -75,6 +75,7 @@ class ModuleMapper {
         // instead of a linear scan: O(M) setup + O(F × depth) lookups.
         Path rootDir = reactorRoot.toAbsolutePath().normalize();
         Map<String, MavenProject> moduleByDir = new HashMap<>();
+        Map<MavenProject, String> pathByProject = new HashMap<>();
         MavenProject rootProject = null;
         for (MavenProject project : projects) {
             String projectPath = getRelativePath(project, rootDir);
@@ -82,13 +83,14 @@ class ModuleMapper {
                 rootProject = project;
             } else {
                 moduleByDir.put(projectPath, project);
+                pathByProject.put(project, projectPath);
             }
         }
 
         for (String changedFile : changedFiles) {
             MavenProject matched = findOwningModule(changedFile, moduleByDir, rootProject);
             if (matched != null) {
-                String projectPath = matched == rootProject ? "" : getRelativePath(matched, rootDir);
+                String projectPath = matched == rootProject ? "" : pathByProject.get(matched);
                 boolean isTest = isTestPath(changedFile, projectPath);
                 Boolean existing = hasMainChange.get(matched);
                 if (existing == null) {
