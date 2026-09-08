@@ -87,22 +87,7 @@ class ReactorTrimmer {
                 }
                 for (MavenProject ds : directDownstream.getOrDefault(project, List.of())) {
                     if (visited.add(ds)) {
-                        buildSet.add(ds);
-                        if (config.isExplain()) {
-                            addReason(buildReasons, ds, "downstream of " + key(project));
-                        }
-                        String scope = getDependencyScope(ds, project);
-                        if ("test".equals(scope)) {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(project));
-                            }
-                            downstreamTestOnly.add(ds);
-                        } else {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Adding downstream dependent {} of {}", key(ds), key(project));
-                            }
-                            downstreamOnly.add(ds);
-                        }
+                        addDownstream(ds, project, buildSet, downstreamOnly, downstreamTestOnly, buildReasons, config);
                         queue.add(ds);
                     }
                 }
@@ -112,22 +97,7 @@ class ReactorTrimmer {
                 MavenProject current = queue.poll();
                 for (MavenProject ds : directDownstream.getOrDefault(current, List.of())) {
                     if (visited.add(ds)) {
-                        buildSet.add(ds);
-                        if (config.isExplain()) {
-                            addReason(buildReasons, ds, "downstream of " + key(current));
-                        }
-                        String scope = getDependencyScope(ds, current);
-                        if ("test".equals(scope)) {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(current));
-                            }
-                            downstreamTestOnly.add(ds);
-                        } else {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Adding downstream dependent {} of {}", key(ds), key(current));
-                            }
-                            downstreamOnly.add(ds);
-                        }
+                        addDownstream(ds, current, buildSet, downstreamOnly, downstreamTestOnly, buildReasons, config);
                         queue.add(ds);
                     }
                 }
@@ -156,25 +126,10 @@ class ReactorTrimmer {
                         }
                     } else {
                         visited.add(ds);
-                        buildSet.add(ds);
                         testOnlyOrigins
                                 .computeIfAbsent(ds, k -> new LinkedHashSet<>())
                                 .add(project);
-                        if (config.isExplain()) {
-                            addReason(buildReasons, ds, "downstream of " + key(project));
-                        }
-                        String scope = getDependencyScope(ds, project);
-                        if ("test".equals(scope)) {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(project));
-                            }
-                            downstreamTestOnly.add(ds);
-                        } else {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Adding downstream dependent {} of {}", key(ds), key(project));
-                            }
-                            downstreamOnly.add(ds);
-                        }
+                        addDownstream(ds, project, buildSet, downstreamOnly, downstreamTestOnly, buildReasons, config);
                         queue.add(ds);
                     }
                 }
@@ -211,25 +166,10 @@ class ReactorTrimmer {
                         }
                     } else {
                         visited.add(ds);
-                        buildSet.add(ds);
                         testOnlyOrigins
                                 .computeIfAbsent(ds, k -> new LinkedHashSet<>())
                                 .addAll(currentTestOnlyOrigins);
-                        if (config.isExplain()) {
-                            addReason(buildReasons, ds, "downstream of " + key(current));
-                        }
-                        String scope = getDependencyScope(ds, current);
-                        if ("test".equals(scope)) {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(current));
-                            }
-                            downstreamTestOnly.add(ds);
-                        } else {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Adding downstream dependent {} of {}", key(ds), key(current));
-                            }
-                            downstreamOnly.add(ds);
-                        }
+                        addDownstream(ds, current, buildSet, downstreamOnly, downstreamTestOnly, buildReasons, config);
                         queue.add(ds);
                     }
                 }
@@ -280,6 +220,37 @@ class ReactorTrimmer {
         }
 
         return new TrimResult(result, directlyAffected, upstreamOnly, downstreamOnly, downstreamTestOnly, buildReasons);
+    }
+
+    /**
+     * Add a downstream project to the build set, classify its scope, log, and record the reason.
+     * Extracted to eliminate duplication across the four BFS entry points (Phase 1 seed/drain,
+     * Phase 2 seed/drain).
+     */
+    private void addDownstream(
+            MavenProject downstream,
+            MavenProject cause,
+            Set<MavenProject> buildSet,
+            Set<MavenProject> downstreamOnly,
+            Set<MavenProject> downstreamTestOnly,
+            Map<MavenProject, List<String>> buildReasons,
+            ScalpelConfiguration config) {
+        buildSet.add(downstream);
+        if (config.isExplain()) {
+            addReason(buildReasons, downstream, "downstream of " + key(cause));
+        }
+        String scope = getDependencyScope(downstream, cause);
+        if ("test".equals(scope)) {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Adding test-scoped downstream {} of {}", key(downstream), key(cause));
+            }
+            downstreamTestOnly.add(downstream);
+        } else {
+            if (logger.isDebugEnabled()) {
+                logger.debug("Adding downstream dependent {} of {}", key(downstream), key(cause));
+            }
+            downstreamOnly.add(downstream);
+        }
     }
 
     private static void addReason(Map<MavenProject, List<String>> reasons, MavenProject project, String reason) {
