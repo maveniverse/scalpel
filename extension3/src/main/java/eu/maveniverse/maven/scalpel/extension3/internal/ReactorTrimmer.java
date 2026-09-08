@@ -82,31 +82,37 @@ class ReactorTrimmer {
                         continue;
                     }
                     if (isTestOnly && !hasTestJarDependency(ds, project)) {
-                        logger.debug(
-                                "Skipping downstream {} of test-only module {} (no test-jar dependency)",
-                                key(ds),
-                                key(project));
-                        continue;
-                    }
-                    visited.add(ds);
-                    buildSet.add(ds);
-                    if (isTestOnly) {
-                        testOnlyOrigins
-                                .computeIfAbsent(ds, k -> new LinkedHashSet<>())
-                                .add(project);
-                    }
-                    if (config.isExplain()) {
-                        addReason(buildReasons, ds, "downstream of " + key(project));
-                    }
-                    String scope = getDependencyScope(ds, project);
-                    if ("test".equals(scope)) {
-                        logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(project));
-                        downstreamTestOnly.add(ds);
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(
+                                    "Skipping downstream {} of test-only module {} (no test-jar dependency)",
+                                    key(ds),
+                                    key(project));
+                        }
                     } else {
-                        logger.debug("Adding downstream dependent {} of {}", key(ds), key(project));
-                        downstreamOnly.add(ds);
+                        visited.add(ds);
+                        buildSet.add(ds);
+                        if (isTestOnly) {
+                            testOnlyOrigins
+                                    .computeIfAbsent(ds, k -> new LinkedHashSet<>())
+                                    .add(project);
+                        }
+                        if (config.isExplain()) {
+                            addReason(buildReasons, ds, "downstream of " + key(project));
+                        }
+                        String scope = getDependencyScope(ds, project);
+                        if ("test".equals(scope)) {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(project));
+                            }
+                            downstreamTestOnly.add(ds);
+                        } else {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Adding downstream dependent {} of {}", key(ds), key(project));
+                            }
+                            downstreamOnly.add(ds);
+                        }
+                        queue.add(ds);
                     }
-                    queue.add(ds);
                 }
             }
             // Continue BFS for transitive downstream.  For nodes that entered the queue
@@ -125,6 +131,7 @@ class ReactorTrimmer {
                     // hasTestJarDependency for each origin.  The downstream node must have
                     // a test-jar dependency on at least one of the original test-only
                     // sources to be included.
+                    boolean skip = false;
                     if (currentFromTestOnly) {
                         boolean hasTestJar = false;
                         for (MavenProject origin : currentTestOnlyOrigins) {
@@ -134,31 +141,39 @@ class ReactorTrimmer {
                             }
                         }
                         if (!hasTestJar) {
-                            logger.debug(
-                                    "Skipping transitive downstream {} (no test-jar dependency on test-only sources)",
-                                    key(ds));
-                            continue;
+                            if (logger.isDebugEnabled()) {
+                                logger.debug(
+                                        "Skipping transitive downstream {} (no test-jar dependency on test-only sources)",
+                                        key(ds));
+                            }
+                            skip = true;
                         }
                     }
-                    visited.add(ds);
-                    buildSet.add(ds);
-                    if (currentFromTestOnly) {
-                        testOnlyOrigins
-                                .computeIfAbsent(ds, k -> new LinkedHashSet<>())
-                                .addAll(currentTestOnlyOrigins);
+                    if (!skip) {
+                        visited.add(ds);
+                        buildSet.add(ds);
+                        if (currentFromTestOnly) {
+                            testOnlyOrigins
+                                    .computeIfAbsent(ds, k -> new LinkedHashSet<>())
+                                    .addAll(currentTestOnlyOrigins);
+                        }
+                        if (config.isExplain()) {
+                            addReason(buildReasons, ds, "downstream of " + key(current));
+                        }
+                        String scope = getDependencyScope(ds, current);
+                        if ("test".equals(scope)) {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(current));
+                            }
+                            downstreamTestOnly.add(ds);
+                        } else {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Adding downstream dependent {} of {}", key(ds), key(current));
+                            }
+                            downstreamOnly.add(ds);
+                        }
+                        queue.add(ds);
                     }
-                    if (config.isExplain()) {
-                        addReason(buildReasons, ds, "downstream of " + key(current));
-                    }
-                    String scope = getDependencyScope(ds, current);
-                    if ("test".equals(scope)) {
-                        logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(current));
-                        downstreamTestOnly.add(ds);
-                    } else {
-                        logger.debug("Adding downstream dependent {} of {}", key(ds), key(current));
-                        downstreamOnly.add(ds);
-                    }
-                    queue.add(ds);
                 }
             }
         }

@@ -1880,9 +1880,10 @@ class PomChangeAnalyzer {
 
         // Expand to all descendants via BFS per parent
         Map<MavenProject, List<MavenProject>> descendantMap = new LinkedHashMap<>();
-        for (MavenProject parent : childrenMap.keySet()) {
+        for (Map.Entry<MavenProject, List<MavenProject>> entry : childrenMap.entrySet()) {
+            MavenProject parent = entry.getKey();
             List<MavenProject> descendants = new ArrayList<>();
-            java.util.ArrayDeque<MavenProject> queue = new java.util.ArrayDeque<>(childrenMap.get(parent));
+            java.util.ArrayDeque<MavenProject> queue = new java.util.ArrayDeque<>(entry.getValue());
             while (!queue.isEmpty()) {
                 MavenProject child = queue.poll();
                 descendants.add(child);
