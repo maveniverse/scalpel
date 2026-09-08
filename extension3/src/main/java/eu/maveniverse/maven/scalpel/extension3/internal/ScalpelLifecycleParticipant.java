@@ -332,6 +332,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 if (passiveRun(config)) {
                     if (monitoredRun(config)) {
                         writeShadowStatus(reactorRoot, "skipped", "no modules affected by changes");
+                        installEmptyDecisionMonitor(session, config, reactorRoot, allProjects, result, changedFiles);
                     }
                     writeReport(
                             config,
@@ -399,6 +400,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 if (passiveRun(config)) {
                     if (monitoredRun(config)) {
                         writeShadowStatus(reactorRoot, "skipped", "no modules affected by changes");
+                        installEmptyDecisionMonitor(session, config, reactorRoot, allProjects, result, changedFiles);
                     }
                     writeReport(
                             config,
@@ -448,6 +450,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     if (passiveRun(config)) {
                         if (monitoredRun(config)) {
                             writeShadowStatus(reactorRoot, "skipped", "no modules match includePaths filters");
+                            installEmptyDecisionMonitor(
+                                    session, config, reactorRoot, allProjects, result, changedFiles);
                         }
                         writeReport(
                                 config,
@@ -552,13 +556,31 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 config.getMode());
                     }
                 } else {
-                    // Plain report run: the decision identity covers the set this report
-                    // describes (the enrichment trim result, or the affected set when the
-                    // reactor had nothing to enrich).
-                    Collection<MavenProject> decisionProjects = trimResult != null
-                            ? trimResult.getBuildSet()
-                            : concat(directlyAffected, transitivelyAffected.keySet());
-                    decisionId = decisionIdFor(result, config, reactorRoot, decisionProjects);
+                    // Plain report run: compute the decision identity from the same set
+                    // shadow/verify would use (allAffected + trim + includePaths filter)
+                    // so that report-mode and shadow/verify-mode produce the same
+                    // decisionId for the same changeset (#177).
+                    TrimResult reportDecision;
+                    if (trimResult != null && allAffected.equals(directlyAffected)) {
+                        reportDecision = trimResult;
+                    } else {
+                        timings.start(Timings.PHASE_TRIM);
+                        try {
+                            reportDecision = reactorTrimmer.computeBuildSet(
+                                    allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+                        } finally {
+                            timings.stop(Timings.PHASE_TRIM);
+                        }
+                    }
+                    List<MavenProject> reportBuildSet = reportDecision.getBuildSet();
+                    if (!includeMatchers.isEmpty()) {
+                        Set<MavenProject> affected = allAffected;
+                        reportBuildSet = new ArrayList<>(reportBuildSet);
+                        reportBuildSet.removeIf(project -> !affected.contains(project)
+                                && !reportDecision.getUpstreamOnly().contains(project)
+                                && !matchesIncludePaths(project, includeMatchers, reactorRoot));
+                    }
+                    decisionId = decisionIdFor(result, config, reactorRoot, reportBuildSet);
                 }
 
                 writeReport(
@@ -1766,6 +1788,50 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     /** True when the session gets a ShadowBuildMonitor installed (shadow or verify). */
     private static boolean monitoredRun(ScalpelConfiguration config) {
         return config.isModeShadow() || config.isVerifyFullBuild();
+    }
+
+    /**
+     * In verify mode with an empty build decision (nothing affected), installs a
+     * {@link ShadowBuildMonitor} so that if any module fails during the full build the false
+     * negative is detected (#177). Shadow-only mode skips the monitor — there is nothing
+     * to measure and the "skipped" status document covers the shadow contract.
+     */
+    private void installEmptyDecisionMonitor(
+            MavenSession session,
+            ScalpelConfiguration config,
+            Path reactorRoot,
+            List<MavenProject> allProjects,
+            ChangeDetectionResult result,
+            Set<String> changedFiles) {
+        if (!config.isVerifyFullBuild()) {
+            return;
+        }
+        java.util.function.Function<MavenProject, String> moduleKey = project -> moduleKeyOf(reactorRoot, project);
+        Set<String> wouldHaveBuilt = Set.of();
+        Set<String> wouldHaveSkipped = new LinkedHashSet<>();
+        Map<String, String> skipReasons = new LinkedHashMap<>();
+        for (MavenProject project : allProjects) {
+            String path = moduleKey.apply(project);
+            wouldHaveSkipped.add(path);
+            skipReasons.put(path, ScalpelReport.SKIP_REASON_NOT_AFFECTED);
+        }
+        String decisionId = decisionIdFor(result, config, reactorRoot, List.<MavenProject>of());
+        ShadowDecision decision = ShadowDecision.verifying(wouldHaveBuilt, wouldHaveSkipped, skipReasons, decisionId);
+        session.getRequest()
+                .setExecutionListener(new ShadowBuildMonitor(
+                        session.getRequest().getExecutionListener(),
+                        reactorRoot,
+                        Version.version(),
+                        config.getBaseBranch(),
+                        changedFiles,
+                        System::nanoTime,
+                        moduleKey,
+                        decision));
+        logger.info(
+                "Scalpel: Verify mode observing the full build with empty decision:"
+                        + " would skip all {} modules (decisionId {})",
+                allProjects.size(),
+                decisionId);
     }
 
     /** Decision-side module name: relative path, "." for the reactor root (#84, #101). */
