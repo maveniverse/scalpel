@@ -1561,6 +1561,7 @@ class PomChangeAnalyzer {
      * Complexity: O(len + P) where len is content length and P is |propertyNames|,
      * compared to the previous O(P × len) approach of calling {@code contains()} per property.
      */
+    @SuppressWarnings("java:S135") // two breaks are clearer than a convoluted loop condition
     static boolean containsAnyPropertyRef(String content, Set<String> propertyNames) {
         int i = 0;
         while (true) {
