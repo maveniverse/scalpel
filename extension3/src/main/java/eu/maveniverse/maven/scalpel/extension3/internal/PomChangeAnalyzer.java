@@ -14,13 +14,10 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystem;
-import java.nio.file.FileSystems;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.PathMatcher;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
@@ -35,6 +32,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
+import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -336,15 +334,12 @@ class PomChangeAnalyzer {
      * <p>When both lists are empty, all changes are accepted (the filter is a no-op).
      */
     static class ChangeFilter {
-        private static final String GLOB_PREFIX = "glob:";
-
-        private final List<PathMatcher> excludeMatchers;
-        private final List<PathMatcher> includeMatchers;
+        private final List<Pattern> excludeMatchers;
+        private final List<Pattern> includeMatchers;
 
         ChangeFilter(List<String> excludePatterns, List<String> includePatterns) {
-            FileSystem fs = FileSystems.getDefault();
-            this.excludeMatchers = compileMatchers(excludePatterns, fs);
-            this.includeMatchers = compileMatchers(includePatterns, fs);
+            this.excludeMatchers = compileMatchers(excludePatterns);
+            this.includeMatchers = compileMatchers(includePatterns);
         }
 
         /** Returns {@code true} if the change path should be considered (not excluded). */
@@ -352,15 +347,14 @@ class PomChangeAnalyzer {
             if (excludeMatchers.isEmpty() && includeMatchers.isEmpty()) {
                 return true;
             }
-            Path path = Path.of(changePath);
             // Include overrides exclude
-            for (PathMatcher m : includeMatchers) {
-                if (m.matches(path)) {
+            for (Pattern m : includeMatchers) {
+                if (m.matcher(changePath).matches()) {
                     return true;
                 }
             }
-            for (PathMatcher m : excludeMatchers) {
-                if (m.matches(path)) {
+            for (Pattern m : excludeMatchers) {
+                if (m.matcher(changePath).matches()) {
                     return false;
                 }
             }
@@ -371,15 +365,51 @@ class PomChangeAnalyzer {
             return !excludeMatchers.isEmpty() || !includeMatchers.isEmpty();
         }
 
-        private static List<PathMatcher> compileMatchers(List<String> patterns, FileSystem fs) {
+        private static List<Pattern> compileMatchers(List<String> patterns) {
             if (patterns == null || patterns.isEmpty()) {
                 return List.of();
             }
-            List<PathMatcher> matchers = new ArrayList<>(patterns.size());
+            List<Pattern> matchers = new ArrayList<>(patterns.size());
             for (String pattern : patterns) {
-                matchers.add(fs.getPathMatcher(GLOB_PREFIX + pattern));
+                matchers.add(globToPattern(pattern));
             }
             return matchers;
+        }
+
+        /**
+         * Converts a simple glob pattern to a compiled {@link Pattern}.
+         * The glob syntax supports: {@code *} (any chars except {@code /}),
+         * {@code **} (any chars including {@code /}), {@code ?} (single char).
+         * Forward-slash {@code /} is the separator.  No filesystem is involved,
+         * so characters like {@code :} that are illegal in Windows file paths
+         * are handled correctly.
+         */
+        static Pattern globToPattern(String glob) {
+            StringBuilder regex = new StringBuilder();
+            int i = 0;
+            while (i < glob.length()) {
+                char c = glob.charAt(i);
+                if (c == '*') {
+                    if (i + 1 < glob.length() && glob.charAt(i + 1) == '*') {
+                        regex.append(".*");
+                        i += 2;
+                        // skip trailing slash after ** (e.g. **/ → match any prefix)
+                        if (i < glob.length() && glob.charAt(i) == '/') {
+                            i++;
+                        }
+                    } else {
+                        regex.append("[^/]*");
+                        i++;
+                    }
+                } else if (c == '?') {
+                    regex.append("[^/]");
+                    i++;
+                } else {
+                    regex.append(Pattern.quote(String.valueOf(c)));
+                    i++;
+                }
+            }
+            return Pattern.compile(regex.toString());
         }
     }
 
@@ -2139,12 +2169,15 @@ class PomChangeAnalyzer {
 
         @Override
         public void addRepository(Repository repository) throws InvalidRepositoryException {
-            delegate.addRepository(repository);
+            // Deliberately ignores repository declarations: the reactor model resolver
+            // resolves parents and BOM imports from the reactor itself, and the delegate's
+            // addRepository requires a fully configured RemoteRepositoryManager (which may
+            // not be available during standalone effective model building).
         }
 
         @Override
         public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {
-            delegate.addRepository(repository, replace);
+            // Deliberately ignores repository declarations — see above.
         }
 
         @Override
