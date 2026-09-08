@@ -336,7 +336,10 @@ public final class ScalpelReport {
                 .append('|')
                 .append(configFingerprint)
                 .append('|');
-        buildSetPaths.stream().sorted().forEach(path -> canonical.append(path).append('\n'));
+        buildSetPaths.stream()
+                .sorted()
+                .forEach(path ->
+                        canonical.append(path.length()).append(':').append(path).append('\n'));
         try {
             java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
             byte[] hash = digest.digest(canonical.toString().getBytes(StandardCharsets.UTF_8));

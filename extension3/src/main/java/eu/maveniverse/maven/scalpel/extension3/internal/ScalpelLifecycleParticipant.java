@@ -193,7 +193,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             String triggerFile = findFullBuildTrigger(changedFiles, config);
             if (triggerFile != null) {
                 if (passiveRun(config)) {
-                    writeFullBuildReport(config, reactorRoot, triggerFile, changedFiles);
+                    writeFullBuildReport(
+                            config,
+                            reactorRoot,
+                            triggerFile,
+                            changedFiles,
+                            decisionIdFor(result, config, reactorRoot, allProjects));
                 }
                 return;
             }
@@ -1709,10 +1714,15 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     }
 
     private void writeFullBuildReport(
-            ScalpelConfiguration config, Path reactorRoot, String triggerFile, Set<String> changedFiles)
+            ScalpelConfiguration config,
+            Path reactorRoot,
+            String triggerFile,
+            Set<String> changedFiles,
+            String decisionId)
             throws MavenExecutionException {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch(config.getBaseBranch())
+                .decisionId(decisionId)
                 .fullBuildTriggered(true)
                 .triggerFile(triggerFile)
                 .changedFiles(changedFiles)

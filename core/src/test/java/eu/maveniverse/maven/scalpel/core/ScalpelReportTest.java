@@ -725,6 +725,16 @@ class ScalpelReportTest {
     }
 
     @Test
+    void computeDecisionId_newlineInPathCannotForgeTwoPaths() {
+        // A path containing a literal newline must not hash identically to the same
+        // content split into two paths: the separator itself must be unambiguous.
+        assertNotEquals(
+                ScalpelReport.computeDecisionId("m", "h", "f", java.util.List.of("module-a\nmodule-b")),
+                ScalpelReport.computeDecisionId("m", "h", "f", java.util.List.of("module-a", "module-b")),
+                "a forged newline inside one path must not collide with two real paths");
+    }
+
+    @Test
     void computeDecisionId_isOrderInsensitiveOverTheBuildSet() {
         assertEquals(
                 ScalpelReport.computeDecisionId("m", "h", "f", List.of("module-a", "module-b")),
