@@ -258,6 +258,39 @@ class ReactorTrimmerTest {
     }
 
     @Test
+    void computeBuildSet_testOnlyDoesNotPropagateTransitively() {
+        // A (test-only) -> B (test-jar dep on A) -> D (compile dep on B)
+        // D must NOT be in the build set because D has no test-jar dependency on A.
+        // This matches the old DFS semantics where graph.getDownstreamProjects(A, true)
+        // returns {B, D} and hasTestJarDependency(D, A) is false.
+        MavenProject projectA = createProject("com.example", "module-a");
+        MavenProject projectB = createProject("com.example", "module-b");
+        MavenProject projectD = createProject("com.example", "module-d");
+        addTestJarDependency(projectB, "com.example", "module-a");
+        addDependency(projectD, "com.example", "module-b", "compile");
+
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectD);
+        Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
+        downstreamMap.put(projectA, List.of(projectB));
+        downstreamMap.put(projectB, List.of(projectD));
+
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
+
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
+        Set<MavenProject> testOnlyProjects = new LinkedHashSet<>(Set.of(projectA));
+        ScalpelConfiguration config = configWith(false, true); // alsoMakeDependents=true
+
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, testOnlyProjects, graph, config);
+
+        assertTrue(result.getBuildSet().contains(projectA), "A (directly affected) should be in the build set");
+        assertTrue(
+                result.getBuildSet().contains(projectB), "B (test-jar dep on test-only A) should be in the build set");
+        assertFalse(
+                result.getBuildSet().contains(projectD),
+                "D (compile dep on B, no test-jar dep on A) should NOT be in the build set");
+    }
+
+    @Test
     void computeBuildSet_diamondGraphNoDuplicates() {
         // Diamond: A -> B, A -> C, B -> D, C -> D
         MavenProject projectA = createProject("com.example", "module-a");

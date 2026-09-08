@@ -65,12 +65,16 @@ class ReactorTrimmer {
         if (config.isAlsoMakeDependents()) {
             // Multi-source BFS over the forward edge set: start from all directly-affected
             // projects and walk the transitive downstream closure in one pass.
+            // For test-only sources, we must check hasTestJarDependency at every hop
+            // against the original test-only source, matching the old transitive DFS
+            // semantics where graph.getDownstreamProjects(A, true) returned all transitive
+            // downstream and hasTestJarDependency(ds, A) was checked for each.
             Queue<MavenProject> queue = new ArrayDeque<>();
-            // Track which (source, downstream) pairs should be filtered for test-only
-            // We need to remember which "source" triggered each downstream addition
-            // so we can check test-jar dependency correctly.
-            // Strategy: BFS from each directly-affected project, but share visited set.
             Set<MavenProject> visited = new LinkedHashSet<>(directlyAffected);
+            // Track which test-only source(s) reached each node in the BFS.
+            // Nodes reached only via test-only sources are subject to hasTestJarDependency
+            // checks at every hop; nodes reached via non-test-only sources propagate freely.
+            Map<MavenProject, Set<MavenProject>> testOnlyOrigins = new HashMap<>();
             for (MavenProject project : directlyAffected) {
                 boolean isTestOnly = testOnlyProjects.contains(project);
                 for (MavenProject ds : directDownstream.getOrDefault(project, List.of())) {
@@ -86,6 +90,11 @@ class ReactorTrimmer {
                     }
                     visited.add(ds);
                     buildSet.add(ds);
+                    if (isTestOnly) {
+                        testOnlyOrigins
+                                .computeIfAbsent(ds, k -> new LinkedHashSet<>())
+                                .add(project);
+                    }
                     if (config.isExplain()) {
                         addReason(buildReasons, ds, "downstream of " + key(project));
                     }
@@ -100,26 +109,56 @@ class ReactorTrimmer {
                     queue.add(ds);
                 }
             }
-            // Continue BFS for transitive downstream (non-test-only filtering applies
-            // only at the first hop from a directly-affected test-only project)
+            // Continue BFS for transitive downstream.  For nodes that entered the queue
+            // via a test-only source, we must check hasTestJarDependency(ds, testOnlySource)
+            // at each hop — matching the old DFS semantics.  Nodes that entered via a
+            // non-test-only source propagate freely.
             while (!queue.isEmpty()) {
                 MavenProject current = queue.poll();
+                Set<MavenProject> currentTestOnlyOrigins = testOnlyOrigins.get(current);
+                boolean currentFromTestOnly = currentTestOnlyOrigins != null;
                 for (MavenProject ds : directDownstream.getOrDefault(current, List.of())) {
-                    if (visited.add(ds)) {
-                        buildSet.add(ds);
-                        if (config.isExplain()) {
-                            addReason(buildReasons, ds, "downstream of " + key(current));
-                        }
-                        String scope = getDependencyScope(ds, current);
-                        if ("test".equals(scope)) {
-                            logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(current));
-                            downstreamTestOnly.add(ds);
-                        } else {
-                            logger.debug("Adding downstream dependent {} of {}", key(ds), key(current));
-                            downstreamOnly.add(ds);
-                        }
-                        queue.add(ds);
+                    if (visited.contains(ds)) {
+                        continue;
                     }
+                    // If current was reached exclusively via test-only sources, enforce
+                    // hasTestJarDependency for each origin.  The downstream node must have
+                    // a test-jar dependency on at least one of the original test-only
+                    // sources to be included.
+                    if (currentFromTestOnly) {
+                        boolean hasTestJar = false;
+                        for (MavenProject origin : currentTestOnlyOrigins) {
+                            if (hasTestJarDependency(ds, origin)) {
+                                hasTestJar = true;
+                                break;
+                            }
+                        }
+                        if (!hasTestJar) {
+                            logger.debug(
+                                    "Skipping transitive downstream {} (no test-jar dependency on test-only sources)",
+                                    key(ds));
+                            continue;
+                        }
+                    }
+                    visited.add(ds);
+                    buildSet.add(ds);
+                    if (currentFromTestOnly) {
+                        testOnlyOrigins
+                                .computeIfAbsent(ds, k -> new LinkedHashSet<>())
+                                .addAll(currentTestOnlyOrigins);
+                    }
+                    if (config.isExplain()) {
+                        addReason(buildReasons, ds, "downstream of " + key(current));
+                    }
+                    String scope = getDependencyScope(ds, current);
+                    if ("test".equals(scope)) {
+                        logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(current));
+                        downstreamTestOnly.add(ds);
+                    } else {
+                        logger.debug("Adding downstream dependent {} of {}", key(ds), key(current));
+                        downstreamOnly.add(ds);
+                    }
+                    queue.add(ds);
                 }
             }
         }
