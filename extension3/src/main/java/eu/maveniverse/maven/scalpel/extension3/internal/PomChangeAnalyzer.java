@@ -14,13 +14,10 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.FileSystem;
-import java.nio.file.FileSystems;
 import java.nio.file.FileVisitOption;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.PathMatcher;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
@@ -35,6 +32,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
 import java.util.Set;
+import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
@@ -336,31 +334,27 @@ class PomChangeAnalyzer {
      * <p>When both lists are empty, all changes are accepted (the filter is a no-op).
      */
     static class ChangeFilter {
-        private static final String GLOB_PREFIX = "glob:";
+        private final List<Pattern> excludePatterns;
+        private final List<Pattern> includePatterns;
 
-        private final List<PathMatcher> excludeMatchers;
-        private final List<PathMatcher> includeMatchers;
-
-        ChangeFilter(List<String> excludePatterns, List<String> includePatterns) {
-            FileSystem fs = FileSystems.getDefault();
-            this.excludeMatchers = compileMatchers(excludePatterns, fs);
-            this.includeMatchers = compileMatchers(includePatterns, fs);
+        ChangeFilter(List<String> excludeGlobs, List<String> includeGlobs) {
+            this.excludePatterns = compileGlobs(excludeGlobs);
+            this.includePatterns = compileGlobs(includeGlobs);
         }
 
         /** Returns {@code true} if the change path should be considered (not excluded). */
         boolean accepts(String changePath) {
-            if (excludeMatchers.isEmpty() && includeMatchers.isEmpty()) {
+            if (excludePatterns.isEmpty() && includePatterns.isEmpty()) {
                 return true;
             }
-            Path path = Path.of(changePath);
             // Include overrides exclude
-            for (PathMatcher m : includeMatchers) {
-                if (m.matches(path)) {
+            for (Pattern p : includePatterns) {
+                if (p.matcher(changePath).matches()) {
                     return true;
                 }
             }
-            for (PathMatcher m : excludeMatchers) {
-                if (m.matches(path)) {
+            for (Pattern p : excludePatterns) {
+                if (p.matcher(changePath).matches()) {
                     return false;
                 }
             }
@@ -368,18 +362,59 @@ class PomChangeAnalyzer {
         }
 
         boolean isActive() {
-            return !excludeMatchers.isEmpty() || !includeMatchers.isEmpty();
+            return !excludePatterns.isEmpty() || !includePatterns.isEmpty();
         }
 
-        private static List<PathMatcher> compileMatchers(List<String> patterns, FileSystem fs) {
-            if (patterns == null || patterns.isEmpty()) {
+        /**
+         * Converts glob patterns to regexes.  Change paths are logical
+         * (e.g.&nbsp;{@code managedDependencies/com.foo:bar}) and may contain
+         * characters like {@code :} that are illegal in Windows file paths.
+         * Using {@code java.nio.file.PathMatcher} would fail on Windows,
+         * so we translate globs to {@link Pattern} ourselves.
+         */
+        private static List<Pattern> compileGlobs(List<String> globs) {
+            if (globs == null || globs.isEmpty()) {
                 return List.of();
             }
-            List<PathMatcher> matchers = new ArrayList<>(patterns.size());
-            for (String pattern : patterns) {
-                matchers.add(fs.getPathMatcher(GLOB_PREFIX + pattern));
+            List<Pattern> patterns = new ArrayList<>(globs.size());
+            for (String glob : globs) {
+                patterns.add(Pattern.compile(globToRegex(glob)));
             }
-            return matchers;
+            return patterns;
+        }
+
+        /**
+         * Translates a simple glob (supporting {@code *}, {@code **}, and
+         * {@code ?}) into a regex string.  {@code /} is matched literally.
+         */
+        static String globToRegex(String glob) {
+            StringBuilder sb = new StringBuilder();
+            int i = 0;
+            while (i < glob.length()) {
+                char c = glob.charAt(i);
+                if (c == '*') {
+                    if (i + 1 < glob.length() && glob.charAt(i + 1) == '*') {
+                        // ** matches everything including /
+                        sb.append(".*");
+                        i += 2;
+                        // skip trailing / after **
+                        if (i < glob.length() && glob.charAt(i) == '/') {
+                            i++;
+                        }
+                    } else {
+                        // * matches everything except /
+                        sb.append("[^/]*");
+                        i++;
+                    }
+                } else if (c == '?') {
+                    sb.append("[^/]");
+                    i++;
+                } else {
+                    sb.append(Pattern.quote(String.valueOf(c)));
+                    i++;
+                }
+            }
+            return sb.toString();
         }
     }
 
