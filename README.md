@@ -1,7 +1,7 @@
 # Maveniverse Scalpel
 
 Requirements:
-* Java: 8+
+* Java: 17+
 * Maven: 3.9.x+
 
 Scalpel is a Maven core extension that detects which modules in a multi-module reactor are affected by a git changeset. It can trim the reactor to only build affected modules, skip tests on unaffected modules, or produce a JSON report of affected modules for consumption by CI scripts.
