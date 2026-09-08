@@ -196,7 +196,6 @@ public final class ScalpelConfiguration {
      *   <li>{@code plugins/<groupId>:<artifactId>}</li>
      *   <li>{@code managedDependencies/<groupId>:<artifactId>}</li>
      *   <li>{@code managedPlugins/<groupId>:<artifactId>}</li>
-     *   <li>{@code resources/<path>} — filtered resource files referencing changed properties</li>
      * </ul>
      *
      * <p>Default: {@code properties/build.timestamp,properties/project.build.outputTimestamp}

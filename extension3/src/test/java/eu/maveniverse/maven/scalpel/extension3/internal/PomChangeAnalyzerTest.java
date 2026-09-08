@@ -2939,6 +2939,15 @@ class PomChangeAnalyzerTest {
         Files.createDirectories(resourceDir);
         Files.writeString(resourceDir.resolve("version.properties"), "built.at=${build.timestamp}");
 
+        // Set up module-b with filtering enabled so hasFilteredResourcesWithChangedProperty scans it
+        MavenProject moduleB = projects.get(2);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleB.getModel().setBuild(build);
+
         String oldParentPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -2959,12 +2968,15 @@ class PomChangeAnalyzerTest {
         oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
 
         // The property is excluded: even though filtered resources reference it,
-        // the property should not be in changedProperties
+        // the property should not be in changedProperties and the module should not be affected
         PomChangeAnalyzer.Result result =
                 analyzeChanges(changedPoms, oldPoms, projects, root, List.of("properties/build.timestamp"), List.of());
         assertFalse(
                 result.getChangedProperties().contains("build.timestamp"),
                 "Excluded property should not appear in changedProperties");
+        assertFalse(
+                result.getAffectedProjects().contains(moduleB),
+                "Excluded property must not trigger filtered-resource scan");
     }
 
     @Test

@@ -661,9 +661,11 @@ class PomChangeAnalyzer {
         parentSelfAffected = parentSelfAffected || analyzeProfileChanges(oldModel, newModel, activeProfileIds);
 
         // Collect all changed properties (filtered by change filter)
+        Set<String> filteredChangedProperties = new LinkedHashSet<>();
         for (String prop : changedProperties) {
             if (ctx.changeFilter.accepts("properties/" + prop)) {
                 ctx.allChangedProperties.add(prop);
+                filteredChangedProperties.add(prop);
             }
         }
 
@@ -714,8 +716,8 @@ class PomChangeAnalyzer {
             // Properties used in filtered resources are often inherited (defined in the
             // parent, not the child), so the raw-model property check above won't catch them.
             if (!childAffected
-                    && !changedProperties.isEmpty()
-                    && hasFilteredResourcesWithChangedProperty(child, changedProperties, ctx)) {
+                    && !filteredChangedProperties.isEmpty()
+                    && hasFilteredResourcesWithChangedProperty(child, filteredChangedProperties, ctx)) {
                 logger.debug("Child {} has filtered resources referencing changed properties", key(child));
                 if (ctx.explain) {
                     addEvidence(ctx.evidence, child, "filtered resources referencing changed properties");
