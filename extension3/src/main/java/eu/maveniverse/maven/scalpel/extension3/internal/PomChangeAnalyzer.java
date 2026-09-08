@@ -396,9 +396,14 @@ class PomChangeAnalyzer {
                             // **/ → optionally match any path segment(s) ending with /
                             regex.append("(.*/)?");
                             i++;
-                        } else {
-                            // ** at end → match anything
+                        } else if (i >= glob.length()) {
+                            // ** at end of pattern → match anything (safe, no following literal)
                             regex.append(".*");
+                        } else {
+                            // ** followed by a non-'/' char (e.g. **Test.java) →
+                            // treat as single-segment wildcard to prevent ReDoS from
+                            // chained .* groups with interleaved literals
+                            regex.append("[^/]*");
                         }
                     } else {
                         regex.append("[^/]*");

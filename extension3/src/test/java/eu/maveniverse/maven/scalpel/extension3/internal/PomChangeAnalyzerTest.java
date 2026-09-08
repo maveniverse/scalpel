@@ -3126,6 +3126,26 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void globToPattern_doubleStarMidSegmentFallsBackToSingleSegment() {
+        // **Test.java is not a standard glob; ** mid-segment should behave as single-segment
+        // wildcard to prevent ReDoS from chained .* groups
+        Pattern p = PomChangeAnalyzer.ChangeFilter.globToPattern("**Test.java");
+        assertTrue(p.matcher("FooTest.java").matches());
+        assertFalse(p.matcher("foo/BarTest.java").matches()); // no cross-segment matching
+    }
+
+    @Test
+    void globToPattern_doubleStarMidSegmentNoReDoS() {
+        // Ensure patterns that previously caused catastrophic backtracking complete quickly
+        Pattern p = PomChangeAnalyzer.ChangeFilter.globToPattern("**a**a**z");
+        String input = "a".repeat(400) + "z";
+        long start = System.nanoTime();
+        p.matcher(input).matches(); // should not hang
+        long elapsed = (System.nanoTime() - start) / 1_000_000;
+        assertTrue(elapsed < 1000, "Pattern match took " + elapsed + "ms, expected < 1000ms");
+    }
+
+    @Test
     void analyzeChanges_excludeVolatileProperty() throws Exception {
         // Parent has dep.version property that changes. Child's my.ref depends on it.
         // With excludeChanges for properties/my.*, child should NOT be affected.
