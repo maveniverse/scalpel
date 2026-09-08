@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -234,10 +235,45 @@ class ReactorTrimmerTest {
     /**
      * Simple test implementation of ProjectDependencyGraph.
      */
+    @Test
+    void computeBuildSet_queriesEachGraphEdgeAtMostOnce() {
+        // #116: a sync-point module (depends on everything) makes the per-project DFS
+        // queries quadratic. A single-pass trimmer asks the graph O(M) times total, not
+        // once per accumulated build-set member.
+        MavenProject parent = createProject("com.example", "parent");
+        MavenProject sync = createProject("com.example", "sync");
+        MavenProject[] leaves = new MavenProject[8];
+        for (int i = 0; i < leaves.length; i++) {
+            leaves[i] = createProject("com.example", "leaf-" + i);
+        }
+        List<MavenProject> all = new ArrayList<>();
+        all.add(parent);
+        all.add(sync);
+        all.addAll(Arrays.asList(leaves));
+
+        Map<MavenProject, List<MavenProject>> upstream = new HashMap<>();
+        for (MavenProject leaf : leaves) {
+            upstream.put(leaf, List.of(sync, parent));
+        }
+        upstream.put(sync, List.of(parent));
+
+        TestDependencyGraph graph = new TestDependencyGraph(all, Map.of(), upstream);
+
+        trimmer.computeBuildSet(Set.of(leaves[0]), Set.of(), graph, configWith(true, true));
+
+        // One upstream query per project touched at most: the leaves' shared
+        // prerequisites (sync, parent) must be queried once each, not once per leaf.
+        assertTrue(
+                graph.upstreamQueries <= all.size(),
+                "expected at most one upstream query per project, got " + graph.upstreamQueries);
+    }
+
     private static class TestDependencyGraph implements ProjectDependencyGraph {
         private final List<MavenProject> sortedProjects;
         private final Map<MavenProject, List<MavenProject>> downstreamMap;
         private final Map<MavenProject, List<MavenProject>> upstreamMap;
+        int downstreamQueries;
+        int upstreamQueries;
 
         TestDependencyGraph(
                 List<MavenProject> sortedProjects,
@@ -260,12 +296,14 @@ class ReactorTrimmerTest {
 
         @Override
         public List<MavenProject> getDownstreamProjects(MavenProject project, boolean transitive) {
+            downstreamQueries++;
             List<MavenProject> result = downstreamMap.get(project);
             return result != null ? result : new ArrayList<>();
         }
 
         @Override
         public List<MavenProject> getUpstreamProjects(MavenProject project, boolean transitive) {
+            upstreamQueries++;
             List<MavenProject> result = upstreamMap.get(project);
             return result != null ? result : new ArrayList<>();
         }
