@@ -30,20 +30,26 @@ def report = new groovy.json.JsonSlurper().parseText(reportFile.text)
 assert report.version == '2' : "Report should have version 2"
 assert report.fullBuildTriggered == false : "fullBuildTriggered should be false"
 
-def modules = report.affectedModules.collectEntries { [(it.artifactId): it] }
+def modules = report.affectedModules
+def moduleA = modules.find { it.artifactId == 'module-a' }
+def moduleB = modules.find { it.artifactId == 'module-b' }
+def moduleC = modules.find { it.artifactId == 'module-c' }
 
 // module-a should be directly affected with SOURCE_CHANGE
-assert modules['module-a'] : "module-a should appear in report"
-assert modules['module-a'].reasons.contains('SOURCE_CHANGE') : "module-a should have SOURCE_CHANGE reason"
-assert modules['module-a'].category == 'DIRECT' : "module-a should have DIRECT category"
+assert moduleA : "module-a should appear in report"
+assert moduleA.reasons.contains('SOURCE_CHANGE') : "module-a should have SOURCE_CHANGE reason"
+assert moduleA.category == 'DIRECT' : "module-a should have DIRECT category"
 
-// module-b should be downstream with testsSkippedReason=EXCLUDED_DOWNSTREAM
-assert modules['module-b'] : "module-b should appear in report"
-assert modules['module-b'].reasons.contains('DOWNSTREAM_DEPENDENT') : "module-b should have DOWNSTREAM_DEPENDENT reason"
-assert modules['module-b'].testsSkippedReason == 'EXCLUDED_DOWNSTREAM' : \
+// module-b should be downstream with testsSkipped + testsSkippedReason=EXCLUDED_DOWNSTREAM
+assert moduleB : "module-b should appear in report"
+assert moduleB.reasons.contains('DOWNSTREAM_DEPENDENT') : "module-b should have DOWNSTREAM_DEPENDENT reason"
+assert moduleB.testsSkipped == true : "module-b should have testsSkipped=true"
+assert moduleB.testsSkippedReason == 'EXCLUDED_DOWNSTREAM' : \
     "module-b should have testsSkippedReason=EXCLUDED_DOWNSTREAM"
 
-// module-c should be downstream but WITHOUT testsSkippedReason
-assert modules['module-c'] : "module-c should appear in report"
-assert !modules['module-c'].containsKey('testsSkippedReason') : \
+// module-c should be downstream but WITHOUT testsSkipped/testsSkippedReason
+assert moduleC : "module-c should appear in report"
+assert !moduleC.containsKey('testsSkipped') : \
+    "module-c should NOT have testsSkipped in report"
+assert !moduleC.containsKey('testsSkippedReason') : \
     "module-c should NOT have testsSkippedReason in report"
