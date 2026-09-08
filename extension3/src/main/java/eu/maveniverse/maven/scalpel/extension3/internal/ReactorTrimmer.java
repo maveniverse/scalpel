@@ -79,6 +79,11 @@ class ReactorTrimmer {
                 boolean isTestOnly = testOnlyProjects.contains(project);
                 for (MavenProject ds : directDownstream.getOrDefault(project, List.of())) {
                     if (visited.contains(ds)) {
+                        // A non-test-only source reaching an already-visited node clears any
+                        // test-only-origin tracking — the non-test-only path dominates.
+                        if (!isTestOnly) {
+                            testOnlyOrigins.remove(ds);
+                        }
                         continue;
                     }
                     if (isTestOnly && !hasTestJarDependency(ds, project)) {
@@ -125,6 +130,11 @@ class ReactorTrimmer {
                 boolean currentFromTestOnly = currentTestOnlyOrigins != null;
                 for (MavenProject ds : directDownstream.getOrDefault(current, List.of())) {
                     if (visited.contains(ds)) {
+                        // A non-test-only path reaching an already-visited node clears any
+                        // test-only-origin tracking — the non-test-only path dominates.
+                        if (!currentFromTestOnly) {
+                            testOnlyOrigins.remove(ds);
+                        }
                         continue;
                     }
                     // If current was reached exclusively via test-only sources, enforce
