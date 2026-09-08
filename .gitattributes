@@ -1,1 +1,2 @@
 .mvn/nisse.properties export-subst
+mvnw text eol=lf

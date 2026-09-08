@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -3915,6 +3916,10 @@ class ScalpelLifecycleParticipantTest {
 
     @Test
     void impactedLog_newlineInModulePathCannotForgeEntries() throws Exception {
+        // Newline characters are illegal in file paths on Windows
+        assumeTrue(
+                !System.getProperty("os.name", "").startsWith("Win"),
+                "Windows does not allow newline characters in file paths");
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
