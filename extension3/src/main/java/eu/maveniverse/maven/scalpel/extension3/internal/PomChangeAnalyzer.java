@@ -391,11 +391,14 @@ class PomChangeAnalyzer {
                 char c = glob.charAt(i);
                 if (c == '*') {
                     if (i + 1 < glob.length() && glob.charAt(i + 1) == '*') {
-                        regex.append(".*");
                         i += 2;
-                        // skip trailing slash after ** (e.g. **/ → match any prefix)
                         if (i < glob.length() && glob.charAt(i) == '/') {
+                            // **/ → optionally match any path segment(s) ending with /
+                            regex.append("(.*/)?");
                             i++;
+                        } else {
+                            // ** at end → match anything
+                            regex.append(".*");
                         }
                     } else {
                         regex.append("[^/]*");
