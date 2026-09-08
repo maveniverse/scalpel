@@ -320,6 +320,47 @@ class ReactorTrimmerTest {
         assertEquals(3, result.getDownstreamOnly().size());
     }
 
+    @Test
+    void computeBuildSet_testOnlyAndNonTestOnlyConvergingPaths() {
+        // CodeRabbit repro: test-only and non-test-only paths converge before a downstream node.
+        // A (test-only) --test-jar--> X, B (non-test) --compile--> C --compile--> X, X --compile--> Y.
+        // Y must be included because X is reachable via the non-test-only path B -> C -> X.
+        // The old single-queue BFS could exclude Y if the test-only path was processed first.
+        MavenProject projectA = createProject("com.example", "module-a");
+        MavenProject projectB = createProject("com.example", "module-b");
+        MavenProject projectC = createProject("com.example", "module-c");
+        MavenProject projectX = createProject("com.example", "module-x");
+        MavenProject projectY = createProject("com.example", "module-y");
+        addTestJarDependency(projectX, "com.example", "module-a"); // X has test-jar dep on A
+        addDependency(projectC, "com.example", "module-b", "compile"); // C depends on B
+        addDependency(projectX, "com.example", "module-c", "compile"); // X depends on C
+        addDependency(projectY, "com.example", "module-x", "compile"); // Y depends on X
+
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectC, projectX, projectY);
+        Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
+        downstreamMap.put(projectA, List.of(projectX)); // A -> X (test-jar)
+        downstreamMap.put(projectB, List.of(projectC)); // B -> C
+        downstreamMap.put(projectC, List.of(projectX)); // C -> X
+        downstreamMap.put(projectX, List.of(projectY)); // X -> Y
+
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
+
+        // A is test-only, B is not
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(List.of(projectA, projectB));
+        Set<MavenProject> testOnlyProjects = new LinkedHashSet<>(Set.of(projectA));
+        ScalpelConfiguration config = configWith(false, true); // alsoMakeDependents=true
+
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, testOnlyProjects, graph, config);
+
+        assertTrue(result.getBuildSet().contains(projectC), "C (downstream of non-test B) should be included");
+        assertTrue(
+                result.getBuildSet().contains(projectX),
+                "X (downstream of both test-only A and non-test C) should be included");
+        assertTrue(
+                result.getBuildSet().contains(projectY),
+                "Y (downstream of X, reachable via non-test-only path B->C->X) must be included");
+    }
+
     // --- Helper methods ---
 
     private MavenProject createProject(String groupId, String artifactId) {

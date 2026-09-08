@@ -63,44 +63,31 @@ class ReactorTrimmer {
         Map<MavenProject, List<String>> buildReasons = new LinkedHashMap<>();
 
         if (config.isAlsoMakeDependents()) {
-            // Multi-source BFS over the forward edge set: start from all directly-affected
-            // projects and walk the transitive downstream closure in one pass.
-            // For test-only sources, we must check hasTestJarDependency at every hop
-            // against the original test-only source, matching the old transitive DFS
-            // semantics where graph.getDownstreamProjects(A, true) returned all transitive
-            // downstream and hasTestJarDependency(ds, A) was checked for each.
+            // Two-phase multi-source BFS over the forward edge set.
+            //
+            // Phase 1: BFS from non-test-only sources — no test-jar filtering.
+            //          These nodes and all their transitive downstream are included
+            //          unconditionally.
+            //
+            // Phase 2: BFS from test-only sources — hasTestJarDependency enforced
+            //          at every hop against the original test-only source.  Nodes
+            //          already visited in Phase 1 are treated as safe (their
+            //          descendants were already queued without restriction).
+            //
+            // Splitting into two phases avoids the processing-order race where a
+            // test-only path through the single queue could permanently exclude
+            // descendants of a node that is also reachable via a non-test-only path.
             Queue<MavenProject> queue = new ArrayDeque<>();
             Set<MavenProject> visited = new LinkedHashSet<>(directlyAffected);
-            // Track which test-only source(s) reached each node in the BFS.
-            // Nodes reached only via test-only sources are subject to hasTestJarDependency
-            // checks at every hop; nodes reached via non-test-only sources propagate freely.
-            Map<MavenProject, Set<MavenProject>> testOnlyOrigins = new HashMap<>();
+
+            // --- Phase 1: non-test-only sources ---
             for (MavenProject project : directlyAffected) {
-                boolean isTestOnly = testOnlyProjects.contains(project);
+                if (testOnlyProjects.contains(project)) {
+                    continue; // handled in Phase 2
+                }
                 for (MavenProject ds : directDownstream.getOrDefault(project, List.of())) {
-                    if (visited.contains(ds)) {
-                        // A non-test-only source reaching an already-visited node clears any
-                        // test-only-origin tracking — the non-test-only path dominates.
-                        if (!isTestOnly) {
-                            testOnlyOrigins.remove(ds);
-                        }
-                        continue;
-                    }
-                    if (isTestOnly && !hasTestJarDependency(ds, project)) {
-                        if (logger.isDebugEnabled()) {
-                            logger.debug(
-                                    "Skipping downstream {} of test-only module {} (no test-jar dependency)",
-                                    key(ds),
-                                    key(project));
-                        }
-                    } else {
-                        visited.add(ds);
+                    if (visited.add(ds)) {
                         buildSet.add(ds);
-                        if (isTestOnly) {
-                            testOnlyOrigins
-                                    .computeIfAbsent(ds, k -> new LinkedHashSet<>())
-                                    .add(project);
-                        }
                         if (config.isExplain()) {
                             addReason(buildReasons, ds, "downstream of " + key(project));
                         }
@@ -120,53 +107,114 @@ class ReactorTrimmer {
                     }
                 }
             }
-            // Continue BFS for transitive downstream.  For nodes that entered the queue
-            // via a test-only source, we must check hasTestJarDependency(ds, testOnlySource)
-            // at each hop — matching the old DFS semantics.  Nodes that entered via a
-            // non-test-only source propagate freely.
+            // Drain queue: all transitive downstream from non-test-only sources
+            while (!queue.isEmpty()) {
+                MavenProject current = queue.poll();
+                for (MavenProject ds : directDownstream.getOrDefault(current, List.of())) {
+                    if (visited.add(ds)) {
+                        buildSet.add(ds);
+                        if (config.isExplain()) {
+                            addReason(buildReasons, ds, "downstream of " + key(current));
+                        }
+                        String scope = getDependencyScope(ds, current);
+                        if ("test".equals(scope)) {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(current));
+                            }
+                            downstreamTestOnly.add(ds);
+                        } else {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Adding downstream dependent {} of {}", key(ds), key(current));
+                            }
+                            downstreamOnly.add(ds);
+                        }
+                        queue.add(ds);
+                    }
+                }
+            }
+
+            // --- Phase 2: test-only sources ---
+            // Track which test-only source(s) reached each node so we can enforce
+            // hasTestJarDependency at every hop against the original source(s).
+            Map<MavenProject, Set<MavenProject>> testOnlyOrigins = new HashMap<>();
+            for (MavenProject project : directlyAffected) {
+                if (!testOnlyProjects.contains(project)) {
+                    continue; // handled in Phase 1
+                }
+                for (MavenProject ds : directDownstream.getOrDefault(project, List.of())) {
+                    if (visited.contains(ds)) {
+                        // Already reached via a non-test-only path (or another test-only
+                        // source) — descendants are already queued from Phase 1, so skip.
+                        continue;
+                    }
+                    if (!hasTestJarDependency(ds, project)) {
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(
+                                    "Skipping downstream {} of test-only module {} (no test-jar dependency)",
+                                    key(ds),
+                                    key(project));
+                        }
+                    } else {
+                        visited.add(ds);
+                        buildSet.add(ds);
+                        testOnlyOrigins
+                                .computeIfAbsent(ds, k -> new LinkedHashSet<>())
+                                .add(project);
+                        if (config.isExplain()) {
+                            addReason(buildReasons, ds, "downstream of " + key(project));
+                        }
+                        String scope = getDependencyScope(ds, project);
+                        if ("test".equals(scope)) {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Adding test-scoped downstream {} of {}", key(ds), key(project));
+                            }
+                            downstreamTestOnly.add(ds);
+                        } else {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug("Adding downstream dependent {} of {}", key(ds), key(project));
+                            }
+                            downstreamOnly.add(ds);
+                        }
+                        queue.add(ds);
+                    }
+                }
+            }
+            // Continue BFS for transitive downstream of test-only sources.
+            // At each hop, hasTestJarDependency(ds, origin) is enforced against
+            // the original test-only source(s) — matching the old DFS semantics.
             while (!queue.isEmpty()) {
                 MavenProject current = queue.poll();
                 Set<MavenProject> currentTestOnlyOrigins = testOnlyOrigins.get(current);
-                boolean currentFromTestOnly = currentTestOnlyOrigins != null;
+                if (currentTestOnlyOrigins == null) {
+                    // This node entered the queue from Phase 1 (no test-only origins).
+                    // Should not happen after Phase 1 drain, but guard defensively.
+                    continue;
+                }
                 for (MavenProject ds : directDownstream.getOrDefault(current, List.of())) {
                     if (visited.contains(ds)) {
-                        // A non-test-only path reaching an already-visited node clears any
-                        // test-only-origin tracking — the non-test-only path dominates.
-                        if (!currentFromTestOnly) {
-                            testOnlyOrigins.remove(ds);
-                        }
+                        // Already visited — either from Phase 1 (safe) or from an
+                        // earlier test-only path.  No need to revisit.
                         continue;
                     }
-                    // If current was reached exclusively via test-only sources, enforce
-                    // hasTestJarDependency for each origin.  The downstream node must have
-                    // a test-jar dependency on at least one of the original test-only
-                    // sources to be included.
-                    boolean skip = false;
-                    if (currentFromTestOnly) {
-                        boolean hasTestJar = false;
-                        for (MavenProject origin : currentTestOnlyOrigins) {
-                            if (hasTestJarDependency(ds, origin)) {
-                                hasTestJar = true;
-                                break;
-                            }
-                        }
-                        if (!hasTestJar) {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug(
-                                        "Skipping transitive downstream {} (no test-jar dependency on test-only sources)",
-                                        key(ds));
-                            }
-                            skip = true;
+                    boolean hasTestJar = false;
+                    for (MavenProject origin : currentTestOnlyOrigins) {
+                        if (hasTestJarDependency(ds, origin)) {
+                            hasTestJar = true;
+                            break;
                         }
                     }
-                    if (!skip) {
+                    if (!hasTestJar) {
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(
+                                    "Skipping transitive downstream {} (no test-jar dependency on test-only sources)",
+                                    key(ds));
+                        }
+                    } else {
                         visited.add(ds);
                         buildSet.add(ds);
-                        if (currentFromTestOnly) {
-                            testOnlyOrigins
-                                    .computeIfAbsent(ds, k -> new LinkedHashSet<>())
-                                    .addAll(currentTestOnlyOrigins);
-                        }
+                        testOnlyOrigins
+                                .computeIfAbsent(ds, k -> new LinkedHashSet<>())
+                                .addAll(currentTestOnlyOrigins);
                         if (config.isExplain()) {
                             addReason(buildReasons, ds, "downstream of " + key(current));
                         }
