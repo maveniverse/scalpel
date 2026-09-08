@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
@@ -2498,6 +2499,9 @@ class PomChangeAnalyzerTest {
     void analyzeChanges_unreadableResourceFileMarksChildAsAffected() throws Exception {
         // When a filtered resource file cannot be read (IOException),
         // the child should be conservatively marked as affected.
+        assumeTrue(
+                tempDir.getFileSystem().supportedFileAttributeViews().contains("posix"),
+                "POSIX file permissions not supported on this filesystem (e.g. Windows NTFS)");
         Path root = setupReactorRoot();
         List<MavenProject> projects = createReactorWithPropertyUsage(root);
 
@@ -2550,6 +2554,9 @@ class PomChangeAnalyzerTest {
     void analyzeChanges_unreadableResourceDirectoryMarksChildAsAffected() throws Exception {
         // When a filtered resource subdirectory cannot be listed (IOException on
         // DirectoryStream), the child should be conservatively marked as affected.
+        assumeTrue(
+                tempDir.getFileSystem().supportedFileAttributeViews().contains("posix"),
+                "POSIX file permissions not supported on this filesystem (e.g. Windows NTFS)");
         Path root = setupReactorRoot();
         List<MavenProject> projects = createReactorWithPropertyUsage(root);
 
@@ -3087,6 +3094,55 @@ class PomChangeAnalyzerTest {
         assertFalse(filter.accepts("properties/project.build.outputTimestamp"));
         assertFalse(filter.accepts("properties/git.commit.id"));
         assertTrue(filter.accepts("properties/dep.version"));
+    }
+
+    @Test
+    void globToPattern_doubleStarSlashRequiresSeparator() {
+        // **/pom.xml should match paths with separator or at root, but not "parentpom.xml"
+        Pattern p = PomChangeAnalyzer.ChangeFilter.globToPattern("**/pom.xml");
+        assertTrue(p.matcher("pom.xml").matches());
+        assertTrue(p.matcher("foo/pom.xml").matches());
+        assertTrue(p.matcher("foo/bar/pom.xml").matches());
+        assertFalse(p.matcher("parentpom.xml").matches());
+    }
+
+    @Test
+    void globToPattern_middleDoubleStarRequiresSeparator() {
+        // a/**/b should match a/b, a/x/b, a/x/y/b but not a/xb
+        Pattern p = PomChangeAnalyzer.ChangeFilter.globToPattern("a/**/b");
+        assertTrue(p.matcher("a/b").matches());
+        assertTrue(p.matcher("a/x/b").matches());
+        assertTrue(p.matcher("a/x/y/b").matches());
+        assertFalse(p.matcher("a/xb").matches());
+    }
+
+    @Test
+    void globToPattern_trailingDoubleStar() {
+        // docs/** should match anything under docs/
+        Pattern p = PomChangeAnalyzer.ChangeFilter.globToPattern("docs/**");
+        assertTrue(p.matcher("docs/foo").matches());
+        assertTrue(p.matcher("docs/foo/bar").matches());
+        assertFalse(p.matcher("docs").matches());
+    }
+
+    @Test
+    void globToPattern_doubleStarMidSegmentFallsBackToSingleSegment() {
+        // **Test.java is not a standard glob; ** mid-segment should behave as single-segment
+        // wildcard to prevent ReDoS from chained .* groups
+        Pattern p = PomChangeAnalyzer.ChangeFilter.globToPattern("**Test.java");
+        assertTrue(p.matcher("FooTest.java").matches());
+        assertFalse(p.matcher("foo/BarTest.java").matches()); // no cross-segment matching
+    }
+
+    @Test
+    void globToPattern_doubleStarMidSegmentNoReDoS() {
+        // Ensure patterns that previously caused catastrophic backtracking complete quickly
+        Pattern p = PomChangeAnalyzer.ChangeFilter.globToPattern("**a**a**z");
+        String input = "a".repeat(400) + "z";
+        long start = System.nanoTime();
+        p.matcher(input).matches(); // should not hang
+        long elapsed = (System.nanoTime() - start) / 1_000_000;
+        assertTrue(elapsed < 1000, "Pattern match took " + elapsed + "ms, expected < 1000ms");
     }
 
     @Test

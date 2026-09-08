@@ -334,27 +334,27 @@ class PomChangeAnalyzer {
      * <p>When both lists are empty, all changes are accepted (the filter is a no-op).
      */
     static class ChangeFilter {
-        private final List<Pattern> excludePatterns;
-        private final List<Pattern> includePatterns;
+        private final List<Pattern> excludeMatchers;
+        private final List<Pattern> includeMatchers;
 
-        ChangeFilter(List<String> excludeGlobs, List<String> includeGlobs) {
-            this.excludePatterns = compileGlobs(excludeGlobs);
-            this.includePatterns = compileGlobs(includeGlobs);
+        ChangeFilter(List<String> excludePatterns, List<String> includePatterns) {
+            this.excludeMatchers = compileMatchers(excludePatterns);
+            this.includeMatchers = compileMatchers(includePatterns);
         }
 
         /** Returns {@code true} if the change path should be considered (not excluded). */
         boolean accepts(String changePath) {
-            if (excludePatterns.isEmpty() && includePatterns.isEmpty()) {
+            if (excludeMatchers.isEmpty() && includeMatchers.isEmpty()) {
                 return true;
             }
             // Include overrides exclude
-            for (Pattern p : includePatterns) {
-                if (p.matcher(changePath).matches()) {
+            for (Pattern m : includeMatchers) {
+                if (m.matcher(changePath).matches()) {
                     return true;
                 }
             }
-            for (Pattern p : excludePatterns) {
-                if (p.matcher(changePath).matches()) {
+            for (Pattern m : excludeMatchers) {
+                if (m.matcher(changePath).matches()) {
                     return false;
                 }
             }
@@ -362,59 +362,62 @@ class PomChangeAnalyzer {
         }
 
         boolean isActive() {
-            return !excludePatterns.isEmpty() || !includePatterns.isEmpty();
+            return !excludeMatchers.isEmpty() || !includeMatchers.isEmpty();
         }
 
-        /**
-         * Converts glob patterns to regexes.  Change paths are logical
-         * (e.g.&nbsp;{@code managedDependencies/com.foo:bar}) and may contain
-         * characters like {@code :} that are illegal in Windows file paths.
-         * Using {@code java.nio.file.PathMatcher} would fail on Windows,
-         * so we translate globs to {@link Pattern} ourselves.
-         */
-        private static List<Pattern> compileGlobs(List<String> globs) {
-            if (globs == null || globs.isEmpty()) {
+        private static List<Pattern> compileMatchers(List<String> patterns) {
+            if (patterns == null || patterns.isEmpty()) {
                 return List.of();
             }
-            List<Pattern> patterns = new ArrayList<>(globs.size());
-            for (String glob : globs) {
-                patterns.add(Pattern.compile(globToRegex(glob)));
+            List<Pattern> matchers = new ArrayList<>(patterns.size());
+            for (String pattern : patterns) {
+                matchers.add(globToPattern(pattern));
             }
-            return patterns;
+            return matchers;
         }
 
         /**
-         * Translates a simple glob (supporting {@code *}, {@code **}, and
-         * {@code ?}) into a regex string.  {@code /} is matched literally.
+         * Converts a simple glob pattern to a compiled {@link Pattern}.
+         * The glob syntax supports: {@code *} (any chars except {@code /}),
+         * {@code **} (any chars including {@code /}), {@code ?} (single char).
+         * Forward-slash {@code /} is the separator.  No filesystem is involved,
+         * so characters like {@code :} that are illegal in Windows file paths
+         * are handled correctly.
          */
-        static String globToRegex(String glob) {
-            StringBuilder sb = new StringBuilder();
+        static Pattern globToPattern(String glob) {
+            StringBuilder regex = new StringBuilder();
             int i = 0;
             while (i < glob.length()) {
                 char c = glob.charAt(i);
                 if (c == '*') {
                     if (i + 1 < glob.length() && glob.charAt(i + 1) == '*') {
-                        // ** matches everything including /
-                        sb.append(".*");
                         i += 2;
-                        // skip trailing / after **
                         if (i < glob.length() && glob.charAt(i) == '/') {
+                            // **/ → optionally match any path segment(s) ending with /
+                            regex.append("(.*/)?");
                             i++;
+                        } else if (i >= glob.length()) {
+                            // ** at end of pattern → match anything (safe, no following literal)
+                            regex.append(".*");
+                        } else {
+                            // ** followed by a non-'/' char (e.g. **Test.java) →
+                            // treat as single-segment wildcard to prevent ReDoS from
+                            // chained .* groups with interleaved literals
+                            regex.append("[^/]*");
                         }
                     } else {
-                        // * matches everything except /
-                        sb.append("[^/]*");
+                        regex.append("[^/]*");
                         i++;
                     }
                 } else if (c == '?') {
-                    sb.append("[^/]");
+                    regex.append("[^/]");
                     i++;
                 } else {
-                    sb.append(Pattern.quote(String.valueOf(c)));
+                    regex.append(Pattern.quote(String.valueOf(c)));
                     i++;
                 }
             }
-            return sb.toString();
+            return Pattern.compile(regex.toString());
         }
     }
 
@@ -2174,12 +2177,15 @@ class PomChangeAnalyzer {
 
         @Override
         public void addRepository(Repository repository) throws InvalidRepositoryException {
-            delegate.addRepository(repository);
+            // Deliberately ignores repository declarations: the reactor model resolver
+            // resolves parents and BOM imports from the reactor itself, and the delegate's
+            // addRepository requires a fully configured RemoteRepositoryManager (which may
+            // not be available during standalone effective model building).
         }
 
         @Override
         public void addRepository(Repository repository, boolean replace) throws InvalidRepositoryException {
-            delegate.addRepository(repository, replace);
+            // Deliberately ignores repository declarations — see above.
         }
 
         @Override
