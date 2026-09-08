@@ -39,6 +39,8 @@ Properties defined in a project POM are deliberately not read. Scalpel is config
 | `scalpel.failSafe` | `true` | On error, fall back to a full build instead of failing |
 | `scalpel.maxResourceFileSize` | `10 MB` | Maximum size in bytes for a resource file (resources larger than this are skipped with a warning) |
 | `scalpel.explain` | `false` | Enable explain mode. This adds per-module decision evidence to the report |
+| `scalpel.excludeChanges` | `properties/build.timestamp,properties/project.build.outputTimestamp` | Comma-separated glob patterns over change paths. Matching changes are excluded from effective model comparison |
+| `scalpel.includeChanges` | none | Comma-separated glob patterns over change paths. Overrides exclude patterns — a change matching both is included |
 
 ## Local Developer Usage
 
@@ -231,3 +233,60 @@ mvn verify -Dscalpel.upstreamArgs=skipITs=true -Dscalpel.downstreamArgs=skipITs=
 ```
 
 In `report` mode, each affected module in the JSON report includes a `category` field (`DIRECT`, `UPSTREAM`, or `DOWNSTREAM`).
+
+## Change Filtering
+
+Scalpel lets you exclude or force-include specific types of POM changes from the effective model comparison using glob patterns over a normalized "change path" scheme.
+
+### Change Path Scheme
+
+| Category | Path format | Example |
+|----------|------------|---------|
+| Property | `properties/<name>` | `properties/lib.version` |
+| Dependency | `dependencies/<groupId>:<artifactId>` | `dependencies/com.foo:bar` |
+| Plugin | `plugins/<groupId>:<artifactId>` | `plugins/org.apache.maven.plugins:maven-compiler-plugin` |
+| Managed dependency | `managedDependencies/<groupId>:<artifactId>` | `managedDependencies/com.foo:bar` |
+| Managed plugin | `managedPlugins/<groupId>:<artifactId>` | `managedPlugins/org.apache.maven.plugins:maven-surefire-plugin` |
+
+### Excluding Volatile Properties
+
+Some properties change on every build (timestamps, git commit IDs) and do not affect compilation. By default, Scalpel excludes `build.timestamp` and `project.build.outputTimestamp`. To exclude additional volatile properties:
+
+```bash
+-Dscalpel.excludeChanges=properties/build.timestamp,properties/project.build.outputTimestamp,properties/git.*
+```
+
+### Excluding CI Flags
+
+Properties like `ci.deploy.skip` or `gpg.skip` are irrelevant to build output:
+
+```bash
+-Dscalpel.excludeChanges=properties/build.timestamp,properties/project.build.outputTimestamp,properties/ci.*,properties/gpg.skip
+```
+
+### Trusting the Parent BOM
+
+To exclude all managed dependency changes (trusting the parent BOM blindly):
+
+```bash
+-Dscalpel.excludeChanges=managedDependencies/**
+```
+
+### Force-Including Inherited Properties
+
+Properties that affect the build through indirect mechanisms (e.g. profile-activated plugin configuration) but are not in the child's raw model can be force-included:
+
+```bash
+-Dscalpel.includeChanges=properties/maven.compiler.*
+```
+
+Include patterns override exclude patterns: a change matching both is included.
+
+### Smart Defaults
+
+Scalpel is already smart by default about several POM sections:
+
+- **`<modules>`** — adding or removing a module in the parent does NOT trigger rebuilds of existing children
+- **`<scm>`, `<developers>`, `<licenses>`** — metadata sections do not affect compilation and are not compared
+- **`<distributionManagement>`** — does not affect compilation output and is not compared
+- **Properties** — only properties the child defines or uses in filtered resources are checked; inherited-but-unused properties are ignored

@@ -34,18 +34,16 @@ assert report.contains('SOURCE_CHANGE') : "module-b should have SOURCE_CHANGE re
 // independent module-c would be skipped.
 File shadowFile = new File(basedir, 'target/scalpel-shadow.json')
 assert shadowFile.exists() : "shadow json should be written at session end"
-String shadow = shadowFile.text
-assert shadow.contains('"mode": "shadow"')
-assert shadow.contains('"estimatedSecondsSaved"')
-assert shadow.contains('"wouldHaveSkippedButFailed"')
-assert shadow.contains('"wouldHaveBuilt"')
-def skipStart = shadow.indexOf('"wouldHaveSkipped": [')
-def skipOpen = shadow.indexOf('[', skipStart)
-def skipClose = shadow.indexOf(']', skipOpen)
-def skipSet = shadow.substring(skipOpen, skipClose)
-assert skipSet.contains('module-c') : "module-c must be in the would-skip set"
-assert !skipSet.contains('module-a') : "module-a is an upstream prerequisite and must NOT be in the would-skip set"
-assert shadow.contains('module-b')
+def shadow = new groovy.json.JsonSlurper().parseText(shadowFile.text)
+assert shadow.mode == 'shadow'
+assert shadow.estimatedSecondsSaved != null
+assert shadow.wouldHaveSkippedButFailed != null
+assert shadow.wouldHaveBuilt != null
+assert shadow.wouldHaveSkipped.any { it.contains('module-c') } : \
+    "module-c must be in the would-skip set"
+assert !shadow.wouldHaveSkipped.any { it.contains('module-a') } : \
+    "module-a is an upstream prerequisite and must NOT be in the would-skip set"
+assert shadow.wouldHaveBuilt.any { it.contains('module-b') }
 
 // Decision parity with report mode, scoped to what it actually proves: this fixture has
 // no transitively affected modules, so the report's skippedModules (report-mode
