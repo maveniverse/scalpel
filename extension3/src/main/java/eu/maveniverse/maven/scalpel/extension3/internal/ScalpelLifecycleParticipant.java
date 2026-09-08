@@ -234,7 +234,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                         session.getSystemProperties(),
                                         session.getUserProperties(),
                                         session.getRepositorySession(),
-                                        allProjects.get(0).getRemoteProjectRepositories()));
+                                        allProjects.get(0).getRemoteProjectRepositories()),
+                                config.getExcludeChanges(),
+                                config.getIncludeChanges());
                     } finally {
                         timings.stop(Timings.PHASE_POM_ANALYSIS);
                     }

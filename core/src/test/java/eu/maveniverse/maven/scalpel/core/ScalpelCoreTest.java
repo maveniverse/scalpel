@@ -268,8 +268,20 @@ class ScalpelCoreTest {
     @Test
     void detectChanges_notAGitRepo_returnsNull() throws Exception {
         // Create a temp directory outside the project tree to avoid JGit walking up
-        // and discovering the project's own .git (java.io.tmpdir may be inside the repo)
-        Path nonGitDir = Files.createTempDirectory(Path.of("/tmp"), "scalpel-test-no-git");
+        // and discovering the project's own .git (java.io.tmpdir may be inside the repo
+        // because the parent POM's surefire config overrides it to target/surefire-tmp).
+        // On Unix /tmp is fine; on Windows fall back to TEMP/TMP env vars which always
+        // point outside the checkout.
+        Path systemTmp = Path.of("/tmp");
+        if (!Files.isDirectory(systemTmp)) {
+            // Windows: use TEMP or TMP environment variable
+            String envTmp = System.getenv("TEMP");
+            if (envTmp == null) envTmp = System.getenv("TMP");
+            if (envTmp == null) envTmp = System.getenv("TMPDIR");
+            assertNotNull(envTmp, "Cannot locate a system temp directory outside the project tree");
+            systemTmp = Path.of(envTmp);
+        }
+        Path nonGitDir = Files.createTempDirectory(systemTmp, "scalpel-test-no-git");
         try {
             ScalpelCore core = new ScalpelCore(new GitChangeDetector());
             Properties sys = new Properties();

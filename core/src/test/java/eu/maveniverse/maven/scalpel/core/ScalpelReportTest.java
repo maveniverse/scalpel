@@ -674,7 +674,7 @@ class ScalpelReportTest {
         try (InputStream is =
                 getClass().getResourceAsStream("/eu/maveniverse/maven/scalpel/core/golden-report-v2.json")) {
             assertNotNull(is, "golden-report-v2.json must be on the test classpath");
-            expected = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            expected = new String(is.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n");
         }
 
         assertEquals(

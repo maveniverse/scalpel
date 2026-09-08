@@ -23,25 +23,33 @@ assert log.contains('BUILD SUCCESS')
 File reportFile = new File(basedir, 'target/scalpel-report.json')
 assert reportFile.exists() : "Report file should have been created at target/scalpel-report.json"
 
+// Parsed, not hand-sliced: brace-counting breaks the moment a module object
+// gains a nested field, which is exactly how a schema addition should NOT
+// fail these assertions (see #96).
 def report = new groovy.json.JsonSlurper().parseText(reportFile.text)
-assert report.version == '2' : "Report should contain version 2"
+assert report.version == '2' : "Report should have version 2"
 assert report.fullBuildTriggered == false : "fullBuildTriggered should be false"
 
+def modules = report.affectedModules
+def moduleA = modules.find { it.artifactId == 'module-a' }
+def moduleB = modules.find { it.artifactId == 'module-b' }
+def moduleC = modules.find { it.artifactId == 'module-c' }
+
 // module-a should be directly affected with SOURCE_CHANGE
-def moduleA = report.affectedModules.find { it.artifactId == 'module-a' }
-assert moduleA != null : "module-a should appear in report"
+assert moduleA : "module-a should appear in report"
 assert moduleA.reasons.contains('SOURCE_CHANGE') : "module-a should have SOURCE_CHANGE reason"
 assert moduleA.category == 'DIRECT' : "module-a should have DIRECT category"
 
-// module-b should be downstream with testsSkippedReason=EXCLUDED_DOWNSTREAM
-def moduleB = report.affectedModules.find { it.artifactId == 'module-b' }
-assert moduleB != null : "module-b should appear in report"
+// module-b should be downstream with testsSkipped + testsSkippedReason=EXCLUDED_DOWNSTREAM
+assert moduleB : "module-b should appear in report"
 assert moduleB.reasons.contains('DOWNSTREAM_DEPENDENT') : "module-b should have DOWNSTREAM_DEPENDENT reason"
+assert moduleB.testsSkipped == true : "module-b should have testsSkipped=true"
 assert moduleB.testsSkippedReason == 'EXCLUDED_DOWNSTREAM' : \
-    "module-b should have testsSkippedReason=EXCLUDED_DOWNSTREAM in report, got: $moduleB"
+    "module-b should have testsSkippedReason=EXCLUDED_DOWNSTREAM"
 
-// module-c should be downstream but WITHOUT testsSkippedReason
-def moduleC = report.affectedModules.find { it.artifactId == 'module-c' }
-assert moduleC != null : "module-c should appear in report"
-assert moduleC.testsSkippedReason == null : \
-    "module-c should NOT have testsSkippedReason in report, got: $moduleC"
+// module-c should be downstream but WITHOUT testsSkipped/testsSkippedReason
+assert moduleC : "module-c should appear in report"
+assert !moduleC.containsKey('testsSkipped') : \
+    "module-c should NOT have testsSkipped in report"
+assert !moduleC.containsKey('testsSkippedReason') : \
+    "module-c should NOT have testsSkippedReason in report"
