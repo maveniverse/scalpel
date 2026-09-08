@@ -25,6 +25,7 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.PathMatcher;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -129,6 +130,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         logger.debug("Configuration: {}", config);
 
         Path reactorRoot = session.getRequest().getMultiModuleProjectDirectory().toPath();
+        // Normalize the reactor root once — hoisted out of all per-project loops (#113)
+        Path normalizedRoot = reactorRoot.toAbsolutePath().normalize();
         List<MavenProject> allProjects = session.getProjects();
 
         Timings timings = new Timings();
@@ -138,7 +141,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> allPomPaths = new LinkedHashSet<>();
             for (MavenProject project : allProjects) {
                 Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
-                Path relativePom = reactorRoot.toAbsolutePath().normalize().relativize(pomPath);
+                Path relativePom = normalizedRoot.relativize(pomPath);
                 allPomPaths.add(relativePom.toString().replace('\\', '/'));
             }
 
@@ -252,7 +255,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                         session.getSystemProperties(),
                                         session.getUserProperties(),
                                         session.getRepositorySession(),
-                                        allProjects.get(0).getRemoteProjectRepositories()));
+                                        allProjects.get(0).getRemoteProjectRepositories()),
+                                config.getExcludeChanges(),
+                                config.getIncludeChanges());
                     } finally {
                         timings.stop(Timings.PHASE_POM_ANALYSIS);
                     }
@@ -324,7 +329,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                     writeReport(
                             config,
-                            reactorRoot,
+                            normalizedRoot,
                             allProjects,
                             AnalysisContext.empty(
                                     changedFiles,
@@ -390,7 +395,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                     writeReport(
                             config,
-                            reactorRoot,
+                            normalizedRoot,
                             allProjects,
                             AnalysisContext.empty(
                                     changedFiles,
@@ -417,8 +422,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             List<PathMatcher> includeMatchers = compileGlobMatchers(config.getIncludePaths());
             if (!includeMatchers.isEmpty()) {
                 int beforeCount = allAffected.size();
-                directlyAffected.removeIf(p -> !matchesIncludePaths(p, includeMatchers, reactorRoot));
-                transitivelyAffected.keySet().removeIf(p -> !matchesIncludePaths(p, includeMatchers, reactorRoot));
+                directlyAffected.removeIf(p -> !matchesIncludePaths(p, includeMatchers, normalizedRoot));
+                transitivelyAffected.keySet().removeIf(p -> !matchesIncludePaths(p, includeMatchers, normalizedRoot));
                 testOnlyModules.retainAll(directlyAffected);
                 forceIncluded.retainAll(directlyAffected);
 
@@ -438,7 +443,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         }
                         writeReport(
                                 config,
-                                reactorRoot,
+                                normalizedRoot,
                                 allProjects,
                                 AnalysisContext.empty(
                                         changedFiles,
@@ -457,7 +462,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Write impacted module log if configured
             if (config.getImpactedLog() != null) {
-                writeImpactedLog(config, reactorRoot, allAffected);
+                writeImpactedLog(config, normalizedRoot, allAffected);
             }
 
             if (config.isPassiveMode()) {
@@ -480,7 +485,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
                 writeReport(
                         config,
-                        reactorRoot,
+                        normalizedRoot,
                         allProjects,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
@@ -527,7 +532,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                     Set<String> wouldHaveBuilt = new LinkedHashSet<>();
                     java.util.function.Function<MavenProject, String> moduleKey = project -> {
-                        String path = relativePath(reactorRoot, project);
+                        String path = relativePath(normalizedRoot, project);
                         // The root aggregator relativizes to the empty string; report it as
                         // "." like the impacted log does (#84) so every module has a name.
                         return path.isEmpty() ? "." : path;
@@ -541,7 +546,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         decisionBuildSet = new ArrayList<>(decisionBuildSet);
                         decisionBuildSet.removeIf(project -> !affected.contains(project)
                                 && !decision.getUpstreamOnly().contains(project)
-                                && !matchesIncludePaths(project, includeMatchers, reactorRoot));
+                                && !matchesIncludePaths(project, includeMatchers, normalizedRoot));
                     }
                     for (MavenProject project : decisionBuildSet) {
                         wouldHaveBuilt.add(moduleKey.apply(project));
@@ -597,7 +602,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             oldEffectiveModels,
                             newEffectiveModels,
                             includeMatchers,
-                            reactorRoot,
+                            normalizedRoot,
                             collectCache,
                             oldCollectCache,
                             timings);
@@ -617,7 +622,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     buildSet = new ArrayList<>(buildSet);
                     buildSet.removeIf(p -> !finalAllAffected.contains(p)
                             && !trimResult.getUpstreamOnly().contains(p)
-                            && !matchesIncludePaths(p, includeMatchers, reactorRoot));
+                            && !matchesIncludePaths(p, includeMatchers, normalizedRoot));
                 }
                 logger.info(
                         "Scalpel: Building {} of {} modules: {}", buildSet.size(), allProjects.size(), keys(buildSet));
@@ -631,7 +636,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 // minus buildSet) is reviewable alongside the green trimmed build (#91)
                 writeReport(
                         config,
-                        reactorRoot,
+                        normalizedRoot,
                         allProjects,
                         AnalysisContext.builder(
                                         changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
@@ -1118,42 +1123,55 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
      * were never built. Soften those producers: drop maven.test.skip and use skipTests=true
      * instead, which only disables the surefire/failsafe execution while leaving test-compile
      * (and jar:test-jar) intact. Softening a producer can itself depend on another skipped
-     * producer's test-jar (chained test-jar consumers), so this iterates to a fixpoint.
+     * producer's test-jar (chained test-jar consumers), so the algorithm uses a worklist BFS
+     * to propagate transitively in O(M × D) total rather than a fixpoint restart loop.
      */
     private Set<MavenProject> softenTestJarProducers(
             List<MavenProject> testProjects, List<MavenProject> skippedProjects) {
-        Set<MavenProject> compilingTests = new LinkedHashSet<>(testProjects);
+
+        // Index skipped projects by coordinates so we can look up producers in O(1).
+        Map<String, MavenProject> skippedByGa = new LinkedHashMap<>(skippedProjects.size());
+        for (MavenProject sp : skippedProjects) {
+            skippedByGa.put(sp.getGroupId() + ":" + sp.getArtifactId(), sp);
+        }
+
         Set<MavenProject> softenedProjects = new LinkedHashSet<>();
-        boolean changed = true;
-        while (changed) {
-            changed = false;
-            for (MavenProject candidate : skippedProjects) {
-                if (softenedProjects.contains(candidate)) {
+
+        // Worklist BFS: seed with the projects that will compile tests.  For each consumer,
+        // find skipped producers whose test-jar it requires, soften them, and enqueue them
+        // (a softened producer compiles its own tests, so its own test-jar deps must be
+        // checked in turn).  Each project is enqueued at most once, giving O(M × D) total.
+        ArrayDeque<MavenProject> worklist = new ArrayDeque<>(testProjects);
+        while (!worklist.isEmpty()) {
+            MavenProject consumer = worklist.poll();
+            for (org.apache.maven.model.Dependency dep : consumer.getDependencies()) {
+                if (!"test-jar".equals(dep.getType())) {
                     continue;
                 }
-                // Iterate a snapshot: compilingTests grows in the loop body as softened producers
-                // become potential consumers for later candidates, and mutating the live set during
-                // iteration would throw ConcurrentModificationException.
-                for (MavenProject consumer : new ArrayList<>(compilingTests)) {
-                    if (reactorTrimmer.hasTestJarDependency(consumer, candidate)) {
-                        candidate.getProperties().remove(MAVEN_TEST_SKIP);
-                        candidate.getProperties().setProperty(SKIP_TESTS, "true");
-                        softenedProjects.add(candidate);
-                        compilingTests.add(candidate);
-                        if (logger.isDebugEnabled()) {
-                            logger.debug(
-                                    "Scalpel: Keeping test-compile for {} because its test-jar is consumed"
-                                            + " in-reactor by {} (softened: skipTests=true instead of"
-                                            + " maven.test.skip=true)",
-                                    key(candidate),
-                                    key(consumer));
-                        }
-                        changed = true;
-                        break;
-                    }
+                String ga = dep.getGroupId() + ":" + dep.getArtifactId();
+                MavenProject producer = skippedByGa.get(ga);
+                if (producer == null || softenedProjects.contains(producer)) {
+                    continue;
                 }
+                // Soften: keep test-compile but skip surefire/failsafe execution.
+                producer.getProperties().remove(MAVEN_TEST_SKIP);
+                producer.getProperties().setProperty(SKIP_TESTS, "true");
+                softenedProjects.add(producer);
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Scalpel: Keeping test-compile for {} because its test-jar is consumed"
+                                    + " in-reactor by {} (softened: skipTests=true instead of"
+                                    + " maven.test.skip=true)",
+                            key(producer),
+                            key(consumer));
+                }
+                // Enqueue the newly softened producer so its own test-jar deps are checked.
+                // No re-enqueue guard needed: testProjects and skippedProjects are disjoint
+                // by construction, and softenedProjects.contains() above prevents re-processing.
+                worklist.add(producer);
             }
         }
+
         skippedProjects.removeAll(softenedProjects);
         if (!softenedProjects.isEmpty()) {
             logger.info(
@@ -1899,10 +1917,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         }
     }
 
-    private static String relativePath(Path reactorRoot, MavenProject project) {
-        return reactorRoot
-                .toAbsolutePath()
-                .normalize()
+    private static String relativePath(Path normalizedRoot, MavenProject project) {
+        return normalizedRoot
                 .relativize(project.getBasedir().toPath().toAbsolutePath().normalize())
                 .toString()
                 .replace('\\', '/');

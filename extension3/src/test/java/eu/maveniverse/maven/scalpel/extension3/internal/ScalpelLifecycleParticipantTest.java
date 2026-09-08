@@ -11,8 +11,10 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
@@ -1315,49 +1317,25 @@ class ScalpelLifecycleParticipantTest {
     }
 
     private boolean skippedModulePresent(String json, String artifactId) {
-        String skippedSection = extractSection(json, "skippedModules");
-        return skippedSection != null && skippedSection.contains("\"artifactId\": \"" + artifactId + "\"");
+        return findSkippedModule(json, artifactId) != null;
     }
 
     private boolean skippedModuleHasReason(String json, String artifactId, String reason) {
-        String skippedSection = extractSection(json, "skippedModules");
-        if (skippedSection == null) {
-            return false;
-        }
-        String marker = "\"artifactId\": \"" + artifactId + "\"";
-        int idx = skippedSection.indexOf(marker);
-        if (idx < 0) {
-            return false;
-        }
-        int end = skippedSection.indexOf("}", idx);
-        if (end < 0) {
-            return false;
-        }
-        return skippedSection.substring(idx, end).contains("\"reason\": \"" + reason + "\"");
+        Map<String, Object> module = findSkippedModule(json, artifactId);
+        return module != null && reason.equals(module.get("reason"));
     }
 
-    private String extractSection(String json, String sectionName) {
-        int start = json.indexOf("\"" + sectionName + "\":");
-        if (start < 0) {
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> findSkippedModule(String json, String artifactId) {
+        Map<String, Object> root = (Map<String, Object>) parseJson(json);
+        List<Map<String, Object>> modules = (List<Map<String, Object>>) root.get("skippedModules");
+        if (modules == null) {
             return null;
         }
-        int bracketStart = json.indexOf("[", start);
-        if (bracketStart < 0) {
-            return null;
-        }
-        int depth = 0;
-        for (int i = bracketStart; i < json.length(); i++) {
-            if (json.charAt(i) == '[') {
-                depth++;
-            }
-            if (json.charAt(i) == ']') {
-                depth--;
-            }
-            if (depth == 0) {
-                return json.substring(bracketStart, i + 1);
-            }
-        }
-        return null;
+        return modules.stream()
+                .filter(m -> artifactId.equals(m.get("artifactId")))
+                .findFirst()
+                .orElse(null);
     }
 
     @Test
@@ -3915,6 +3893,10 @@ class ScalpelLifecycleParticipantTest {
 
     @Test
     void impactedLog_newlineInModulePathCannotForgeEntries() throws Exception {
+        // Newline characters are illegal in file paths on Windows
+        assumeTrue(
+                !System.getProperty("os.name", "").startsWith("Win"),
+                "Windows does not allow newline characters in file paths");
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
@@ -4383,9 +4365,12 @@ class ScalpelLifecycleParticipantTest {
         Path reportFile = root.resolve("target/scalpel-report.json");
         assertTrue(Files.exists(reportFile));
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
-        String block = extractModuleBlock(json, "module-a");
+        Map<String, Object> module = findAffectedModule(json, "module-a");
+        assertNotNull(module, "module-a should be in the report");
+        @SuppressWarnings("unchecked")
+        List<String> evidence = (List<String>) module.get("evidence");
         assertTrue(
-                block != null && block.contains("\"module-a/src/main/java/Foo.java\""),
+                evidence != null && evidence.contains("module-a/src/main/java/Foo.java"),
                 "module-a evidence must name the triggering changed file");
     }
 
@@ -4449,11 +4434,16 @@ class ScalpelLifecycleParticipantTest {
         Path reportFile = root.resolve("target/scalpel-report.json");
         assertTrue(Files.exists(reportFile));
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
-        String block = extractModuleBlock(json, "module-x");
+        Map<String, Object> module = findAffectedModule(json, "module-x");
+        assertNotNull(module, "module-x should be in the report");
+        @SuppressWarnings("unchecked")
+        List<String> evidence = (List<String>) module.get("evidence");
         assertTrue(
-                block != null
-                        && (block.contains("effective dep org.example:lib") || block.contains("property foo.version")),
-                "module-x evidence must name the changed dependency or property, block was: " + block);
+                evidence != null
+                        && evidence.stream()
+                                .anyMatch(e -> e.contains("effective dep org.example:lib")
+                                        || e.contains("property foo.version")),
+                "module-x evidence must name the changed dependency or property, evidence was: " + evidence);
         assertFalse(modulePresent(json, "module-y"), "module-y does not reference the property, must not be affected");
     }
 
@@ -4757,31 +4747,30 @@ class ScalpelLifecycleParticipantTest {
     }
 
     private boolean modulePresent(String json, String artifactId) {
-        String affectedSection = extractSection(json, "affectedModules");
-        return affectedSection != null && affectedSection.contains("\"artifactId\": \"" + artifactId + "\"");
+        return findAffectedModule(json, artifactId) != null;
     }
 
-    private String extractModuleBlock(String json, String artifactId) {
-        String affectedSection = extractSection(json, "affectedModules");
-        if (affectedSection == null) {
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> findAffectedModule(String json, String artifactId) {
+        Map<String, Object> root = (Map<String, Object>) parseJson(json);
+        List<Map<String, Object>> modules = (List<Map<String, Object>>) root.get("affectedModules");
+        if (modules == null) {
             return null;
         }
-        String marker = "\"artifactId\": \"" + artifactId + "\"";
-        int idx = affectedSection.indexOf(marker);
-        if (idx < 0) {
-            return null;
-        }
-        int start = affectedSection.lastIndexOf("{", idx);
-        int end = affectedSection.indexOf("}", idx);
-        if (start < 0 || end < 0) {
-            return null;
-        }
-        return affectedSection.substring(start, end + 1);
+        return modules.stream()
+                .filter(m -> artifactId.equals(m.get("artifactId")))
+                .findFirst()
+                .orElse(null);
     }
 
+    @SuppressWarnings("unchecked")
     private boolean moduleHasReason(String json, String artifactId, String reason) {
-        String block = extractModuleBlock(json, artifactId);
-        return block != null && block.contains("\"" + reason + "\"");
+        Map<String, Object> module = findAffectedModule(json, artifactId);
+        if (module == null) {
+            return false;
+        }
+        List<String> reasons = (List<String>) module.get("reasons");
+        return reasons != null && reasons.contains(reason);
     }
 
     /**
@@ -4811,18 +4800,18 @@ class ScalpelLifecycleParticipantTest {
     }
 
     private boolean moduleHasAnySourceSet(String json, String artifactId) {
-        String block = extractModuleBlock(json, artifactId);
-        return block != null && block.contains("\"sourceSet\":");
+        Map<String, Object> module = findAffectedModule(json, artifactId);
+        return module != null && module.containsKey("sourceSet");
     }
 
     private boolean moduleHasSourceSet(String json, String artifactId, String sourceSet) {
-        String block = extractModuleBlock(json, artifactId);
-        return block != null && block.contains("\"sourceSet\": \"" + sourceSet + "\"");
+        Map<String, Object> module = findAffectedModule(json, artifactId);
+        return module != null && sourceSet.equals(module.get("sourceSet"));
     }
 
     private boolean moduleHasField(String json, String artifactId, String field, String value) {
-        String block = extractModuleBlock(json, artifactId);
-        return block != null && block.contains("\"" + field + "\": \"" + value + "\"");
+        Map<String, Object> module = findAffectedModule(json, artifactId);
+        return module != null && value.equals(module.get(field));
     }
 
     private Model parseModel(String xml) {
@@ -5711,19 +5700,21 @@ class ScalpelLifecycleParticipantTest {
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
 
         // module-b should have both testsSkipped boolean and testsSkippedReason string
-        String moduleBBlock = extractModuleBlock(json, "module-b");
-        assertTrue(moduleBBlock != null, "module-b should be in the report");
-        assertTrue(
-                moduleBBlock.contains("\"testsSkipped\": true"),
+        Map<String, Object> moduleBMap = findAffectedModule(json, "module-b");
+        assertNotNull(moduleBMap, "module-b should be in the report");
+        assertEquals(
+                Boolean.TRUE,
+                moduleBMap.get("testsSkipped"),
                 "module-b should have testsSkipped=true boolean for jq compatibility");
-        assertTrue(
-                moduleBBlock.contains("\"testsSkippedReason\": \"EXCLUDED_DOWNSTREAM\""),
+        assertEquals(
+                "EXCLUDED_DOWNSTREAM",
+                moduleBMap.get("testsSkippedReason"),
                 "module-b should have testsSkippedReason=EXCLUDED_DOWNSTREAM");
 
         // module-a should NOT have testsSkipped (it's DIRECT, not excluded downstream)
-        String moduleABlock = extractModuleBlock(json, "module-a");
-        assertTrue(moduleABlock != null, "module-a should be in the report");
-        assertFalse(moduleABlock.contains("\"testsSkipped\""), "module-a should NOT have testsSkipped (it's DIRECT)");
+        Map<String, Object> moduleAMap = findAffectedModule(json, "module-a");
+        assertNotNull(moduleAMap, "module-a should be in the report");
+        assertFalse(moduleAMap.containsKey("testsSkipped"), "module-a should NOT have testsSkipped (it's DIRECT)");
     }
 
     @Test
@@ -6449,5 +6440,204 @@ class ScalpelLifecycleParticipantTest {
         assertFalse(
                 json.contains("\"operations\""),
                 "status-only documents must omit operations entirely (null-input rule); json was: " + json);
+    }
+
+    // ---------------------------------------------------------------
+    // Minimal JSON parser for report assertions (replaces substring
+    // extraction that was fragile with nested objects, see #96).
+    // Mirrors the Json reader from ScalpelReportSchemaTest in core.
+    // ---------------------------------------------------------------
+
+    private static Object parseJson(String text) {
+        return new JsonReader(text).read();
+    }
+
+    /**
+     * Compact recursive-descent JSON reader producing {@code Map<String,Object>},
+     * {@code List<Object>}, {@code String}, {@code Long}, {@code Double},
+     * {@code Boolean}, and {@code null}. Sufficient for report assertions.
+     */
+    private static final class JsonReader {
+        private final String text;
+        private int pos;
+
+        JsonReader(String text) {
+            this.text = text;
+        }
+
+        Object read() {
+            skipWs();
+            Object value = parseValue();
+            skipWs();
+            if (pos != text.length()) {
+                throw error("trailing content");
+            }
+            return value;
+        }
+
+        private Object parseValue() {
+            if (pos >= text.length()) {
+                throw error("unexpected end");
+            }
+            char c = text.charAt(pos);
+            return switch (c) {
+                case '{' -> parseObject();
+                case '[' -> parseArray();
+                case '"' -> parseString();
+                case 't' -> {
+                    expect("true");
+                    yield Boolean.TRUE;
+                }
+                case 'f' -> {
+                    expect("false");
+                    yield Boolean.FALSE;
+                }
+                case 'n' -> {
+                    expect("null");
+                    yield null;
+                }
+                default -> {
+                    if (c == '-' || (c >= '0' && c <= '9')) {
+                        yield parseNumber();
+                    }
+                    throw error("unexpected '" + c + "'");
+                }
+            };
+        }
+
+        private Map<String, Object> parseObject() {
+            Map<String, Object> result = new java.util.LinkedHashMap<>();
+            pos++;
+            skipWs();
+            if (peek() == '}') {
+                pos++;
+                return result;
+            }
+            while (true) {
+                skipWs();
+                String key = parseString();
+                skipWs();
+                if (peek() != ':') throw error("expected ':'");
+                pos++;
+                skipWs();
+                result.put(key, parseValue());
+                skipWs();
+                char c = peek();
+                if (c == ',') {
+                    pos++;
+                } else if (c == '}') {
+                    pos++;
+                    return result;
+                } else throw error("expected ',' or '}'");
+            }
+        }
+
+        private List<Object> parseArray() {
+            List<Object> result = new ArrayList<>();
+            pos++;
+            skipWs();
+            if (peek() == ']') {
+                pos++;
+                return result;
+            }
+            while (true) {
+                skipWs();
+                result.add(parseValue());
+                skipWs();
+                char c = peek();
+                if (c == ',') {
+                    pos++;
+                } else if (c == ']') {
+                    pos++;
+                    return result;
+                } else throw error("expected ',' or ']'");
+            }
+        }
+
+        private String parseString() {
+            StringBuilder sb = new StringBuilder();
+            pos++; // opening '"'
+            while (true) {
+                if (pos >= text.length()) throw error("unterminated string");
+                char c = text.charAt(pos++);
+                if (c == '"') return sb.toString();
+                if (c == '\\') {
+                    if (pos >= text.length()) throw error("unterminated escape");
+                    char e = text.charAt(pos++);
+                    switch (e) {
+                        case '"':
+                            sb.append('"');
+                            break;
+                        case '\\':
+                            sb.append('\\');
+                            break;
+                        case '/':
+                            sb.append('/');
+                            break;
+                        case 'b':
+                            sb.append('\b');
+                            break;
+                        case 'f':
+                            sb.append('\f');
+                            break;
+                        case 'n':
+                            sb.append('\n');
+                            break;
+                        case 'r':
+                            sb.append('\r');
+                            break;
+                        case 't':
+                            sb.append('\t');
+                            break;
+                        case 'u':
+                            if (pos + 4 > text.length()) throw error("truncated \\u");
+                            sb.append((char) Integer.parseInt(text.substring(pos, pos + 4), 16));
+                            pos += 4;
+                            break;
+                        default:
+                            throw error("invalid escape '\\" + e + "'");
+                    }
+                } else {
+                    sb.append(c);
+                }
+            }
+        }
+
+        private Object parseNumber() {
+            int start = pos;
+            while (pos < text.length()) {
+                char c = text.charAt(pos);
+                if ((c >= '0' && c <= '9') || c == '-' || c == '+' || c == '.' || c == 'e' || c == 'E') {
+                    pos++;
+                } else {
+                    break;
+                }
+            }
+            String lit = text.substring(start, pos);
+            if (lit.indexOf('.') < 0 && lit.indexOf('e') < 0 && lit.indexOf('E') < 0) {
+                return Long.parseLong(lit);
+            }
+            return Double.parseDouble(lit);
+        }
+
+        private void expect(String literal) {
+            if (!text.startsWith(literal, pos)) throw error("expected '" + literal + "'");
+            pos += literal.length();
+        }
+
+        private char peek() {
+            if (pos >= text.length()) throw error("unexpected end");
+            return text.charAt(pos);
+        }
+
+        private void skipWs() {
+            while (pos < text.length() && Character.isWhitespace(text.charAt(pos))) pos++;
+        }
+
+        private IllegalArgumentException error(String msg) {
+            int from = Math.max(0, pos - 20);
+            int to = Math.min(text.length(), pos + 20);
+            return new IllegalArgumentException(msg + " at " + pos + " near \"" + text.substring(from, to) + "\"");
+        }
     }
 }

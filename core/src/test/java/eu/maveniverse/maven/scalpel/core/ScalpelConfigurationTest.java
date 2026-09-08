@@ -643,4 +643,59 @@ class ScalpelConfigurationTest {
         ScalpelConfiguration config = ScalpelConfiguration.fromProperties(sys, new Properties());
         assertTrue(config.getWarnings().isEmpty(), "non-scalpel keys should be ignored");
     }
+
+    // ---------------------------------------------------------------
+    // Change filter configuration (excludeChanges / includeChanges)
+    // ---------------------------------------------------------------
+
+    @Test
+    void defaultExcludeChanges_containsVolatileTimestamps() {
+        ScalpelConfiguration config = defaultConfig();
+        List<String> excludes = config.getExcludeChanges();
+        assertTrue(
+                excludes.contains("properties/build.timestamp"),
+                "default excludeChanges should contain build.timestamp");
+        assertTrue(
+                excludes.contains("properties/project.build.outputTimestamp"),
+                "default excludeChanges should contain project.build.outputTimestamp");
+    }
+
+    @Test
+    void defaultIncludeChanges_isEmpty() {
+        ScalpelConfiguration config = defaultConfig();
+        assertTrue(config.getIncludeChanges().isEmpty(), "default includeChanges should be empty");
+    }
+
+    @Test
+    void excludeChanges_customValue() {
+        Properties user = new Properties();
+        user.setProperty("scalpel.excludeChanges", "properties/git.*,managedDependencies/**");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(new Properties(), user);
+        assertEquals(List.of("properties/git.*", "managedDependencies/**"), config.getExcludeChanges());
+    }
+
+    @Test
+    void includeChanges_customValue() {
+        Properties user = new Properties();
+        user.setProperty("scalpel.includeChanges", "properties/maven.compiler.*");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(new Properties(), user);
+        assertEquals(List.of("properties/maven.compiler.*"), config.getIncludeChanges());
+    }
+
+    @Test
+    void excludeChanges_emptyString_clearsDefaults() {
+        Properties user = new Properties();
+        user.setProperty("scalpel.excludeChanges", "");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(new Properties(), user);
+        assertTrue(config.getExcludeChanges().isEmpty(), "empty excludeChanges should clear defaults");
+    }
+
+    @Test
+    void excludeChanges_noWarningForKnownKey() {
+        Properties user = new Properties();
+        user.setProperty("scalpel.excludeChanges", "properties/foo");
+        user.setProperty("scalpel.includeChanges", "properties/bar");
+        ScalpelConfiguration config = ScalpelConfiguration.fromProperties(new Properties(), user);
+        assertTrue(config.getWarnings().isEmpty(), "excludeChanges and includeChanges are known keys");
+    }
 }

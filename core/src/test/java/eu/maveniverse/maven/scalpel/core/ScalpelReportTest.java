@@ -481,7 +481,7 @@ class ScalpelReportTest {
     }
 
     @Test
-    void toJson_escapesSpecialCharacters() {
+    void toJson_escapesDoubleQuotes() {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
@@ -489,7 +489,94 @@ class ScalpelReportTest {
                 .build();
 
         String json = report.toJson();
-        assertTrue(json.contains("path/with\\\"quotes.java"));
+        Object parsed = ScalpelReportSchemaTest.Json.parse(json);
+        @SuppressWarnings("unchecked")
+        List<String> changedFiles = (List<String>) ((java.util.Map<String, Object>) parsed).get("changedFiles");
+        assertEquals(List.of("path/with\"quotes.java"), changedFiles);
+    }
+
+    @Test
+    void toJson_escapesBackslashes() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("path\\with\\backslashes.java"))
+                .build();
+
+        String json = report.toJson();
+        Object parsed = ScalpelReportSchemaTest.Json.parse(json);
+        @SuppressWarnings("unchecked")
+        List<String> changedFiles = (List<String>) ((java.util.Map<String, Object>) parsed).get("changedFiles");
+        assertEquals(List.of("path\\with\\backslashes.java"), changedFiles);
+    }
+
+    @Test
+    void toJson_escapesNewlinesAndCarriageReturns() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("line1\nline2\r\nline3"))
+                .build();
+
+        String json = report.toJson();
+        // Must produce \n and \r escapes, never literal newlines inside the JSON string
+        assertFalse(json.contains("line1\nline2"), "literal newline must not appear in JSON output");
+        assertTrue(json.contains("\\n"), "newline must be escaped as \\n");
+        assertTrue(json.contains("\\r"), "carriage return must be escaped as \\r");
+        Object parsed = ScalpelReportSchemaTest.Json.parse(json);
+        @SuppressWarnings("unchecked")
+        List<String> changedFiles = (List<String>) ((java.util.Map<String, Object>) parsed).get("changedFiles");
+        assertEquals(List.of("line1\nline2\r\nline3"), changedFiles);
+    }
+
+    @Test
+    void toJson_escapesTabsAndControlCharacters() {
+        // Tab (\t) and a control character (BEL, 0x07) must be escaped
+        String nameWithTab = "module\twith-tab";
+        String nameWithCtrl = "ctrl-" + (char) 0x07 + "-bel";
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of(nameWithTab, nameWithCtrl))
+                .build();
+
+        String json = report.toJson();
+        assertTrue(json.contains("\\t"), "tab must be escaped as \\t");
+        assertTrue(json.contains("\\u0007"), "BEL control char must be escaped as \\u0007");
+        Object parsed = ScalpelReportSchemaTest.Json.parse(json);
+        @SuppressWarnings("unchecked")
+        List<String> changedFiles = (List<String>) ((java.util.Map<String, Object>) parsed).get("changedFiles");
+        assertTrue(changedFiles.contains(nameWithTab), "tab round-trips through JSON");
+        assertTrue(changedFiles.contains(nameWithCtrl), "control char round-trips through JSON");
+    }
+
+    @Test
+    void toJson_escapesSpecialCharsInModuleFields() {
+        // Escaping must work in all string fields, not just changedFiles
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("branch/with\"special\\chars\nnewline")
+                .fullBuildTriggered(false)
+                .changedFiles(Set.of("a.java"))
+                .addAffectedModule(ScalpelReport.AffectedModule.moduleBuilder(
+                                "com.example\"quoted",
+                                "art\\ifact",
+                                "path\nwith\tnewlines",
+                                List.of(ScalpelReport.REASON_SOURCE_CHANGE))
+                        .category(ScalpelReport.CATEGORY_DIRECT)
+                        .build())
+                .build();
+
+        String json = report.toJson();
+        Object parsed = ScalpelReportSchemaTest.Json.parse(json);
+        @SuppressWarnings("unchecked")
+        java.util.Map<String, Object> root = (java.util.Map<String, Object>) parsed;
+        assertEquals("branch/with\"special\\chars\nnewline", root.get("baseBranch"));
+        @SuppressWarnings("unchecked")
+        List<java.util.Map<String, Object>> modules = (List<java.util.Map<String, Object>>) root.get("affectedModules");
+        java.util.Map<String, Object> module = modules.get(0);
+        assertEquals("com.example\"quoted", module.get("groupId"));
+        assertEquals("art\\ifact", module.get("artifactId"));
+        assertEquals("path\nwith\tnewlines", module.get("path"));
     }
 
     // ---------------------------------------------------------------
@@ -587,7 +674,7 @@ class ScalpelReportTest {
         try (InputStream is =
                 getClass().getResourceAsStream("/eu/maveniverse/maven/scalpel/core/golden-report-v2.json")) {
             assertNotNull(is, "golden-report-v2.json must be on the test classpath");
-            expected = new String(is.readAllBytes(), StandardCharsets.UTF_8);
+            expected = new String(is.readAllBytes(), StandardCharsets.UTF_8).replace("\r\n", "\n");
         }
 
         assertEquals(
