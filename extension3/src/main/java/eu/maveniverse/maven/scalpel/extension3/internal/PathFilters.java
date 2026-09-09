@@ -47,7 +47,7 @@ final class PathFilters {
     private final List<CompiledPattern> fullBuildTriggers;
     private final List<PathMatcher> excludeMatchers;
 
-    PathFilters(
+    private PathFilters(
             List<String> includePatterns,
             List<String> excludePatterns,
             List<String> disableTriggerPatterns,
@@ -132,7 +132,8 @@ final class PathFilters {
      * off entirely), or null. Files are converted to {@link Path} once for the whole batch.
      */
     String findDisableTrigger(Set<String> changedFiles) {
-        return findTrigger(changedFiles, disableTriggers, "Disabled due to change in {} (matches disable trigger {})");
+        return findTrigger(
+                changedFiles, disableTriggers, "Scalpel: Disabled due to change in {} (matches disable trigger {})");
     }
 
     /**
@@ -140,20 +141,16 @@ final class PathFilters {
      * a full build), or null.
      */
     String findFullBuildTrigger(Set<String> changedFiles) {
-        return findTrigger(changedFiles, fullBuildTriggers, "Full build triggered by change to {} (matches {})");
+        return findTrigger(
+                changedFiles, fullBuildTriggers, "Scalpel: Full build triggered by change to {} (matches {})");
     }
 
     private String findTrigger(Set<String> changedFiles, List<CompiledPattern> triggers, String logFormat) {
         if (triggers.isEmpty()) {
             return null;
         }
-        List<Path> paths = new ArrayList<>(changedFiles.size());
         for (String file : changedFiles) {
-            paths.add(Path.of(file));
-        }
-        int i = 0;
-        for (String file : changedFiles) {
-            Path path = paths.get(i++);
+            Path path = Path.of(file);
             for (CompiledPattern trigger : triggers) {
                 if (trigger.matcher().matches(path)) {
                     logger.info(logFormat, file, trigger.pattern());
@@ -168,16 +165,32 @@ final class PathFilters {
     // Compilation
     // ------------------------------------------------------------------
 
+    /**
+     * Normalizes a user-supplied glob pattern so that bare patterns (those containing no path
+     * separator) match files at any depth in the repository tree. For example, {@code *.md} is
+     * rewritten to {@code {*.md,**&#47;*.md}} so that it matches both {@code README.md} (root)
+     * and {@code docs/guide.md} (nested). A plain {@code **&#47;} prefix alone would not match
+     * root-level files on the default {@link java.nio.file.FileSystem} because the path separator
+     * in the pattern is required to be present in the matched path. Patterns that already contain
+     * a {@code /} are returned unchanged because the user explicitly specified the directory
+     * structure.
+     */
+    static String normalizeGlobPattern(String pattern) {
+        if (pattern.contains("/")) {
+            return pattern;
+        }
+        return "{" + pattern + ",**/" + pattern + "}";
+    }
+
     private static List<PathMatcher> compileGlobs(List<String> patterns) {
         if (patterns.isEmpty()) {
             return List.of();
         }
         List<PathMatcher> matchers = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
-            matchers.add(FileSystems.getDefault()
-                    .getPathMatcher(GLOB_PREFIX + ScalpelLifecycleParticipant.normalizeGlobPattern(pattern)));
+            matchers.add(FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + normalizeGlobPattern(pattern)));
         }
-        return java.util.List.copyOf(matchers);
+        return List.copyOf(matchers);
     }
 
     private static List<CompiledPattern> compileNamed(List<String> patterns) {
@@ -187,11 +200,9 @@ final class PathFilters {
         List<CompiledPattern> compiled = new ArrayList<>(patterns.size());
         for (String pattern : patterns) {
             compiled.add(new CompiledPattern(
-                    pattern,
-                    FileSystems.getDefault()
-                            .getPathMatcher(GLOB_PREFIX + ScalpelLifecycleParticipant.normalizeGlobPattern(pattern))));
+                    pattern, FileSystems.getDefault().getPathMatcher(GLOB_PREFIX + normalizeGlobPattern(pattern))));
         }
-        return java.util.List.copyOf(compiled);
+        return List.copyOf(compiled);
     }
 
     private record CompiledPattern(String pattern, PathMatcher matcher) {}

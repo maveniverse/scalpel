@@ -56,7 +56,6 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private static final String MAVEN_TEST_SKIP = "maven.test.skip";
     private static final String SKIP_TESTS = "skipTests";
-    private static final String GLOB_PREFIX = "glob:";
     private static final String UNRESOLVED_GA = "(unresolved)";
 
     private final Logger logger = LoggerFactory.getLogger(getClass());
@@ -707,23 +706,6 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     private static long millisSince(long startNano) {
         return (System.nanoTime() - startNano) / 1_000_000;
-    }
-
-    /**
-     * Normalizes a user-supplied glob pattern so that bare patterns (those containing no path
-     * separator) match files at any depth in the repository tree. For example, {@code *.md} is
-     * rewritten to {@code {*.md,**&#47;*.md}} so that it matches both {@code README.md} (root)
-     * and {@code docs/guide.md} (nested). A plain {@code **&#47;} prefix alone would not match
-     * root-level files on the default {@link java.nio.file.FileSystem} because the path separator
-     * in the pattern is required to be present in the matched path. Patterns that already contain
-     * a {@code /} are returned unchanged because the user explicitly specified the directory
-     * structure.
-     */
-    static String normalizeGlobPattern(String pattern) {
-        if (pattern.contains("/")) {
-            return pattern;
-        }
-        return "{" + pattern + ",**/" + pattern + "}";
     }
 
     /**

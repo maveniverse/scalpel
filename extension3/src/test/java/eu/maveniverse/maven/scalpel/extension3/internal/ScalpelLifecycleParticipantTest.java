@@ -5824,17 +5824,16 @@ class ScalpelLifecycleParticipantTest {
 
     @Test
     void normalizeGlobPattern_barePatternIsPrefixed() {
-        assertEquals("{*.md,**/*.md}", ScalpelLifecycleParticipant.normalizeGlobPattern("*.md"));
-        assertEquals("{LICENSE,**/LICENSE}", ScalpelLifecycleParticipant.normalizeGlobPattern("LICENSE"));
-        assertEquals(
-                "{.editorconfig,**/.editorconfig}", ScalpelLifecycleParticipant.normalizeGlobPattern(".editorconfig"));
+        assertEquals("{*.md,**/*.md}", PathFilters.normalizeGlobPattern("*.md"));
+        assertEquals("{LICENSE,**/LICENSE}", PathFilters.normalizeGlobPattern("LICENSE"));
+        assertEquals("{.editorconfig,**/.editorconfig}", PathFilters.normalizeGlobPattern(".editorconfig"));
     }
 
     @Test
     void normalizeGlobPattern_patternWithSlashIsUnchanged() {
-        assertEquals("docs/*.md", ScalpelLifecycleParticipant.normalizeGlobPattern("docs/*.md"));
-        assertEquals("**/*.md", ScalpelLifecycleParticipant.normalizeGlobPattern("**/*.md"));
-        assertEquals(".github/**", ScalpelLifecycleParticipant.normalizeGlobPattern(".github/**"));
+        assertEquals("docs/*.md", PathFilters.normalizeGlobPattern("docs/*.md"));
+        assertEquals("**/*.md", PathFilters.normalizeGlobPattern("**/*.md"));
+        assertEquals(".github/**", PathFilters.normalizeGlobPattern(".github/**"));
     }
 
     @Test
