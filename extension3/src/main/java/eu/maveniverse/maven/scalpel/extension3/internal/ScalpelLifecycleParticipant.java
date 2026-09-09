@@ -19,7 +19,6 @@ import eu.maveniverse.maven.scalpel.core.ScalpelReport;
 import eu.maveniverse.maven.scalpel.core.Timings;
 import eu.maveniverse.maven.scalpel.core.Version;
 import java.nio.file.Path;
-import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -164,8 +163,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             logger.info("Scalpel: {} changed files detected", changedFiles.size());
 
+            PathFilters pathFilters = new PathFilters(config);
+
             // Check disable triggers
-            if (changedFileClassifier.matchesDisableTrigger(changedFiles, config)) {
+            if (pathFilters.matchesDisableTrigger(changedFiles)) {
                 if (passiveRun(config)) {
                     reportAssembler.writeStatusReport(
                             config, reactorRoot, "skipped", "disabled by disableTriggers match");
@@ -174,7 +175,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
             // Filter out excluded paths
-            changedFiles = changedFileClassifier.filterExcludedPaths(changedFiles, config);
+            changedFiles = pathFilters.filterExcludedPaths(changedFiles);
             if (changedFiles.isEmpty()) {
                 logger.info("Scalpel: All changed files excluded by path filters, building all modules");
                 if (passiveRun(config)) {
@@ -185,7 +186,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
             // Check full build triggers
-            String triggerFile = changedFileClassifier.findFullBuildTrigger(changedFiles, config);
+            String triggerFile = pathFilters.findFullBuildTrigger(changedFiles);
             if (triggerFile != null) {
                 if (passiveRun(config)) {
                     reportAssembler.writeFullBuildReport(
@@ -314,6 +315,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     changedManagedDepGAs,
                     changedManagedPluginGAs,
                     unmatchedPomPaths,
+                    pathFilters,
                     timings,
                     analysisStartNano,
                     result);
@@ -373,14 +375,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             allAffected.addAll(transitivelyAffected.keySet());
 
             // Apply includePaths module filter
-            List<PathMatcher> includeMatchers = ChangedFileClassifier.compileGlobMatchers(config.getIncludePaths());
-            if (!includeMatchers.isEmpty()) {
+            if (pathFilters.hasIncludeFilters()) {
                 int beforeCount = allAffected.size();
-                directlyAffected.removeIf(
-                        p -> !ChangedFileClassifier.matchesIncludePaths(p, includeMatchers, normalizedRoot));
-                transitivelyAffected
-                        .keySet()
-                        .removeIf(p -> !ChangedFileClassifier.matchesIncludePaths(p, includeMatchers, normalizedRoot));
+                directlyAffected.removeIf(p -> !pathFilters.matchesIncludePaths(p, normalizedRoot));
+                transitivelyAffected.keySet().removeIf(p -> !pathFilters.matchesIncludePaths(p, normalizedRoot));
                 testOnlyModules.retainAll(directlyAffected);
                 forceIncluded.retainAll(directlyAffected);
 
@@ -450,12 +448,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     }
                     wouldHaveBuilt = new LinkedHashSet<>();
                     List<MavenProject> decisionBuildSet = decision.getBuildSet();
-                    if (!includeMatchers.isEmpty()) {
-                        Set<MavenProject> affected = allAffected;
-                        decisionBuildSet = new ArrayList<>(decisionBuildSet);
-                        decisionBuildSet.removeIf(project -> !affected.contains(project)
-                                && !decision.getUpstreamOnly().contains(project)
-                                && !ChangedFileClassifier.matchesIncludePaths(project, includeMatchers, reactorRoot));
+                    if (pathFilters.hasIncludeFilters()) {
+                        decisionBuildSet = pathFilters.filterBuildSet(
+                                decisionBuildSet, allAffected, decision.getUpstreamOnly(), normalizedRoot);
                     }
                     for (MavenProject project : decisionBuildSet) {
                         wouldHaveBuilt.add(moduleKey.apply(project));
@@ -493,12 +488,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         }
                     }
                     List<MavenProject> reportBuildSet = reportDecision.getBuildSet();
-                    if (!includeMatchers.isEmpty()) {
-                        Set<MavenProject> affected = allAffected;
-                        reportBuildSet = new ArrayList<>(reportBuildSet);
-                        reportBuildSet.removeIf(project -> !affected.contains(project)
-                                && !reportDecision.getUpstreamOnly().contains(project)
-                                && !ChangedFileClassifier.matchesIncludePaths(project, includeMatchers, reactorRoot));
+                    if (pathFilters.hasIncludeFilters()) {
+                        reportBuildSet = pathFilters.filterBuildSet(
+                                reportBuildSet, allAffected, reportDecision.getUpstreamOnly(), normalizedRoot);
                     }
                     decisionId = decisionIdFor(result, config, reactorRoot, reportBuildSet);
                 }
@@ -520,6 +512,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .trimResult(trimResult)
                                 .decisionId(decisionId)
                                 .build(),
+                        pathFilters,
                         timings,
                         analysisStartNano);
                 if (config.isExplain()) {
@@ -583,7 +576,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (config.isModeSkipTests()) {
                 timings.start(Timings.PHASE_APPLY_SKIP_TESTS);
                 try {
-                    skipTestsApplier.applySkipTests(allProjects, trimResult, config, models, includeMatchers, rctx);
+                    skipTestsApplier.applySkipTests(allProjects, trimResult, config, models, pathFilters, rctx);
                 } finally {
                     timings.stop(Timings.PHASE_APPLY_SKIP_TESTS);
                 }
@@ -593,12 +586,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             } else {
                 // trim mode: remove unaffected projects from reactor
                 List<MavenProject> buildSet = trimResult.getBuildSet();
-                if (!includeMatchers.isEmpty()) {
-                    Set<MavenProject> finalAllAffected = allAffected;
-                    buildSet = new ArrayList<>(buildSet);
-                    buildSet.removeIf(p -> !finalAllAffected.contains(p)
-                            && !trimResult.getUpstreamOnly().contains(p)
-                            && !ChangedFileClassifier.matchesIncludePaths(p, includeMatchers, normalizedRoot));
+                if (pathFilters.hasIncludeFilters()) {
+                    buildSet = pathFilters.filterBuildSet(
+                            buildSet, allAffected, trimResult.getUpstreamOnly(), normalizedRoot);
                 }
                 logger.info(
                         "Scalpel: Building {} of {} modules: {}", buildSet.size(), allProjects.size(), keys(buildSet));
@@ -627,6 +617,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .filteredBuildSet(buildSet)
                                 .decisionId(trimDecisionId)
                                 .build(),
+                        pathFilters,
                         timings,
                         analysisStartNano);
             }
@@ -668,6 +659,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
             Set<String> unmatchedPomPaths,
+            PathFilters pathFilters,
             Timings timings,
             long analysisStartNano,
             ChangeDetectionResult result) {}
@@ -699,6 +691,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             cctx.changedManagedPluginGAs(),
                             cctx.unmatchedPomPaths(),
                             decisionId),
+                    cctx.pathFilters(),
                     cctx.timings(),
                     cctx.analysisStartNano());
         } else if (cctx.config().isModeSkipTests()) {

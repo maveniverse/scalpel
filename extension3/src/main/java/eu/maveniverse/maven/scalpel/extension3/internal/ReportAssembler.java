@@ -17,7 +17,6 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -43,6 +42,7 @@ class ReportAssembler {
             Path reactorRoot,
             List<MavenProject> allProjects,
             AnalysisContext ctx,
+            PathFilters pathFilters,
             Timings timings,
             long analysisStartNano)
             throws MavenExecutionException {
@@ -67,7 +67,7 @@ class ReportAssembler {
 
         addDirectlyAffectedModules(builder, ctx, reactorRoot);
         addTransitivelyAffectedModules(builder, ctx, config, reactorRoot);
-        int excludedUpstream = addTrimResultModules(builder, ctx, config, reactorRoot);
+        int excludedUpstream = addTrimResultModules(builder, ctx, pathFilters, config, reactorRoot);
         builder.excludedUpstreamCount(excludedUpstream);
         addSkippedModules(builder, allProjects, ctx, reactorRoot);
 
@@ -224,7 +224,11 @@ class ReportAssembler {
     }
 
     private int addTrimResultModules(
-            ScalpelReport.Builder builder, AnalysisContext ctx, ScalpelConfiguration config, Path reactorRoot) {
+            ScalpelReport.Builder builder,
+            AnalysisContext ctx,
+            PathFilters pathFilters,
+            ScalpelConfiguration config,
+            Path reactorRoot) {
         if (ctx.trimResult == null) {
             return 0;
         }
@@ -247,6 +251,7 @@ class ReportAssembler {
         addDownstreamModules(
                 builder,
                 ctx,
+                pathFilters,
                 config,
                 reactorRoot,
                 ctx.trimResult.getDownstreamOnly(),
@@ -254,6 +259,7 @@ class ReportAssembler {
         addDownstreamModules(
                 builder,
                 ctx,
+                pathFilters,
                 config,
                 reactorRoot,
                 ctx.trimResult.getDownstreamTestOnly(),
@@ -264,16 +270,16 @@ class ReportAssembler {
     private void addDownstreamModules(
             ScalpelReport.Builder builder,
             AnalysisContext ctx,
+            PathFilters pathFilters,
             ScalpelConfiguration config,
             Path reactorRoot,
             Set<MavenProject> downstreamProjects,
             String reason) {
-        List<PathMatcher> includeMatchers = ChangedFileClassifier.compileGlobMatchers(config.getIncludePaths());
         for (MavenProject project : downstreamProjects) {
             if (ctx.directlyAffected.contains(project) || ctx.transitivelyAffected.containsKey(project)) {
                 continue;
             }
-            addSingleDownstreamModule(builder, ctx, config, reactorRoot, includeMatchers, project, reason);
+            addSingleDownstreamModule(builder, ctx, config, reactorRoot, pathFilters, project, reason);
         }
     }
 
@@ -282,12 +288,11 @@ class ReportAssembler {
             AnalysisContext ctx,
             ScalpelConfiguration config,
             Path reactorRoot,
-            List<PathMatcher> includeMatchers,
+            PathFilters pathFilters,
             MavenProject project,
             String reason) {
         // Skip downstream modules outside includePaths scope
-        if (!includeMatchers.isEmpty()
-                && !ChangedFileClassifier.matchesIncludePaths(project, includeMatchers, reactorRoot)) {
+        if (pathFilters.hasIncludeFilters() && !pathFilters.matchesIncludePaths(project, reactorRoot)) {
             if (logger.isDebugEnabled()) {
                 logger.debug("Excluding downstream module {} from report (outside includePaths)", key(project));
             }

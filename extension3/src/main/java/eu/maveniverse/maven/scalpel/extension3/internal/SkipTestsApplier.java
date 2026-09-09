@@ -12,7 +12,6 @@ import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.keys;
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.matchesDownstreamExclusion;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
-import java.nio.file.PathMatcher;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -44,7 +43,7 @@ class SkipTestsApplier {
             TrimResult trimResult,
             ScalpelConfiguration config,
             TransitiveImpactAnalyzer.EffectiveModels models,
-            List<PathMatcher> includeMatchers,
+            PathFilters pathFilters,
             TransitiveImpactAnalyzer.ResolutionContext rctx) {
 
         List<MavenProject> testProjects = new ArrayList<>();
@@ -54,8 +53,7 @@ class SkipTestsApplier {
         classifyBuildSetProjects(trimResult, config, models, rctx, testProjects, skippedProjects);
 
         // Modules outside the build set
-        classifyRemainingProjects(
-                allProjects, trimResult, models, includeMatchers, rctx, testProjects, skippedProjects);
+        classifyRemainingProjects(allProjects, trimResult, models, pathFilters, rctx, testProjects, skippedProjects);
 
         // Apply per-category args
         applyPerCategoryArgs(trimResult, config);
@@ -102,7 +100,7 @@ class SkipTestsApplier {
             List<MavenProject> allProjects,
             TrimResult trimResult,
             TransitiveImpactAnalyzer.EffectiveModels models,
-            List<PathMatcher> includeMatchers,
+            PathFilters pathFilters,
             TransitiveImpactAnalyzer.ResolutionContext rctx,
             List<MavenProject> testProjects,
             List<MavenProject> skippedProjects) {
@@ -111,20 +109,19 @@ class SkipTestsApplier {
             if (buildSetLookup.contains(project)) {
                 continue;
             }
-            classifySingleRemainingProject(project, models, includeMatchers, rctx, testProjects, skippedProjects);
+            classifySingleRemainingProject(project, models, pathFilters, rctx, testProjects, skippedProjects);
         }
     }
 
     private void classifySingleRemainingProject(
             MavenProject project,
             TransitiveImpactAnalyzer.EffectiveModels models,
-            List<PathMatcher> includeMatchers,
+            PathFilters pathFilters,
             TransitiveImpactAnalyzer.ResolutionContext rctx,
             List<MavenProject> testProjects,
             List<MavenProject> skippedProjects) {
         // Skip tests on modules outside includePaths scope
-        if (!includeMatchers.isEmpty()
-                && !ChangedFileClassifier.matchesIncludePaths(project, includeMatchers, rctx.normalizedRoot())) {
+        if (pathFilters.hasIncludeFilters() && !pathFilters.matchesIncludePaths(project, rctx.normalizedRoot())) {
             project.getProperties().setProperty(MAVEN_TEST_SKIP, "true");
             skippedProjects.add(project);
             return;
