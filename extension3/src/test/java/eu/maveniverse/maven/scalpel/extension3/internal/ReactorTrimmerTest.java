@@ -197,6 +197,170 @@ class ReactorTrimmerTest {
         assertEquals(List.of(projectA, projectC), result.getBuildSet());
     }
 
+    @Test
+    void computeBuildSet_transitiveDownstreamViaBFS() {
+        // Chain: A -> B -> C -> D (each directly downstream of the previous)
+        MavenProject projectA = createProject("com.example", "module-a");
+        MavenProject projectB = createProject("com.example", "module-b");
+        MavenProject projectC = createProject("com.example", "module-c");
+        MavenProject projectD = createProject("com.example", "module-d");
+        addDependency(projectB, "com.example", "module-a", "compile");
+        addDependency(projectC, "com.example", "module-b", "compile");
+        addDependency(projectD, "com.example", "module-c", "compile");
+
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectC, projectD);
+        Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
+        // Direct edges only
+        downstreamMap.put(projectA, List.of(projectB));
+        downstreamMap.put(projectB, List.of(projectC));
+        downstreamMap.put(projectC, List.of(projectD));
+
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
+
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
+        ScalpelConfiguration config = configWith(false, true); // alsoMakeDependents=true
+
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, Set.of(), graph, config);
+
+        // BFS should find all transitive downstream: B, C, D
+        assertEquals(List.of(projectA, projectB, projectC, projectD), result.getBuildSet());
+        assertTrue(result.getDownstreamOnly().contains(projectB));
+        assertTrue(result.getDownstreamOnly().contains(projectC));
+        assertTrue(result.getDownstreamOnly().contains(projectD));
+    }
+
+    @Test
+    void computeBuildSet_transitiveUpstreamViaBFS() {
+        // Chain: A <- B <- C (each directly upstream of the next)
+        MavenProject projectA = createProject("com.example", "module-a");
+        MavenProject projectB = createProject("com.example", "module-b");
+        MavenProject projectC = createProject("com.example", "module-c");
+        addDependency(projectB, "com.example", "module-a", "compile");
+        addDependency(projectC, "com.example", "module-b", "compile");
+
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectC);
+        Map<MavenProject, List<MavenProject>> upstreamMap = new HashMap<>();
+        // Direct edges only
+        upstreamMap.put(projectC, List.of(projectB));
+        upstreamMap.put(projectB, List.of(projectA));
+
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, Map.of(), upstreamMap);
+
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectC));
+        ScalpelConfiguration config = configWith(true, false); // alsoMake=true
+
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, Set.of(), graph, config);
+
+        // BFS should find all transitive upstream: B and A
+        assertEquals(List.of(projectA, projectB, projectC), result.getBuildSet());
+        assertTrue(result.getUpstreamOnly().contains(projectA));
+        assertTrue(result.getUpstreamOnly().contains(projectB));
+    }
+
+    @Test
+    void computeBuildSet_testOnlyDoesNotPropagateTransitively() {
+        // A (test-only) -> B (test-jar dep on A) -> D (compile dep on B)
+        // D must NOT be in the build set because D has no test-jar dependency on A.
+        // This matches the old DFS semantics where graph.getDownstreamProjects(A, true)
+        // returns {B, D} and hasTestJarDependency(D, A) is false.
+        MavenProject projectA = createProject("com.example", "module-a");
+        MavenProject projectB = createProject("com.example", "module-b");
+        MavenProject projectD = createProject("com.example", "module-d");
+        addTestJarDependency(projectB, "com.example", "module-a");
+        addDependency(projectD, "com.example", "module-b", "compile");
+
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectD);
+        Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
+        downstreamMap.put(projectA, List.of(projectB));
+        downstreamMap.put(projectB, List.of(projectD));
+
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
+
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
+        Set<MavenProject> testOnlyProjects = new LinkedHashSet<>(Set.of(projectA));
+        ScalpelConfiguration config = configWith(false, true); // alsoMakeDependents=true
+
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, testOnlyProjects, graph, config);
+
+        assertTrue(result.getBuildSet().contains(projectA), "A (directly affected) should be in the build set");
+        assertTrue(
+                result.getBuildSet().contains(projectB), "B (test-jar dep on test-only A) should be in the build set");
+        assertFalse(
+                result.getBuildSet().contains(projectD),
+                "D (compile dep on B, no test-jar dep on A) should NOT be in the build set");
+    }
+
+    @Test
+    void computeBuildSet_diamondGraphNoDuplicates() {
+        // Diamond: A -> B, A -> C, B -> D, C -> D
+        MavenProject projectA = createProject("com.example", "module-a");
+        MavenProject projectB = createProject("com.example", "module-b");
+        MavenProject projectC = createProject("com.example", "module-c");
+        MavenProject projectD = createProject("com.example", "module-d");
+        addDependency(projectB, "com.example", "module-a", "compile");
+        addDependency(projectC, "com.example", "module-a", "compile");
+        addDependency(projectD, "com.example", "module-b", "compile");
+        addDependency(projectD, "com.example", "module-c", "compile");
+
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectC, projectD);
+        Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
+        downstreamMap.put(projectA, List.of(projectB, projectC));
+        downstreamMap.put(projectB, List.of(projectD));
+        downstreamMap.put(projectC, List.of(projectD));
+
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
+
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(Set.of(projectA));
+        ScalpelConfiguration config = configWith(false, true); // alsoMakeDependents=true
+
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, Set.of(), graph, config);
+
+        // All should be in the build set, D only once
+        assertEquals(List.of(projectA, projectB, projectC, projectD), result.getBuildSet());
+        assertEquals(3, result.getDownstreamOnly().size());
+    }
+
+    @Test
+    void computeBuildSet_testOnlyAndNonTestOnlyConvergingPaths() {
+        // CodeRabbit repro: test-only and non-test-only paths converge before a downstream node.
+        // A (test-only) --test-jar--> X, B (non-test) --compile--> C --compile--> X, X --compile--> Y.
+        // Y must be included because X is reachable via the non-test-only path B -> C -> X.
+        // The old single-queue BFS could exclude Y if the test-only path was processed first.
+        MavenProject projectA = createProject("com.example", "module-a");
+        MavenProject projectB = createProject("com.example", "module-b");
+        MavenProject projectC = createProject("com.example", "module-c");
+        MavenProject projectX = createProject("com.example", "module-x");
+        MavenProject projectY = createProject("com.example", "module-y");
+        addTestJarDependency(projectX, "com.example", "module-a"); // X has test-jar dep on A
+        addDependency(projectC, "com.example", "module-b", "compile"); // C depends on B
+        addDependency(projectX, "com.example", "module-c", "compile"); // X depends on C
+        addDependency(projectY, "com.example", "module-x", "compile"); // Y depends on X
+
+        List<MavenProject> sortedProjects = List.of(projectA, projectB, projectC, projectX, projectY);
+        Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
+        downstreamMap.put(projectA, List.of(projectX)); // A -> X (test-jar)
+        downstreamMap.put(projectB, List.of(projectC)); // B -> C
+        downstreamMap.put(projectC, List.of(projectX)); // C -> X
+        downstreamMap.put(projectX, List.of(projectY)); // X -> Y
+
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, Map.of());
+
+        // A is test-only, B is not
+        Set<MavenProject> directlyAffected = new LinkedHashSet<>(List.of(projectA, projectB));
+        Set<MavenProject> testOnlyProjects = new LinkedHashSet<>(Set.of(projectA));
+        ScalpelConfiguration config = configWith(false, true); // alsoMakeDependents=true
+
+        TrimResult result = trimmer.computeBuildSet(directlyAffected, testOnlyProjects, graph, config);
+
+        assertTrue(result.getBuildSet().contains(projectC), "C (downstream of non-test B) should be included");
+        assertTrue(
+                result.getBuildSet().contains(projectX),
+                "X (downstream of both test-only A and non-test C) should be included");
+        assertTrue(
+                result.getBuildSet().contains(projectY),
+                "Y (downstream of X, reachable via non-test-only path B->C->X) must be included");
+    }
+
     // --- Helper methods ---
 
     private MavenProject createProject(String groupId, String artifactId) {

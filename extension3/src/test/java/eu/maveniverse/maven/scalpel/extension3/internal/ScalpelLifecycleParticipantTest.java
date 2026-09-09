@@ -309,7 +309,7 @@ class ScalpelLifecycleParticipantTest {
         // Graph: module-b is downstream of module-a; module-d and module-e are NOT downstream
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -1068,7 +1068,7 @@ class ScalpelLifecycleParticipantTest {
         // Graph: module-b is downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -1170,8 +1170,8 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-b is downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -1918,7 +1918,7 @@ class ScalpelLifecycleParticipantTest {
         // Graph: module-b is downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -1987,10 +1987,10 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-b and module-c are downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB, moduleC));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(moduleC, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB, moduleC));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleC), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -2089,9 +2089,9 @@ class ScalpelLifecycleParticipantTest {
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "com.example:module-b");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -2135,9 +2135,9 @@ class ScalpelLifecycleParticipantTest {
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -2200,9 +2200,9 @@ class ScalpelLifecycleParticipantTest {
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -2293,9 +2293,9 @@ class ScalpelLifecycleParticipantTest {
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -2382,9 +2382,9 @@ class ScalpelLifecycleParticipantTest {
 
         // module-b is downstream of module-a
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -4076,9 +4076,9 @@ class ScalpelLifecycleParticipantTest {
         // Graph: module-a is upstream of module-b
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
-        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(List.of(moduleA));
-        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(List.of());
-        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of(moduleA));
+        when(graph.getUpstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -4136,14 +4136,14 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-a is upstream of module-b, module-c is downstream of module-b
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(List.of(moduleA));
-        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(List.of());
-        when(graph.getUpstreamProjects(moduleC, true)).thenReturn(List.of());
-        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of(moduleC));
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(moduleC, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of(moduleA));
+        when(graph.getUpstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(eq(moduleC), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of(moduleC));
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleC), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
 
@@ -4303,9 +4303,9 @@ class ScalpelLifecycleParticipantTest {
 
         // Graph: module-a is upstream of module-b
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getUpstreamProjects(moduleB, true)).thenReturn(List.of(moduleA));
-        when(graph.getUpstreamProjects(moduleA, true)).thenReturn(List.of());
-        when(graph.getUpstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getUpstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of(moduleA));
+        when(graph.getUpstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -5247,14 +5247,14 @@ class ScalpelLifecycleParticipantTest {
         when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         // camel-kafka has 3 downstream dependents: other-1, other-2, other-3
-        when(graph.getDownstreamProjects(kafkaModule, true))
+        when(graph.getDownstreamProjects(eq(kafkaModule), anyBoolean()))
                 .thenReturn(List.of(otherModules.get(0), otherModules.get(1), otherModules.get(2)));
         // camel-core is upstream of kafka and all others
-        when(graph.getUpstreamProjects(kafkaModule, true)).thenReturn(List.of(coreModule));
-        when(graph.getUpstreamProjects(debeziumModule, true)).thenReturn(List.of(coreModule));
-        when(graph.getUpstreamProjects(ibmModule, true)).thenReturn(List.of(coreModule));
+        when(graph.getUpstreamProjects(eq(kafkaModule), anyBoolean())).thenReturn(List.of(coreModule));
+        when(graph.getUpstreamProjects(eq(debeziumModule), anyBoolean())).thenReturn(List.of(coreModule));
+        when(graph.getUpstreamProjects(eq(ibmModule), anyBoolean())).thenReturn(List.of(coreModule));
         for (MavenProject other : otherModules) {
-            when(graph.getUpstreamProjects(other, true)).thenReturn(List.of(coreModule));
+            when(graph.getUpstreamProjects(eq(other), anyBoolean())).thenReturn(List.of(coreModule));
         }
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -5514,19 +5514,19 @@ class ScalpelLifecycleParticipantTest {
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
 
         // camel-kafka's downstream includes camel-allcomponents (the sync point depends on it)
-        when(graph.getDownstreamProjects(kafkaModule, true)).thenReturn(List.of(allcompModule));
+        when(graph.getDownstreamProjects(eq(kafkaModule), anyBoolean())).thenReturn(List.of(allcompModule));
 
         // camel-allcomponents upstream = ALL components + kafka + core (it depends on everything)
         List<MavenProject> allcompUpstream = new ArrayList<>();
         allcompUpstream.add(kafkaModule);
         allcompUpstream.add(coreModule);
         allcompUpstream.addAll(compModules);
-        when(graph.getUpstreamProjects(allcompModule, true)).thenReturn(allcompUpstream);
+        when(graph.getUpstreamProjects(eq(allcompModule), anyBoolean())).thenReturn(allcompUpstream);
 
         // Each component has camel-core as upstream
-        when(graph.getUpstreamProjects(kafkaModule, true)).thenReturn(List.of(coreModule));
+        when(graph.getUpstreamProjects(eq(kafkaModule), anyBoolean())).thenReturn(List.of(coreModule));
         for (MavenProject comp : compModules) {
-            when(graph.getUpstreamProjects(comp, true)).thenReturn(List.of(coreModule));
+            when(graph.getUpstreamProjects(eq(comp), anyBoolean())).thenReturn(List.of(coreModule));
         }
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -5623,9 +5623,9 @@ class ScalpelLifecycleParticipantTest {
         session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", "");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of(moduleA, moduleB));
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of(moduleA, moduleB));
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);
@@ -5686,9 +5686,9 @@ class ScalpelLifecycleParticipantTest {
         session.getSystemProperties().setProperty("scalpel.skipTestsForDownstreamModules", "module-b");
 
         ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
-        when(graph.getDownstreamProjects(moduleA, true)).thenReturn(List.of(moduleB));
-        when(graph.getDownstreamProjects(moduleB, true)).thenReturn(List.of());
-        when(graph.getDownstreamProjects(parentProject, true)).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(moduleA), anyBoolean())).thenReturn(List.of(moduleB));
+        when(graph.getDownstreamProjects(eq(moduleB), anyBoolean())).thenReturn(List.of());
+        when(graph.getDownstreamProjects(eq(parentProject), anyBoolean())).thenReturn(List.of());
         when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
         when(graph.getSortedProjects()).thenReturn(allProjects);
         when(session.getProjectDependencyGraph()).thenReturn(graph);

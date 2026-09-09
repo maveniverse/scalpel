@@ -299,6 +299,7 @@ class PomChangeAnalyzer {
         Map<String, Model> newEffectiveModels;
         Set<MavenProject> parents;
         Map<MavenProject, List<MavenProject>> bomImporters;
+        Map<MavenProject, List<MavenProject>> descendantMap;
         List<MavenProject> allProjects;
         /** Already-normalized reactor root — avoids redundant normalization in loops (#113). */
         Path normalizedRoot;
@@ -488,8 +489,10 @@ class PomChangeAnalyzer {
             projectByPomPath.put(relativePom.toString().replace('\\', '/'), project);
         }
 
-        // Build set of projects that have children in the reactor
-        Set<MavenProject> parents = findParentProjects(allProjects);
+        // Build parent→descendants map once for efficient collectDependents lookups (#116).
+        // The key set of this map doubles as the set of parent projects, replacing findParentProjects().
+        Map<MavenProject, List<MavenProject>> descendantMap = buildDescendantMap(allProjects);
+        Set<MavenProject> parents = descendantMap.keySet();
 
         // Build map of reactor modules imported as BOMs by other reactor modules
         Map<MavenProject, List<MavenProject>> bomImporters = findBomImporters(allProjects);
@@ -510,6 +513,7 @@ class PomChangeAnalyzer {
         ctx.newEffectiveModels = newEffectiveModels;
         ctx.parents = parents;
         ctx.bomImporters = bomImporters;
+        ctx.descendantMap = descendantMap;
         ctx.allProjects = allProjects;
         ctx.normalizedRoot = normalizedRoot;
         ctx.explain = explain;
@@ -554,7 +558,7 @@ class PomChangeAnalyzer {
         }
 
         // Determine all dependent modules (children via parent inheritance + BOM importers)
-        List<MavenProject> dependents = collectDependents(project, ctx.parents, ctx.bomImporters, ctx.allProjects);
+        List<MavenProject> dependents = collectDependents(project, ctx.parents, ctx.bomImporters, ctx.descendantMap);
 
         if (dependents.isEmpty()) {
             // Leaf module: its own POM changed, mark it as affected
@@ -2015,39 +2019,21 @@ class PomChangeAnalyzer {
         }
     }
 
-    private Set<MavenProject> findParentProjects(List<MavenProject> allProjects) {
-        Map<String, MavenProject> projectByGA = new LinkedHashMap<>();
-        for (MavenProject project : allProjects) {
-            projectByGA.put(key(project), project);
-        }
-        Set<MavenProject> parents = new LinkedHashSet<>();
-        for (MavenProject project : allProjects) {
-            MavenProject parent = project.getParent();
-            if (parent != null) {
-                MavenProject reactorParent = projectByGA.get(key(parent));
-                if (reactorParent != null) {
-                    parents.add(reactorParent);
-                }
-            }
-        }
-        return parents;
-    }
-
     /**
-     * Collect all modules that depend on the given project, combining reactor children
-     * (via parent inheritance) and BOM importers (via import-scope dependency management).
+     * Collect all modules that depend on the given project, combining reactor descendants
+     * (via parent inheritance, precomputed) and BOM importers (via import-scope dependency management).
      */
     private List<MavenProject> collectDependents(
             MavenProject project,
             Set<MavenProject> parents,
             Map<MavenProject, List<MavenProject>> bomImporters,
-            List<MavenProject> allProjects) {
+            Map<MavenProject, List<MavenProject>> descendantMap) {
         List<MavenProject> dependents = new ArrayList<>();
         int childCount = 0;
         if (parents.contains(project)) {
-            List<MavenProject> children = findChildren(project, allProjects);
-            dependents.addAll(children);
-            childCount = children.size();
+            List<MavenProject> descendants = descendantMap.getOrDefault(project, List.of());
+            dependents.addAll(descendants);
+            childCount = descendants.size();
             if (logger.isDebugEnabled()) {
                 logger.debug("{} has {} child modules via parent inheritance", key(project), childCount);
             }
@@ -2117,26 +2103,49 @@ class PomChangeAnalyzer {
         return "pom".equals(dep.getType()) && "import".equals(dep.getScope());
     }
 
-    private List<MavenProject> findChildren(MavenProject parent, List<MavenProject> allProjects) {
-        List<MavenProject> children = new ArrayList<>();
+    /**
+     * Build a map of parent project → list of all descendant projects (children, grandchildren, …)
+     * in the reactor.  Uses a precomputed parent→direct-children adjacency map and coordinate key
+     * cache to avoid the O(M² × depth) cost of the previous per-project isDescendantOf scan.
+     */
+    private Map<MavenProject, List<MavenProject>> buildDescendantMap(List<MavenProject> allProjects) {
+        // Build GA-key → reactor project lookup
+        Map<String, MavenProject> projectByGA = new LinkedHashMap<>();
         for (MavenProject project : allProjects) {
-            if (project != parent && isDescendantOf(project, parent)) {
-                children.add(project);
-            }
+            projectByGA.put(key(project), project);
         }
-        return children;
-    }
 
-    private boolean isDescendantOf(MavenProject project, MavenProject ancestor) {
-        String ancestorKey = key(ancestor);
-        MavenProject current = project.getParent();
-        while (current != null) {
-            if (key(current).equals(ancestorKey)) {
-                return true;
+        // Build parent → direct children adjacency map
+        Map<MavenProject, List<MavenProject>> childrenMap = new LinkedHashMap<>();
+        for (MavenProject project : allProjects) {
+            MavenProject parent = project.getParent();
+            if (parent != null) {
+                MavenProject reactorParent = projectByGA.get(key(parent));
+                if (reactorParent != null) {
+                    childrenMap
+                            .computeIfAbsent(reactorParent, k -> new ArrayList<>())
+                            .add(project);
+                }
             }
-            current = current.getParent();
         }
-        return false;
+
+        // Expand to all descendants via BFS per parent
+        Map<MavenProject, List<MavenProject>> descendantMap = new LinkedHashMap<>();
+        for (Map.Entry<MavenProject, List<MavenProject>> entry : childrenMap.entrySet()) {
+            MavenProject parent = entry.getKey();
+            List<MavenProject> descendants = new ArrayList<>();
+            java.util.ArrayDeque<MavenProject> queue = new java.util.ArrayDeque<>(entry.getValue());
+            while (!queue.isEmpty()) {
+                MavenProject child = queue.poll();
+                descendants.add(child);
+                List<MavenProject> grandchildren = childrenMap.get(child);
+                if (grandchildren != null) {
+                    queue.addAll(grandchildren);
+                }
+            }
+            descendantMap.put(parent, descendants);
+        }
+        return descendantMap;
     }
 
     /**
