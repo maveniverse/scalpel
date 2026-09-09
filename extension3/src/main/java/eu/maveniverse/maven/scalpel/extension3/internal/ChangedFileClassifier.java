@@ -127,8 +127,8 @@ class ChangedFileClassifier {
      * Returns {@code true} if the project's module path matches at least one of the
      * given include-paths matchers.
      */
-    static boolean matchesIncludePaths(MavenProject project, List<PathMatcher> matchers, Path reactorRoot) {
-        String relPath = relativePath(reactorRoot, project);
+    static boolean matchesIncludePaths(MavenProject project, List<PathMatcher> matchers, Path normalizedRoot) {
+        String relPath = relativePath(normalizedRoot, project);
         Path modulePath = Path.of(relPath);
         for (PathMatcher matcher : matchers) {
             if (matcher.matches(modulePath) || matcher.matches(modulePath.resolve("pom.xml"))) {

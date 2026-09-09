@@ -8,6 +8,7 @@
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
+import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.matchesDownstreamExclusion;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import eu.maveniverse.maven.scalpel.core.ScalpelReport;
@@ -319,21 +320,6 @@ class ReportAssembler {
                         project.getGroupId(), project.getArtifactId(), path, ScalpelReport.SKIP_REASON_NOT_AFFECTED));
             }
         }
-    }
-
-    private boolean matchesDownstreamExclusion(MavenProject project, List<String> patterns) {
-        for (String pattern : patterns) {
-            if (pattern.contains(":")) {
-                if (key(project).equals(pattern)) {
-                    return true;
-                }
-            } else {
-                if (project.getArtifactId().equals(pattern)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     static long millisSince(long startNano) {

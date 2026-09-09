@@ -9,6 +9,7 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.key;
 import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.keys;
+import static eu.maveniverse.maven.scalpel.extension3.internal.Projects.matchesDownstreamExclusion;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
 import java.nio.file.PathMatcher;
@@ -210,21 +211,6 @@ class SkipTestsApplier {
         }
         // Safety guard: don't skip tests if the module has effective model changes
         return !transitiveImpactAnalyzer.hasEffectiveModelChanges(project, models, rctx);
-    }
-
-    boolean matchesDownstreamExclusion(MavenProject project, List<String> patterns) {
-        for (String pattern : patterns) {
-            if (pattern.contains(":")) {
-                if (key(project).equals(pattern)) {
-                    return true;
-                }
-            } else {
-                if (project.getArtifactId().equals(pattern)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     void applyPerCategoryArgs(TrimResult trimResult, ScalpelConfiguration config) {

@@ -54,25 +54,25 @@ class SkipTestsApplierTest {
     @Test
     void matchesDownstreamExclusion_matchesByArtifactId() {
         MavenProject project = createProject("module-a");
-        assertTrue(applier.matchesDownstreamExclusion(project, List.of("module-a")));
+        assertTrue(Projects.matchesDownstreamExclusion(project, List.of("module-a")));
     }
 
     @Test
     void matchesDownstreamExclusion_matchesByGA() {
         MavenProject project = createProject("module-a");
-        assertTrue(applier.matchesDownstreamExclusion(project, List.of("com.example:module-a")));
+        assertTrue(Projects.matchesDownstreamExclusion(project, List.of("com.example:module-a")));
     }
 
     @Test
     void matchesDownstreamExclusion_noMatch() {
         MavenProject project = createProject("module-a");
-        assertFalse(applier.matchesDownstreamExclusion(project, List.of("module-b")));
+        assertFalse(Projects.matchesDownstreamExclusion(project, List.of("module-b")));
     }
 
     @Test
     void matchesDownstreamExclusion_emptyPatterns() {
         MavenProject project = createProject("module-a");
-        assertFalse(applier.matchesDownstreamExclusion(project, List.of()));
+        assertFalse(Projects.matchesDownstreamExclusion(project, List.of()));
     }
 
     @Test
@@ -190,6 +190,29 @@ class SkipTestsApplierTest {
                         new java.util.LinkedHashMap<>(),
                         new java.util.LinkedHashMap<>(),
                         new eu.maveniverse.maven.scalpel.core.Timings())));
+    }
+
+    @Test
+    void shouldSkipTestsForExcludedDownstream_returnsTrue_whenMatchingDownstreamWithNoModelChanges() {
+        MavenProject project = createProject("module-a");
+        ScalpelConfiguration config = configWith("scalpel.skipTestsForDownstreamModules", "module-a");
+        // project IS in downstream set, pattern matches, and no effective model changes
+        TrimResult trimResult = new TrimResult(List.of(project), Set.of(), Set.of(), Set.of(project));
+
+        TransitiveImpactAnalyzer.EffectiveModels models =
+                new TransitiveImpactAnalyzer.EffectiveModels(java.util.Map.of(), java.util.Map.of());
+        TransitiveImpactAnalyzer.ResolutionContext rctx = new TransitiveImpactAnalyzer.ResolutionContext(
+                tempDir,
+                mock(org.apache.maven.execution.MavenSession.class),
+                new java.util.LinkedHashMap<>(),
+                new java.util.LinkedHashMap<>(),
+                new eu.maveniverse.maven.scalpel.core.Timings());
+
+        // hasEffectiveModelChanges returns false (no changes) → should skip tests
+        when(transitiveImpactAnalyzer.hasEffectiveModelChanges(project, models, rctx))
+                .thenReturn(false);
+
+        assertTrue(applier.shouldSkipTestsForExcludedDownstream(project, trimResult, config, models, rctx));
     }
 
     private MavenProject createProject(String artifactId) {

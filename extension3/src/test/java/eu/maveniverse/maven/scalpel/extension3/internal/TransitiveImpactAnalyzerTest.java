@@ -8,7 +8,6 @@
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -92,8 +91,8 @@ class TransitiveImpactAnalyzerTest {
         Map<String, String> versions = TransitiveImpactAnalyzer.collectDependencyVersions(root);
 
         assertEquals(1, versions.size());
-        // First encountered wins
-        assertNotNull(versions.get("com.example:dep-a"));
+        // LIFO traversal: child2 (dep-a:2.0) is popped first, first-encountered wins
+        assertEquals("2.0", versions.get("com.example:dep-a"));
     }
 
     @Test

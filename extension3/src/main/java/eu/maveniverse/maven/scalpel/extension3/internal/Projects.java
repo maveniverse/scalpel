@@ -25,4 +25,24 @@ final class Projects {
         }
         return keys;
     }
+
+    /**
+     * Returns {@code true} if the project matches at least one downstream exclusion pattern.
+     * Patterns containing {@code ':'} are matched against the full {@code groupId:artifactId} key;
+     * bare patterns are matched against the artifact ID only.
+     */
+    static boolean matchesDownstreamExclusion(MavenProject project, List<String> patterns) {
+        for (String pattern : patterns) {
+            if (pattern.contains(":")) {
+                if (key(project).equals(pattern)) {
+                    return true;
+                }
+            } else {
+                if (project.getArtifactId().equals(pattern)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 }
