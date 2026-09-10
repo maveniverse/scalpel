@@ -32,7 +32,15 @@ The tradeoff: Scalpel has fewer knobs. If Scalpel's analysis is wrong, your esca
 
 **Plugin configuration semantic diff.** Plugin `<configuration>` blocks are compared as DOM trees, not strings. Whitespace changes, attribute reordering, and comment additions inside plugin config are ignored.
 
-**Java 8 compatibility.** Scalpel requires Java 8+. GIB requires Java 11+.
+**Java 17 compatibility.** Scalpel requires Java 17+. GIB requires Java 11+.
+
+**Shadow mode.** `mode=shadow` measures what Scalpel would save on your reactor from a single full build — zero extra runner-hours, no control group. It records per-module wall-clock, computes the trim decision it would have made, and emits `estimatedSecondsSaved` and `wouldHaveSkippedButFailed` to `target/scalpel-shadow.json`. GIB has no equivalent.
+
+**Explain mode.** `-Dscalpel.explain=true` adds per-module decision evidence to the report: each `affectedModules` entry gets an `evidence` array naming the exact file, property, dependency, or graph relationship that put it in the build set. Diagnose surprising results without guessing.
+
+**Periodic correctness verification.** `-Dscalpel.verifyFullBuild=true` runs the full build under shadow observation and fails it if any module Scalpel would have skipped actually fails, naming the module, its skip reason, and the `decisionId`. A stable `decisionId` (SHA-256 of the merge-base, head, config, and build set) is emitted whenever a decision completes so failures are quotable and correlatable. GIB has no equivalent.
+
+**Fine-grained POM change filtering.** `scalpel.excludeChanges` and `scalpel.includeChanges` accept glob patterns over a normalized change-path scheme (`properties/<name>`, `dependencies/<ga>`, `managedDependencies/<ga>`, etc.). Volatile properties (`build.timestamp`, `project.build.outputTimestamp`) are excluded by default. GIB users who reached for `includePathsMatching` to suppress noisy POM changes can express that intent precisely here instead.
 
 ## GIB Features Not in Scalpel
 

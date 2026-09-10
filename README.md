@@ -44,7 +44,7 @@ Then run Maven as usual. On a feature branch in CI, Scalpel will automatically d
 
 ```text
 $ mvn verify
-[INFO] Scalpel 0.3.10 activated (mode=trim)
+[INFO] Scalpel 0.4.0 activated (mode=trim)
 [INFO] Scalpel: 3 changed files detected
 [INFO] Scalpel: 2 modules directly affected: [com.example:module-a, com.example:module-b]
 [INFO] Scalpel: Building 3 of 8 modules: [com.example:parent, com.example:module-a, com.example:module-b]
