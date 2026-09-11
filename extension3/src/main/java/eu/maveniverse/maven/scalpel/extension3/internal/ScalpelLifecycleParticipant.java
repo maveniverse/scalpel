@@ -126,6 +126,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
         Timings timings = new Timings();
         long analysisStartNano = System.nanoTime();
+        // Detection state, hoisted so the failure handlers below can report what was
+        // actually detected before the failure (#186: fail-safe reports keep the data).
+        ChangeDetectionResult result = null;
+        Set<String> changedFiles = null;
         try {
             // Collect ALL reactor POM paths
             Set<String> allPomPaths = new LinkedHashSet<>();
@@ -136,7 +140,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             }
 
             // Detect changes
-            ChangeDetectionResult result = scalpelCore.detectChanges(reactorRoot, config, allPomPaths, timings);
+            result = scalpelCore.detectChanges(reactorRoot, config, allPomPaths, timings);
             if (result == null) {
                 if (passiveRun(config)) {
                     String skipReason = scalpelCore.getLastDetectionSkipReason();
@@ -169,7 +173,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 return;
             }
 
-            Set<String> changedFiles = result.getChangedFiles();
+            changedFiles = result.getChangedFiles();
             if (changedFiles.isEmpty()) {
                 if (config.isBuildAllIfNoChanges()) {
                     logger.info("Scalpel: No changes detected, building all modules (buildAllIfNoChanges=true)");
@@ -307,14 +311,19 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
                         logger.debug("POM analysis error details", e);
                         if (passiveRun(config)) {
+                            // Detection completed before the analysis failure: the report
+                            // keeps the detected files and the full-fallback decision id.
+                            boolean detected = result != null;
                             reportAssembler.writeFailedStatusReport(
                                     config,
                                     reactorRoot,
                                     "error analyzing POM changes",
-                                    Set.of(),
+                                    detected ? changedFiles : Set.of(),
                                     null,
-                                    ScalpelReport.computeDecisionId(
-                                            null, null, config.decisionFingerprint(), List.of()),
+                                    detected
+                                            ? decisionIdFor(result, config, reactorRoot, allProjects)
+                                            : ScalpelReport.computeDecisionId(
+                                                    null, null, config.decisionFingerprint(), List.of()),
                                     timings,
                                     analysisStartNano);
                         }
@@ -691,13 +700,17 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 logger.warn("Scalpel: Unexpected error, building all modules: {}", e.getMessage());
                 logger.debug("Unexpected error details", e);
                 if (passiveRun(config)) {
+                    boolean detected = result != null;
                     reportAssembler.writeFailedStatusReport(
                             config,
                             reactorRoot,
                             "unexpected error: " + e.getMessage(),
-                            Set.of(),
+                            detected ? changedFiles : Set.of(),
                             null,
-                            ScalpelReport.computeDecisionId(null, null, config.decisionFingerprint(), List.of()),
+                            detected
+                                    ? decisionIdFor(result, config, reactorRoot, allProjects)
+                                    : ScalpelReport.computeDecisionId(
+                                            null, null, config.decisionFingerprint(), List.of()),
                             timings,
                             analysisStartNano);
                 }
