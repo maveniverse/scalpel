@@ -140,11 +140,30 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             if (result == null) {
                 if (passiveRun(config)) {
                     String skipReason = scalpelCore.getLastDetectionSkipReason();
+                    String nullDetectionId =
+                            ScalpelReport.computeDecisionId(null, null, config.decisionFingerprint(), List.of());
                     if (skipReason != null) {
-                        reportAssembler.writeStatusReport(config, reactorRoot, "skipped", skipReason);
+                        reportAssembler.writeStatusReport(
+                                config,
+                                reactorRoot,
+                                "skipped",
+                                skipReason,
+                                Set.of(),
+                                null,
+                                nullDetectionId,
+                                timings,
+                                analysisStartNano);
                     } else {
                         reportAssembler.writeStatusReport(
-                                config, reactorRoot, "failed", "change detection did not run (see build log)");
+                                config,
+                                reactorRoot,
+                                "failed",
+                                "change detection did not run (see build log)",
+                                Set.of(),
+                                null,
+                                nullDetectionId,
+                                timings,
+                                analysisStartNano);
                     }
                 }
                 return;
@@ -156,7 +175,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     logger.info("Scalpel: No changes detected, building all modules (buildAllIfNoChanges=true)");
                 }
                 if (passiveRun(config)) {
-                    reportAssembler.writeStatusReport(config, reactorRoot, "skipped", "no changes detected");
+                    reportAssembler.writeStatusReport(
+                            config,
+                            reactorRoot,
+                            "skipped",
+                            "no changes detected",
+                            Set.of(),
+                            null,
+                            decisionIdFor(result, config, reactorRoot, allProjects),
+                            timings,
+                            analysisStartNano);
                 }
                 return;
             }
@@ -166,10 +194,19 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             PathFilters pathFilters = new PathFilters(config);
 
             // Check disable triggers
-            if (pathFilters.matchesDisableTrigger(changedFiles)) {
+            String disableTriggerFile = pathFilters.findDisableTrigger(changedFiles);
+            if (disableTriggerFile != null) {
                 if (passiveRun(config)) {
                     reportAssembler.writeStatusReport(
-                            config, reactorRoot, "skipped", "disabled by disableTriggers match");
+                            config,
+                            reactorRoot,
+                            "skipped",
+                            "disabled by disableTriggers match",
+                            changedFiles,
+                            disableTriggerFile,
+                            decisionIdFor(result, config, reactorRoot, allProjects),
+                            timings,
+                            analysisStartNano);
                 }
                 return;
             }
@@ -180,7 +217,15 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 logger.info("Scalpel: All changed files excluded by path filters, building all modules");
                 if (passiveRun(config)) {
                     reportAssembler.writeStatusReport(
-                            config, reactorRoot, "skipped", "all changed files excluded by path filters");
+                            config,
+                            reactorRoot,
+                            "skipped",
+                            "all changed files excluded by path filters",
+                            changedFiles,
+                            null,
+                            decisionIdFor(result, config, reactorRoot, allProjects),
+                            timings,
+                            analysisStartNano);
                 }
                 return;
             }
@@ -262,7 +307,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
                         logger.debug("POM analysis error details", e);
                         if (passiveRun(config)) {
-                            reportAssembler.writeFailedStatusReport(config, reactorRoot, "error analyzing POM changes");
+                            reportAssembler.writeFailedStatusReport(
+                                    config,
+                                    reactorRoot,
+                                    "error analyzing POM changes",
+                                    Set.of(),
+                                    null,
+                                    ScalpelReport.computeDecisionId(
+                                            null, null, config.decisionFingerprint(), List.of()),
+                                    timings,
+                                    analysisStartNano);
                         }
                         return;
                     } else {
@@ -637,7 +691,15 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 logger.warn("Scalpel: Unexpected error, building all modules: {}", e.getMessage());
                 logger.debug("Unexpected error details", e);
                 if (passiveRun(config)) {
-                    reportAssembler.writeFailedStatusReport(config, reactorRoot, "unexpected error: " + e.getMessage());
+                    reportAssembler.writeFailedStatusReport(
+                            config,
+                            reactorRoot,
+                            "unexpected error: " + e.getMessage(),
+                            Set.of(),
+                            null,
+                            ScalpelReport.computeDecisionId(null, null, config.decisionFingerprint(), List.of()),
+                            timings,
+                            analysisStartNano);
                 }
                 return;
             }
