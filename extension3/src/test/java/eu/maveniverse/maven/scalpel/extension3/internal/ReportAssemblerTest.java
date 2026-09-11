@@ -47,8 +47,8 @@ class ReportAssemblerTest {
                         configWith(false, outside), tempDir, "skipped", "no changes detected"),
                 "with failSafe=false a failed status write must fail the build");
         assertTrue(
-                e.getMessage() != null && e.getMessage().contains("scalpel.reportFile"),
-                "the failure should carry the write-failure detail, got: " + e.getMessage());
+                e.getCause() != null && e.getCause().getMessage().contains("scalpel.reportFile"),
+                "the cause should carry the property name, got: " + e.getCause());
     }
 
     @Test
@@ -74,7 +74,7 @@ class ReportAssemblerTest {
                 () -> assembler.writeStatusReport(
                         configWith(false, dirAsFile.toString()), tempDir, "skipped", "no changes detected"));
         assertTrue(
-                e.getMessage() != null && e.getMessage().contains("scalpel.reportFile"),
-                "the failure should name the property, got: " + e.getMessage());
+                e.getCause() != null && e.getCause().getMessage().contains("scalpel.reportFile"),
+                "the cause should name the property, got: " + e.getCause());
     }
 }
