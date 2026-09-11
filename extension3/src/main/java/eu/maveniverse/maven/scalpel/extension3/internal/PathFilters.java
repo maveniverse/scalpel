@@ -97,11 +97,14 @@ class PathFilters {
     }
 
     /**
-     * Returns {@code true} if any changed file matches a {@code disableTriggers} glob pattern.
+     * Returns the first changed file matching a {@code disableTriggers} glob pattern, or
+     * {@code null} if none match. The matched file lands in the status report's
+     * {@code triggerFile} field the same way {@link #findFullBuildTrigger(Set)}'s does
+     * (#186).
      */
-    boolean matchesDisableTrigger(Set<String> changedFiles) {
+    String findDisableTrigger(Set<String> changedFiles) {
         if (disableTriggerMatchers.isEmpty()) {
-            return false;
+            return null;
         }
         for (int i = 0; i < disableTriggerMatchers.size(); i++) {
             PathMatcher matcher = disableTriggerMatchers.get(i);
@@ -111,11 +114,11 @@ class PathFilters {
                 if (matcher.matches(p)) {
                     logger.info(
                             "Scalpel: Disabled due to change in {} (matches disable trigger {})", changedFile, pattern);
-                    return true;
+                    return changedFile;
                 }
             }
         }
-        return false;
+        return null;
     }
 
     /**
