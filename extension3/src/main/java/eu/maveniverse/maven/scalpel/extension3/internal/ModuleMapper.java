@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
@@ -88,7 +89,7 @@ class ModuleMapper {
         }
 
         for (String changedFile : changedFiles) {
-            MavenProject matched = findOwningModule(changedFile, moduleByDir, rootProject);
+            MavenProject matched = findOwningModule(changedFile, moduleByDir, rootProject, rootDir);
             if (matched != null) {
                 String projectPath = matched == rootProject ? "" : pathByProject.get(matched);
                 boolean isTest = isTestPath(changedFile, projectPath);
@@ -131,7 +132,7 @@ class ModuleMapper {
      * @return the owning project, or {@code null} if no module owns this file
      */
     private static MavenProject findOwningModule(
-            String changedFile, Map<String, MavenProject> moduleByDir, MavenProject rootProject) {
+            String changedFile, Map<String, MavenProject> moduleByDir, MavenProject rootProject, Path rootDir) {
         // Walk parent directories from deepest to shallowest
         int slash = changedFile.lastIndexOf('/');
         if (slash <= 0) {
@@ -145,10 +146,18 @@ class ModuleMapper {
             if (project != null) {
                 return project;
             }
+            // The deepest ancestor directory holding its own pom.xml is the module
+            // boundary. When that directory is not in this reactor (profile-gated or
+            // otherwise excluded module), the file belongs to a module the current build
+            // does not contain and must contribute nothing, rather than falling through
+            // to the root project and marking the whole reactor affected (#185).
+            if (Files.isRegularFile(rootDir.resolve(dir).resolve("pom.xml"))) {
+                return null;
+            }
             slash = dir.lastIndexOf('/');
         }
-        // No module directory matched; fall back to root project for files
-        // that are in subdirectories (src/main/..., scripts/..., etc.)
+        // No module directory matched and no pom.xml boundary found; fall back to root
+        // project for files that are in subdirectories (src/main/..., scripts/..., etc.)
         return rootProject;
     }
 
