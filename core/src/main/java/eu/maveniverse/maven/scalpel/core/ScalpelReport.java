@@ -77,6 +77,9 @@ public final class ScalpelReport {
 
     private final String baseBranch;
     private final String decisionId;
+    private final String mergeBaseId;
+    private final String headId;
+    private final String configFingerprint;
     private final String status;
     private final String reason;
     private final boolean fullBuildTriggered;
@@ -89,12 +92,17 @@ public final class ScalpelReport {
     private final List<AffectedModule> affectedModules;
     private final List<SkippedModule> skippedModules;
     private final int excludedUpstreamCount;
+    private final Integer buildSetSize;
+    private final Integer testedModulesCount;
     private final Timings timings;
     private final long totalMillis;
 
     private ScalpelReport(
             String baseBranch,
             String decisionId,
+            String mergeBaseId,
+            String headId,
+            String configFingerprint,
             String status,
             String reason,
             boolean fullBuildTriggered,
@@ -107,10 +115,15 @@ public final class ScalpelReport {
             List<AffectedModule> affectedModules,
             List<SkippedModule> skippedModules,
             int excludedUpstreamCount,
+            Integer buildSetSize,
+            Integer testedModulesCount,
             Timings timings,
             long totalMillis) {
         this.baseBranch = baseBranch;
         this.decisionId = decisionId;
+        this.mergeBaseId = mergeBaseId;
+        this.headId = headId;
+        this.configFingerprint = configFingerprint;
         this.status = status;
         this.reason = reason;
         this.fullBuildTriggered = fullBuildTriggered;
@@ -123,6 +136,8 @@ public final class ScalpelReport {
         this.affectedModules = affectedModules;
         this.skippedModules = skippedModules;
         this.excludedUpstreamCount = excludedUpstreamCount;
+        this.buildSetSize = buildSetSize;
+        this.testedModulesCount = testedModulesCount;
         this.timings = timings;
         this.totalMillis = totalMillis;
     }
@@ -365,6 +380,17 @@ public final class ScalpelReport {
         if (decisionId != null) {
             sb.append("  \"decisionId\": ").append(jsonString(decisionId)).append(",\n");
         }
+        if (mergeBaseId != null) {
+            sb.append("  \"mergeBaseId\": ").append(jsonString(mergeBaseId)).append(",\n");
+        }
+        if (headId != null) {
+            sb.append("  \"headId\": ").append(jsonString(headId)).append(",\n");
+        }
+        if (configFingerprint != null) {
+            sb.append("  \"configFingerprint\": ")
+                    .append(jsonString(configFingerprint))
+                    .append(",\n");
+        }
         if (status != null) {
             sb.append("  \"status\": ").append(jsonString(status)).append(",\n");
         }
@@ -389,6 +415,12 @@ public final class ScalpelReport {
                     .append(",\n");
         }
         sb.append("  \"excludedUpstreamCount\": ").append(excludedUpstreamCount).append(",\n");
+        if (buildSetSize != null) {
+            sb.append("  \"buildSetSize\": ").append(buildSetSize).append(",\n");
+        }
+        if (testedModulesCount != null) {
+            sb.append("  \"testedModulesCount\": ").append(testedModulesCount).append(",\n");
+        }
         sb.append("  \"affectedModules\": ");
         if (affectedModules.isEmpty()) {
             sb.append("[]");
@@ -580,6 +612,9 @@ public final class ScalpelReport {
     public static class Builder {
         private String baseBranch;
         private String decisionId;
+        private String mergeBaseId;
+        private String headId;
+        private String configFingerprint;
         private String status;
         private String reason;
         private boolean fullBuildTriggered;
@@ -592,6 +627,8 @@ public final class ScalpelReport {
         private final List<AffectedModule> affectedModules = new ArrayList<>();
         private final List<SkippedModule> skippedModules = new ArrayList<>();
         private int excludedUpstreamCount;
+        private Integer buildSetSize;
+        private Integer testedModulesCount;
         private Timings timings;
         private long totalMillis;
 
@@ -602,6 +639,24 @@ public final class ScalpelReport {
 
         public Builder decisionId(String decisionId) {
             this.decisionId = decisionId;
+            return this;
+        }
+
+        /** The merge-base commit the decision was computed over; emitted next to the id (#187). */
+        public Builder mergeBaseId(String mergeBaseId) {
+            this.mergeBaseId = mergeBaseId;
+            return this;
+        }
+
+        /** The head commit the decision was computed over; emitted next to the id (#187). */
+        public Builder headId(String headId) {
+            this.headId = headId;
+            return this;
+        }
+
+        /** The resolved decision-shaping config fingerprint; emitted next to the id (#187). */
+        public Builder configFingerprint(String configFingerprint) {
+            this.configFingerprint = configFingerprint;
             return this;
         }
 
@@ -665,6 +720,18 @@ public final class ScalpelReport {
             return this;
         }
 
+        /** Modules in the final build set (affected plus upstream prerequisites); nullable, omitted when unknown (#187). */
+        public Builder buildSetSize(Integer buildSetSize) {
+            this.buildSetSize = buildSetSize;
+            return this;
+        }
+
+        /** Modules whose tests actually run; nullable, omitted when unknown (#187). */
+        public Builder testedModulesCount(Integer testedModulesCount) {
+            this.testedModulesCount = testedModulesCount;
+            return this;
+        }
+
         /**
          * Attaches phase timing and operation-count instrumentation. The {@code timings} and
          * {@code operations} objects are emitted only when {@code timings} recorded at least
@@ -687,6 +754,9 @@ public final class ScalpelReport {
             return new ScalpelReport(
                     baseBranch,
                     decisionId,
+                    mergeBaseId,
+                    headId,
+                    configFingerprint,
                     status,
                     reason,
                     fullBuildTriggered,
@@ -699,6 +769,8 @@ public final class ScalpelReport {
                     affectedModules,
                     skippedModules,
                     excludedUpstreamCount,
+                    buildSetSize,
+                    testedModulesCount,
                     timings,
                     totalMillis);
         }

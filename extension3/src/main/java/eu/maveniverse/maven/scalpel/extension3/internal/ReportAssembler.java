@@ -49,6 +49,9 @@ class ReportAssembler {
         ScalpelReport.Builder builder = ScalpelReport.builder()
                 .baseBranch(config.getBaseBranch())
                 .decisionId(ctx.decisionId)
+                .mergeBaseId(ctx.mergeBaseId)
+                .headId(ctx.headId)
+                .configFingerprint(ctx.configFingerprint)
                 .fullBuildTriggered(false)
                 .changedFiles(ctx.changedFiles)
                 .changedProperties(ctx.changedProperties)
@@ -70,6 +73,19 @@ class ReportAssembler {
         int excludedUpstream = addTrimResultModules(builder, ctx, pathFilters, config, reactorRoot);
         builder.excludedUpstreamCount(excludedUpstream);
         addSkippedModules(builder, allProjects, ctx, reactorRoot);
+        // The reactor partitions as affectedModules + excludedUpstreamCount + skippedModules:
+        // emitting the build-set size and tested count makes the split readable directly
+        // instead of inferred (#187). Among affected modules, only the downstream
+        // exclusion (skipTestsForDownstreamModules) suppresses tests.
+        int affected = ctx.directlyAffected.size() + ctx.transitivelyAffected.size();
+        builder.buildSetSize(affected + excludedUpstream);
+        int testSuppressed = 0;
+        for (MavenProject project : ctx.transitivelyAffected.keySet()) {
+            if (matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
+                testSuppressed++;
+            }
+        }
+        builder.testedModulesCount(Math.max(affected - testSuppressed, 0));
 
         try {
             ScalpelReport report = builder.build();
