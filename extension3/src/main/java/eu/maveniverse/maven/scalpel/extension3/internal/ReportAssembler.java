@@ -80,26 +80,27 @@ class ReportAssembler {
         }
     }
 
-    void writeStatusReport(ScalpelConfiguration config, Path reactorRoot, String status, String reason) {
+    void writeStatusReport(ScalpelConfiguration config, Path reactorRoot, String status, String reason)
+            throws MavenExecutionException {
         String baseBranch = config.getBaseBranch();
+        if (config.isModeShadow() || config.isVerifyFullBuild()) {
+            writeShadowStatus(reactorRoot, status, reason);
+        }
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch(baseBranch != null ? baseBranch : "(unconfigured)")
+                .status(status)
+                .reason(reason)
+                .fullBuildTriggered(true)
+                .build();
         try {
-            if (config.isModeShadow() || config.isVerifyFullBuild()) {
-                writeShadowStatus(reactorRoot, status, reason);
-            }
-            ScalpelReport report = ScalpelReport.builder()
-                    .baseBranch(baseBranch != null ? baseBranch : "(unconfigured)")
-                    .status(status)
-                    .reason(reason)
-                    .fullBuildTriggered(true)
-                    .build();
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.warn(
                     "Scalpel: Analysis did not complete (status={}, reason={}), report at {} overwritten",
                     status,
                     reason,
                     config.getReportFile());
-        } catch (Exception e) {
-            logger.warn("Scalpel: Could not overwrite report with {} status: {}", status, e.toString());
+        } catch (IOException e) {
+            handleWriteFailure(config, "Could not overwrite report with " + status + " status", e);
         }
     }
 
@@ -144,7 +145,8 @@ class ReportAssembler {
         }
     }
 
-    void writeFailedStatusReport(ScalpelConfiguration config, Path reactorRoot, String reason) {
+    void writeFailedStatusReport(ScalpelConfiguration config, Path reactorRoot, String reason)
+            throws MavenExecutionException {
         writeStatusReport(config, reactorRoot, "failed", reason);
     }
 
