@@ -177,11 +177,22 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // Filter out excluded paths
             changedFiles = pathFilters.filterExcludedPaths(changedFiles);
             if (changedFiles.isEmpty()) {
-                logger.info("Scalpel: All changed files excluded by path filters, building all modules");
+                // Nothing relevant changed: the same state as "no changes", so
+                // buildAllIfNoChanges selects between a full build and an EMPTY one (#184).
                 if (passiveRun(config)) {
+                    logger.info("Scalpel: All changed files excluded by path filters");
                     reportAssembler.writeStatusReport(
                             config, reactorRoot, "skipped", "all changed files excluded by path filters");
+                    return;
                 }
+                if (config.isBuildAllIfNoChanges()) {
+                    logger.info("Scalpel: All changed files excluded by path filters, building all modules"
+                            + " (buildAllIfNoChanges=true)");
+                    return;
+                }
+                logger.info("Scalpel: All changed files excluded by path filters, trimming reactor to empty"
+                        + " (buildAllIfNoChanges=false)");
+                session.setProjects(new ArrayList<>());
                 return;
             }
 

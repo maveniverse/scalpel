@@ -3482,6 +3482,49 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void allFilesExcludedByPathFilters_defaultTrimsToEmptyBuildSet() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
+        writePom(root, "module-b/pom.xml", simpleChildPom("module-b"));
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA =
+                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
+        moduleA.setParent(parentProject);
+        MavenProject moduleB =
+                createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", simpleChildPom("module-b"));
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // Every changed file is excluded: nothing relevant changed, so with the default
+        // buildAllIfNoChanges=false the reactor trims to EMPTY instead of building all (#184)
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("docs/guide.md");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.excludePaths", "docs/**");
+
+        participant.afterProjectsRead(session);
+
+        org.mockito.ArgumentCaptor<List<MavenProject>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(session).setProjects(captor.capture());
+        assertTrue(
+                captor.getValue().isEmpty(),
+                "with only excluded files changed and buildAllIfNoChanges=false, the build set must be empty, got: "
+                        + captor.getValue());
+        assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
+    }
+
+    @Test
     void allFilesExcludedByPathFilters_buildsAll() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
