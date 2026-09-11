@@ -39,6 +39,10 @@ final class AnalysisContext {
     /** The stable decision identity for this run, or null when not computed (#101). */
     final String decisionId;
 
+    final String mergeBaseId;
+    final String headId;
+    final String configFingerprint;
+
     private AnalysisContext(Builder builder) {
         this.changedFiles = builder.changedFiles;
         this.changedProperties = builder.changedProperties;
@@ -56,6 +60,9 @@ final class AnalysisContext {
         this.filteredBuildSet = builder.filteredBuildSet;
 
         this.decisionId = builder.decisionId;
+        this.mergeBaseId = builder.mergeBaseId;
+        this.headId = builder.headId;
+        this.configFingerprint = builder.configFingerprint;
     }
 
     static Builder builder(
@@ -101,6 +108,9 @@ final class AnalysisContext {
         private List<MavenProject> filteredBuildSet;
 
         private String decisionId;
+        private String mergeBaseId;
+        private String headId;
+        private String configFingerprint;
 
         private Builder() {}
 
@@ -156,6 +166,13 @@ final class AnalysisContext {
 
         Builder decisionId(String decisionId) {
             this.decisionId = decisionId;
+            return this;
+        }
+
+        Builder decisionInputs(String mergeBaseId, String headId, String configFingerprint) {
+            this.mergeBaseId = mergeBaseId;
+            this.headId = headId;
+            this.configFingerprint = configFingerprint;
             return this;
         }
 

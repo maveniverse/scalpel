@@ -511,6 +511,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .evidence(evidence)
                                 .trimResult(trimResult)
                                 .decisionId(decisionId)
+                                .decisionInputs(
+                                        result.getMergeBaseId(), result.getHeadId(), config.decisionFingerprint())
                                 .build(),
                         pathFilters,
                         timings,
@@ -616,6 +618,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .trimResult(trimResult)
                                 .filteredBuildSet(buildSet)
                                 .decisionId(trimDecisionId)
+                                .decisionInputs(
+                                        result.getMergeBaseId(), result.getHeadId(), config.decisionFingerprint())
                                 .build(),
                         pathFilters,
                         timings,
