@@ -325,19 +325,17 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         logger.warn("Scalpel: Error analyzing POM changes, building all modules: {}", e.getMessage());
                         logger.debug("POM analysis error details", e);
                         if (passiveRun(config)) {
-                            // Detection completed before the analysis failure: the report
-                            // keeps the detected files and the full-fallback decision id.
-                            boolean detected = result != null;
+                            // Detection completed before the analysis failure (result is
+                            // non-null here: the null check at the top of the try returned
+                            // already): the report keeps the detected files and the
+                            // full-fallback decision id.
                             reportAssembler.writeFailedStatusReport(
                                     config,
                                     reactorRoot,
                                     "error analyzing POM changes",
-                                    detected ? changedFiles : Set.of(),
+                                    changedFiles,
                                     null,
-                                    detected
-                                            ? decisionIdFor(result, config, reactorRoot, allProjects)
-                                            : ScalpelReport.computeDecisionId(
-                                                    null, null, config.decisionFingerprint(), List.of()),
+                                    decisionIdFor(result, config, reactorRoot, allProjects),
                                     timings,
                                     analysisStartNano);
                         }

@@ -4867,9 +4867,9 @@ class ScalpelLifecycleParticipantTest {
         when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         MavenSession session = createSimpleSession(root, List.of(parentProject, moduleA), "report");
-        // Force an unexpected error AFTER detection: the passive branch's decision
-        // computation calls graph.getSortedProjects() outside any internal catch, so the
-        // throw escapes to the outer handler with detection already completed.
+        // Force an unexpected error AFTER detection: ReactorTrimmer.computeBuildSet calls
+        // graph.getSortedProjects() outside any internal catch, so the throw escapes to
+        // the outer handler with detection already completed.
         when(session.getProjectDependencyGraph().getSortedProjects()).thenThrow(new RuntimeException("boom"));
 
         runCapturingStdErr(() -> participant.afterProjectsRead(session));
