@@ -92,6 +92,7 @@ public final class ScalpelReport {
     private final List<AffectedModule> affectedModules;
     private final List<SkippedModule> skippedModules;
     private final int excludedUpstreamCount;
+    private final Integer reactorModuleCount;
     private final Integer buildSetSize;
     private final Integer testedModulesCount;
     private final Timings timings;
@@ -115,6 +116,7 @@ public final class ScalpelReport {
             List<AffectedModule> affectedModules,
             List<SkippedModule> skippedModules,
             int excludedUpstreamCount,
+            Integer reactorModuleCount,
             Integer buildSetSize,
             Integer testedModulesCount,
             Timings timings,
@@ -136,6 +138,7 @@ public final class ScalpelReport {
         this.affectedModules = affectedModules;
         this.skippedModules = skippedModules;
         this.excludedUpstreamCount = excludedUpstreamCount;
+        this.reactorModuleCount = reactorModuleCount;
         this.buildSetSize = buildSetSize;
         this.testedModulesCount = testedModulesCount;
         this.timings = timings;
@@ -415,6 +418,9 @@ public final class ScalpelReport {
                     .append(",\n");
         }
         sb.append("  \"excludedUpstreamCount\": ").append(excludedUpstreamCount).append(",\n");
+        if (reactorModuleCount != null) {
+            sb.append("  \"reactorModuleCount\": ").append(reactorModuleCount).append(",\n");
+        }
         if (buildSetSize != null) {
             sb.append("  \"buildSetSize\": ").append(buildSetSize).append(",\n");
         }
@@ -627,6 +633,7 @@ public final class ScalpelReport {
         private final List<AffectedModule> affectedModules = new ArrayList<>();
         private final List<SkippedModule> skippedModules = new ArrayList<>();
         private int excludedUpstreamCount;
+        private Integer reactorModuleCount;
         private Integer buildSetSize;
         private Integer testedModulesCount;
         private Timings timings;
@@ -720,6 +727,20 @@ public final class ScalpelReport {
             return this;
         }
 
+        /**
+         * Total number of modules in the Maven reactor (i.e. {@code allProjects.size()});
+         * lets consumers compute "built N of M" directly from the report without summing
+         * {@code affectedModules}, {@code excludedUpstreamCount}, and {@code skippedModules}
+         * (#193 residual). Nullable, omitted when unknown.
+         */
+        public Builder reactorModuleCount(Integer reactorModuleCount) {
+            if (reactorModuleCount != null && reactorModuleCount < 0) {
+                throw new IllegalArgumentException("reactorModuleCount must be non-negative when set");
+            }
+            this.reactorModuleCount = reactorModuleCount;
+            return this;
+        }
+
         /** Modules in the final build set (affected plus upstream prerequisites); nullable, omitted when unknown (#187). */
         public Builder buildSetSize(Integer buildSetSize) {
             if (buildSetSize != null && buildSetSize < 0) {
@@ -775,6 +796,7 @@ public final class ScalpelReport {
                     affectedModules,
                     skippedModules,
                     excludedUpstreamCount,
+                    reactorModuleCount,
                     buildSetSize,
                     testedModulesCount,
                     timings,

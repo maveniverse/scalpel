@@ -122,6 +122,7 @@ The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/res
 | `headId` | string | *(optional)* The head commit id the decisionId was computed over |
 | `configFingerprint` | string | *(optional)* The resolved decision-shaping configuration fingerprint the decisionId was computed over |
 | `buildSetSize` | integer | *(optional)* Modules in the final build set (affected plus upstream prerequisites); with affectedModules and skippedModules the reactor partition reads directly |
+| `reactorModuleCount` | integer | *(optional)* Total number of modules in the Maven reactor; together with `buildSetSize` lets consumers compute "built N of M" directly from the report |
 | `testedModulesCount` | integer | *(optional)* Modules whose tests actually run (affected minus downstream-excluded test suppression) |
 | `fullBuildTriggered` | boolean | `true` if a full build was triggered (e.g., by `fullBuildTriggers`) |
 | `triggerFile` | string or null | Path of the file that triggered a full build; `null` when no full build was triggered |
