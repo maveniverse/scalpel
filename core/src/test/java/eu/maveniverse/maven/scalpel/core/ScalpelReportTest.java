@@ -850,6 +850,56 @@ class ScalpelReportTest {
         assertFalse(parsed(withoutId).containsKey("decisionId"), "decisionId must be omitted when not computed");
     }
 
+    @Test
+    void toJson_decisionInputsRoundTripAlongsideTheId() {
+        // #187: the digest alone is not replayable; the three hashed inputs must ride
+        // with it or two reports weeks apart cannot be compared without reconstructing
+        // the commits out-of-band.
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .decisionId("deadbeef")
+                .mergeBaseId("abc123")
+                .headId("def456")
+                .configFingerprint("fp=1;")
+                .build();
+        Map<String, Object> parsed = parsed(report);
+        assertEquals("deadbeef", parsed.get("decisionId"));
+        assertEquals("abc123", parsed.get("mergeBaseId"));
+        assertEquals("def456", parsed.get("headId"));
+        assertEquals("fp=1;", parsed.get("configFingerprint"));
+    }
+
+    @Test
+    void toJson_decisionInputsOmittedWhenAbsent() {
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .build();
+        Map<String, Object> parsed = parsed(report);
+        assertFalse(parsed.containsKey("mergeBaseId"));
+        assertFalse(parsed.containsKey("headId"));
+        assertFalse(parsed.containsKey("configFingerprint"));
+    }
+
+    @Test
+    void toJson_buildSetSplitReadable() {
+        // #187: affectedModules + excludedUpstreamCount + skippedModules partitions the
+        // reactor; the build set size and the tested count must be readable directly
+        // instead of inferred, or 10-of-57 reads as a 5x saving when it is 48-of-57.
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .excludedUpstreamCount(38)
+                .buildSetSize(48)
+                .testedModulesCount(48)
+                .build();
+        Map<String, Object> parsed = parsed(report);
+        assertEquals(38, ((Number) parsed.get("excludedUpstreamCount")).intValue());
+        assertEquals(48, ((Number) parsed.get("buildSetSize")).intValue());
+        assertEquals(48, ((Number) parsed.get("testedModulesCount")).intValue());
+    }
+
     @SuppressWarnings("unchecked")
     private static Map<String, Object> parsed(ScalpelReport report) {
         return (Map<String, Object>) ScalpelReportSchemaTest.Json.parse(report.toJson());

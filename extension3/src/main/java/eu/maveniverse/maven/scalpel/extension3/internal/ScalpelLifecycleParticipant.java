@@ -194,7 +194,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             reactorRoot,
                             triggerFile,
                             changedFiles,
-                            decisionIdFor(result, config, reactorRoot, allProjects));
+                            decisionIdFor(result, config, reactorRoot, allProjects),
+                            result.getMergeBaseId(),
+                            result.getHeadId());
                 }
                 return;
             }
@@ -413,17 +415,30 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         timings.stop(Timings.PHASE_TRIM);
                     }
                 }
-                if (trimResult != null && config.isExplain()) {
-                    mergeTrimReasons(evidence, trimResult);
+                // The final trim decision for this run, seeded with allAffected. It feeds
+                // the decision identity (#101), the shadow/verify would-be build (#92, #101)
+                // and the report itself, so a transitive-only module contributes its own
+                // upstream prerequisites and downstream dependents to the very report whose
+                // decisionId describes them. The decision uses the same ReactorTrimmer call
+                // trim mode runs on the same inputs, so shadow and trim decisions agree by
+                // construction; when nothing is transitively affected, the enrichment
+                // decision above already computed that exact set.
+                TrimResult finalDecision;
+                if (trimResult != null && allAffected.equals(directlyAffected)) {
+                    finalDecision = trimResult;
+                } else {
+                    timings.start(Timings.PHASE_TRIM);
+                    try {
+                        finalDecision = reactorTrimmer.computeBuildSet(
+                                allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
+                    } finally {
+                        timings.stop(Timings.PHASE_TRIM);
+                    }
+                }
+                if (config.isExplain()) {
+                    mergeTrimReasons(evidence, finalDecision);
                 }
 
-                // The would-be trim decision for shadow and verify runs (#92, #101), and the
-                // stable decision identity (#101) every report of this run carries. Computed
-                // before the report is written so the report and the shadow document quote
-                // the same id for the same run. The decision uses the same ReactorTrimmer
-                // call trim mode runs on the same inputs, so shadow and trim decisions agree
-                // by construction; when nothing is transitively affected, the report branch
-                // above already computed that exact set.
                 boolean verify = config.isVerifyFullBuild();
                 // The root aggregator relativizes to the empty string; every decision-side
                 // module name is normalized to "." (like the impacted log, #84) so all
@@ -434,23 +449,11 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 Set<String> wouldHaveSkipped = null;
                 String decisionId;
                 if (config.isModeShadow() || verify) {
-                    TrimResult decision;
-                    if (trimResult != null && allAffected.equals(directlyAffected)) {
-                        decision = trimResult;
-                    } else {
-                        timings.start(Timings.PHASE_TRIM);
-                        try {
-                            decision = reactorTrimmer.computeBuildSet(
-                                    allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
-                        } finally {
-                            timings.stop(Timings.PHASE_TRIM);
-                        }
-                    }
                     wouldHaveBuilt = new LinkedHashSet<>();
-                    List<MavenProject> decisionBuildSet = decision.getBuildSet();
+                    List<MavenProject> decisionBuildSet = finalDecision.getBuildSet();
                     if (pathFilters.hasIncludeFilters()) {
                         decisionBuildSet = pathFilters.filterBuildSet(
-                                decisionBuildSet, allAffected, decision.getUpstreamOnly(), normalizedRoot);
+                                decisionBuildSet, allAffected, finalDecision.getUpstreamOnly(), normalizedRoot);
                     }
                     for (MavenProject project : decisionBuildSet) {
                         wouldHaveBuilt.add(moduleKey.apply(project));
@@ -471,26 +474,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 config.getMode());
                     }
                 } else {
-                    // Plain report run: compute the decision identity from the same set
+                    // Plain report run: the decision identity comes from the same set
                     // shadow/verify would use (allAffected + trim + includePaths filter)
                     // so that report-mode and shadow/verify-mode produce the same
                     // decisionId for the same changeset (#177).
-                    TrimResult reportDecision;
-                    if (trimResult != null && allAffected.equals(directlyAffected)) {
-                        reportDecision = trimResult;
-                    } else {
-                        timings.start(Timings.PHASE_TRIM);
-                        try {
-                            reportDecision = reactorTrimmer.computeBuildSet(
-                                    allAffected, testOnlyModules, session.getProjectDependencyGraph(), config);
-                        } finally {
-                            timings.stop(Timings.PHASE_TRIM);
-                        }
-                    }
-                    List<MavenProject> reportBuildSet = reportDecision.getBuildSet();
+                    List<MavenProject> reportBuildSet = finalDecision.getBuildSet();
                     if (pathFilters.hasIncludeFilters()) {
                         reportBuildSet = pathFilters.filterBuildSet(
-                                reportBuildSet, allAffected, reportDecision.getUpstreamOnly(), normalizedRoot);
+                                reportBuildSet, allAffected, finalDecision.getUpstreamOnly(), normalizedRoot);
                     }
                     decisionId = decisionIdFor(result, config, reactorRoot, reportBuildSet);
                 }
@@ -509,18 +500,18 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .forceIncluded(forceIncluded)
                                 .transitivelyAffected(transitivelyAffected)
                                 .evidence(evidence)
-                                .trimResult(trimResult)
+                                .trimResult(finalDecision)
                                 .decisionId(decisionId)
+                                .decisionInputs(
+                                        result.getMergeBaseId(), result.getHeadId(), config.decisionFingerprint())
                                 .build(),
                         pathFilters,
                         timings,
                         analysisStartNano);
                 if (config.isExplain()) {
                     Set<MavenProject> reportedModules = new LinkedHashSet<>(allAffected);
-                    if (trimResult != null) {
-                        reportedModules.addAll(trimResult.getDownstreamOnly());
-                        reportedModules.addAll(trimResult.getDownstreamTestOnly());
-                    }
+                    reportedModules.addAll(finalDecision.getDownstreamOnly());
+                    reportedModules.addAll(finalDecision.getDownstreamTestOnly());
                     logExplainDecisions(allProjects, reportedModules, evidence);
                 }
                 if (wouldHaveBuilt != null) {
@@ -616,6 +607,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .trimResult(trimResult)
                                 .filteredBuildSet(buildSet)
                                 .decisionId(trimDecisionId)
+                                .decisionInputs(
+                                        result.getMergeBaseId(), result.getHeadId(), config.decisionFingerprint())
                                 .build(),
                         pathFilters,
                         timings,
@@ -690,7 +683,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             cctx.changedManagedDepGAs(),
                             cctx.changedManagedPluginGAs(),
                             cctx.unmatchedPomPaths(),
-                            decisionId),
+                            decisionId,
+                            cctx.result().getMergeBaseId(),
+                            cctx.result().getHeadId(),
+                            cctx.config().decisionFingerprint()),
                     cctx.pathFilters(),
                     cctx.timings(),
                     cctx.analysisStartNano());

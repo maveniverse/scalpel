@@ -118,6 +118,11 @@ The report follows a versioned JSON schema. A [JSON Schema](../core/src/main/res
 | `scalpelVersion` | string | Scalpel version that generated this report |
 | `baseBranch` | string | The base branch used for change detection |
 | `decisionId` | string | *(optional)* Stable SHA-256 identity of the decision (merge-base, head, decision-shaping config, build set); quotable in bug reports |
+| `mergeBaseId` | string | *(optional)* The merge-base commit id the decisionId was computed over |
+| `headId` | string | *(optional)* The head commit id the decisionId was computed over |
+| `configFingerprint` | string | *(optional)* The resolved decision-shaping configuration fingerprint the decisionId was computed over |
+| `buildSetSize` | integer | *(optional)* Modules in the final build set (affected plus upstream prerequisites); with affectedModules and skippedModules the reactor partition reads directly |
+| `testedModulesCount` | integer | *(optional)* Modules whose tests actually run (affected minus downstream-excluded test suppression) |
 | `fullBuildTriggered` | boolean | `true` if a full build was triggered (e.g., by `fullBuildTriggers`) |
 | `triggerFile` | string or null | Path of the file that triggered a full build; `null` when no full build was triggered |
 | `changedFiles` | string[] | List of changed files (relative to reactor root) |
