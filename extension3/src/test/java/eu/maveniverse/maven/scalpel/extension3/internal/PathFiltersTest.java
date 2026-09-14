@@ -9,6 +9,7 @@ package eu.maveniverse.maven.scalpel.extension3.internal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
@@ -106,27 +107,36 @@ class PathFiltersTest {
     // ---- matchesDisableTrigger ----
 
     @Test
-    void matchesDisableTrigger_noTriggers_returnsFalse() {
+    void findDisableTrigger_noTriggers_returnsNull() {
         PathFilters pf = new PathFilters(config());
-        assertFalse(pf.matchesDisableTrigger(setOf("src/Main.java")));
+        assertNull(pf.findDisableTrigger(setOf("src/Main.java")));
     }
 
     @Test
-    void matchesDisableTrigger_matchingFile_returnsTrue() {
+    void findDisableTrigger_matchingFile_returnsFile() {
         PathFilters pf = new PathFilters(config("scalpel.disableTriggers", ".github/**"));
-        assertTrue(pf.matchesDisableTrigger(setOf("src/Main.java", ".github/workflows/ci.yml")));
+        assertNotNull(pf.findDisableTrigger(setOf("src/Main.java", ".github/workflows/ci.yml")));
     }
 
     @Test
-    void matchesDisableTrigger_noMatch_returnsFalse() {
+    void findDisableTrigger_returnsTheMatchedFile() {
+        // #186: the responsible file must reach the report's triggerFile field, not just
+        // the log line; findFullBuildTrigger already has this shape.
         PathFilters pf = new PathFilters(config("scalpel.disableTriggers", ".github/**"));
-        assertFalse(pf.matchesDisableTrigger(setOf("src/Main.java", "README.md")));
+        assertEquals(
+                ".github/workflows/ci.yml", pf.findDisableTrigger(setOf("src/Main.java", ".github/workflows/ci.yml")));
     }
 
     @Test
-    void matchesDisableTrigger_bareGlobMatchesNested() {
+    void findDisableTrigger_noMatch_returnsNull() {
+        PathFilters pf = new PathFilters(config("scalpel.disableTriggers", ".github/**"));
+        assertNull(pf.findDisableTrigger(setOf("src/Main.java", "README.md")));
+    }
+
+    @Test
+    void findDisableTrigger_bareGlobMatchesNested() {
         PathFilters pf = new PathFilters(config("scalpel.disableTriggers", "*.lock"));
-        assertTrue(pf.matchesDisableTrigger(setOf("deps/package.lock")));
+        assertNotNull(pf.findDisableTrigger(setOf("deps/package.lock")));
     }
 
     // ---- findFullBuildTrigger ----
@@ -350,8 +360,8 @@ class PathFiltersTest {
         // filterExcludedPaths with no excludes returns original
         assertEquals(files, pf.filterExcludedPaths(files));
 
-        // matchesDisableTrigger with no triggers returns false
-        assertFalse(pf.matchesDisableTrigger(files));
+        // findDisableTrigger with no triggers returns null
+        assertNull(pf.findDisableTrigger(files));
 
         // findFullBuildTrigger with default .mvn/** doesn't match these
         assertNull(pf.findFullBuildTrigger(files));

@@ -99,7 +99,16 @@ class ReportAssembler {
         }
     }
 
-    void writeStatusReport(ScalpelConfiguration config, Path reactorRoot, String status, String reason)
+    void writeStatusReport(
+            ScalpelConfiguration config,
+            Path reactorRoot,
+            String status,
+            String reason,
+            Set<String> changedFiles,
+            String triggerFile,
+            String decisionId,
+            Timings timings,
+            long analysisStartNano)
             throws MavenExecutionException {
         String baseBranch = config.getBaseBranch();
         if (config.isModeShadow() || config.isVerifyFullBuild()) {
@@ -107,9 +116,13 @@ class ReportAssembler {
         }
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch(baseBranch != null ? baseBranch : "(unconfigured)")
+                .decisionId(decisionId)
                 .status(status)
                 .reason(reason)
                 .fullBuildTriggered(true)
+                .triggerFile(triggerFile)
+                .changedFiles(changedFiles == null ? Set.of() : changedFiles)
+                .timings(timings, millisSince(analysisStartNano))
                 .build();
         try {
             report.writeToFile(reactorRoot, config.getReportFile());
@@ -169,9 +182,26 @@ class ReportAssembler {
         }
     }
 
-    void writeFailedStatusReport(ScalpelConfiguration config, Path reactorRoot, String reason)
+    void writeFailedStatusReport(
+            ScalpelConfiguration config,
+            Path reactorRoot,
+            String reason,
+            Set<String> changedFiles,
+            String triggerFile,
+            String decisionId,
+            Timings timings,
+            long analysisStartNano)
             throws MavenExecutionException {
-        writeStatusReport(config, reactorRoot, "failed", reason);
+        writeStatusReport(
+                config,
+                reactorRoot,
+                "failed",
+                reason,
+                changedFiles,
+                triggerFile,
+                decisionId,
+                timings,
+                analysisStartNano);
     }
 
     void handleWriteFailure(ScalpelConfiguration config, String message, IOException e) throws MavenExecutionException {

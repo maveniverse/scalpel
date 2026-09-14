@@ -12,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.maveniverse.maven.scalpel.core.ScalpelConfiguration;
+import eu.maveniverse.maven.scalpel.core.Timings;
 import java.util.Properties;
 import org.apache.maven.MavenExecutionException;
 import org.junit.jupiter.api.Test;
@@ -44,7 +45,15 @@ class ReportAssemblerTest {
         MavenExecutionException e = assertThrows(
                 MavenExecutionException.class,
                 () -> assembler.writeStatusReport(
-                        configWith(false, outside), tempDir, "skipped", "no changes detected"),
+                        configWith(false, outside),
+                        tempDir,
+                        "skipped",
+                        "no changes detected",
+                        null,
+                        null,
+                        null,
+                        new Timings(),
+                        System.nanoTime()),
                 "with failSafe=false a failed status write must fail the build");
         assertTrue(
                 e.getCause() != null && e.getCause().getMessage().contains("scalpel.reportFile"),
@@ -56,8 +65,16 @@ class ReportAssemblerTest {
         ReportAssembler assembler = new ReportAssembler();
         String outside = tempDir.resolve("outside2").resolve("report.json").toString();
 
-        assertDoesNotThrow(() ->
-                assembler.writeStatusReport(configWith(true, outside), tempDir, "skipped", "no changes detected"));
+        assertDoesNotThrow(() -> assembler.writeStatusReport(
+                configWith(true, outside),
+                tempDir,
+                "skipped",
+                "no changes detected",
+                null,
+                null,
+                null,
+                new Timings(),
+                System.nanoTime()));
         assertTrue(!java.nio.file.Files.exists(java.nio.file.Path.of(outside)), "nothing written outside the reactor");
     }
 
@@ -73,7 +90,15 @@ class ReportAssemblerTest {
         MavenExecutionException e = assertThrows(
                 MavenExecutionException.class,
                 () -> assembler.writeStatusReport(
-                        configWith(false, "dir-report"), tempDir, "skipped", "no changes detected"));
+                        configWith(false, "dir-report"),
+                        tempDir,
+                        "skipped",
+                        "no changes detected",
+                        null,
+                        null,
+                        null,
+                        new Timings(),
+                        System.nanoTime()));
         assertTrue(
                 e.getCause() instanceof java.io.IOException,
                 "the cause must be the underlying write IOException, got: " + e.getCause());

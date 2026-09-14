@@ -4846,6 +4846,62 @@ class ScalpelLifecycleParticipantTest {
         return root;
     }
 
+    @Test
+    void unexpectedErrorAfterDetection_reportKeepsDetectedChangedFiles() throws Exception {
+        // #186 review: detection completed before the failure, so the fail-safe report
+        // must carry the detected files (previously Set.of()) and the full-fallback
+        // decision id computed from the real result, not the null-git one.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+        writePom(root, "pom.xml", simpleParentPom("module-a"));
+        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
+        MavenProject parentProject =
+                createProject("com.example", "parent", "1.0", root, "pom.xml", simpleParentPom("module-a"));
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA =
+                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
+        moduleA.setParent(parentProject);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        MavenSession session = createSimpleSession(root, List.of(parentProject, moduleA), "report");
+        // Force an unexpected error AFTER detection: the passive branch's decision
+        // computation calls graph.getSortedProjects() outside any internal catch, so the
+        // throw escapes to the outer handler with detection already completed.
+        when(session.getProjectDependencyGraph().getSortedProjects()).thenThrow(new RuntimeException("boom"));
+
+        runCapturingStdErr(() -> participant.afterProjectsRead(session));
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "fail-safe report must be written");
+        String json = Files.readString(reportFile);
+        assertTrue(
+                json.contains("module-a/src/main/java/Foo.java"),
+                "the report must carry the detected changed files, got: " + json);
+        assertTrue(json.contains("unexpected error"), "status reason preserved: " + json);
+        assertTrue(json.contains("\"changedFiles\""), "changedFiles array present");
+        // The decision id must come from the DETECTED result (full-fallback build set),
+        // not from the null-git form: a regression back to computeDecisionId(null, null,
+        // ...) must fail here, not only change the digest silently.
+        String reportedId = java.util.regex.Pattern.compile("\"decisionId\": \"([0-9a-f]+)\"")
+                .matcher(json)
+                .results()
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("decisionId missing: " + json))
+                .group(1);
+        String nullGitId = eu.maveniverse.maven.scalpel.core.ScalpelReport.computeDecisionId(
+                null, null, configFromSession(session).decisionFingerprint(), java.util.List.of());
+        org.junit.jupiter.api.Assertions.assertNotEquals(
+                nullGitId, reportedId, "the id must differ from the null-git form");
+    }
+
+    private eu.maveniverse.maven.scalpel.core.ScalpelConfiguration configFromSession(MavenSession session) {
+        return eu.maveniverse.maven.scalpel.core.ScalpelConfiguration.fromProperties(
+                session.getSystemProperties(), session.getUserProperties());
+    }
+
     private MavenSession createSimpleSession(Path root, List<MavenProject> allProjects, String mode) {
         MavenSession session = mock(MavenSession.class);
         Properties sysProps = new Properties();
