@@ -68,24 +68,27 @@ class ReportAssembler {
                 ctx.trimResult != null ? ctx.trimResult.getDownstreamOnly().size() : 0,
                 ctx.trimResult != null ? ctx.trimResult.getDownstreamTestOnly().size() : 0);
 
-        addDirectlyAffectedModules(builder, ctx, reactorRoot);
-        addTransitivelyAffectedModules(builder, ctx, config, reactorRoot);
-        int excludedUpstream = addTrimResultModules(builder, ctx, pathFilters, config, reactorRoot);
+        // The same deduplicated, insertion-ordered set that feeds affectedModules also
+        // feeds the split counts, so buildSetSize and testedModulesCount can never
+        // disagree with the emitted list (#187 review).
+        Set<MavenProject> emitted = new LinkedHashSet<>();
+        addDirectlyAffectedModules(builder, ctx, reactorRoot, emitted);
+        addTransitivelyAffectedModules(builder, ctx, config, reactorRoot, emitted);
+        int excludedUpstream = addTrimResultModules(builder, ctx, pathFilters, config, reactorRoot, emitted);
         builder.excludedUpstreamCount(excludedUpstream);
         addSkippedModules(builder, allProjects, ctx, reactorRoot);
         // The reactor partitions as affectedModules + excludedUpstreamCount + skippedModules:
         // emitting the build-set size and tested count makes the split readable directly
         // instead of inferred (#187). Among affected modules, only the downstream
         // exclusion (skipTestsForDownstreamModules) suppresses tests.
-        int affected = ctx.directlyAffected.size() + ctx.transitivelyAffected.size();
-        builder.buildSetSize(affected + excludedUpstream);
+        builder.buildSetSize(emitted.size() + excludedUpstream);
         int testSuppressed = 0;
-        for (MavenProject project : ctx.transitivelyAffected.keySet()) {
+        for (MavenProject project : emitted) {
             if (matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())) {
                 testSuppressed++;
             }
         }
-        builder.testedModulesCount(Math.max(affected - testSuppressed, 0));
+        builder.testedModulesCount(Math.max(emitted.size() - testSuppressed, 0));
 
         try {
             ScalpelReport report = builder.build();
@@ -174,8 +177,10 @@ class ReportAssembler {
         }
     }
 
-    private void addDirectlyAffectedModules(ScalpelReport.Builder builder, AnalysisContext ctx, Path reactorRoot) {
+    private void addDirectlyAffectedModules(
+            ScalpelReport.Builder builder, AnalysisContext ctx, Path reactorRoot, Set<MavenProject> emitted) {
         for (MavenProject project : ctx.directlyAffected) {
+            emitted.add(project);
             String path = ChangedFileClassifier.relativePath(reactorRoot, project);
             List<String> reasons = new ArrayList<>();
             String sourceSet = null;
@@ -207,8 +212,13 @@ class ReportAssembler {
     }
 
     private void addTransitivelyAffectedModules(
-            ScalpelReport.Builder builder, AnalysisContext ctx, ScalpelConfiguration config, Path reactorRoot) {
+            ScalpelReport.Builder builder,
+            AnalysisContext ctx,
+            ScalpelConfiguration config,
+            Path reactorRoot,
+            Set<MavenProject> emitted) {
         for (Map.Entry<MavenProject, List<String>> entry : ctx.transitivelyAffected.entrySet()) {
+            emitted.add(entry.getKey());
             MavenProject project = entry.getKey();
             String path = ChangedFileClassifier.relativePath(reactorRoot, project);
             String category = null;
@@ -244,7 +254,8 @@ class ReportAssembler {
             AnalysisContext ctx,
             PathFilters pathFilters,
             ScalpelConfiguration config,
-            Path reactorRoot) {
+            Path reactorRoot,
+            Set<MavenProject> emitted) {
         if (ctx.trimResult == null) {
             return 0;
         }
@@ -271,7 +282,8 @@ class ReportAssembler {
                 config,
                 reactorRoot,
                 ctx.trimResult.getDownstreamOnly(),
-                ScalpelReport.REASON_DOWNSTREAM_DEPENDENT);
+                ScalpelReport.REASON_DOWNSTREAM_DEPENDENT,
+                emitted);
         addDownstreamModules(
                 builder,
                 ctx,
@@ -279,7 +291,8 @@ class ReportAssembler {
                 config,
                 reactorRoot,
                 ctx.trimResult.getDownstreamTestOnly(),
-                ScalpelReport.REASON_DOWNSTREAM_TEST);
+                ScalpelReport.REASON_DOWNSTREAM_TEST,
+                emitted);
         return upstreamCount;
     }
 
@@ -290,12 +303,13 @@ class ReportAssembler {
             ScalpelConfiguration config,
             Path reactorRoot,
             Set<MavenProject> downstreamProjects,
-            String reason) {
+            String reason,
+            Set<MavenProject> emitted) {
         for (MavenProject project : downstreamProjects) {
             if (ctx.directlyAffected.contains(project) || ctx.transitivelyAffected.containsKey(project)) {
                 continue;
             }
-            addSingleDownstreamModule(builder, ctx, config, reactorRoot, pathFilters, project, reason);
+            addSingleDownstreamModule(builder, ctx, config, reactorRoot, pathFilters, project, reason, emitted);
         }
     }
 
@@ -306,7 +320,8 @@ class ReportAssembler {
             Path reactorRoot,
             PathFilters pathFilters,
             MavenProject project,
-            String reason) {
+            String reason,
+            Set<MavenProject> emitted) {
         // Skip downstream modules outside includePaths scope
         if (pathFilters.hasIncludeFilters() && !pathFilters.matchesIncludePaths(project, reactorRoot)) {
             if (logger.isDebugEnabled()) {
@@ -314,6 +329,7 @@ class ReportAssembler {
             }
             return;
         }
+        emitted.add(project);
         String path = ChangedFileClassifier.relativePath(reactorRoot, project);
         String testsSkippedReason = matchesDownstreamExclusion(project, config.getSkipTestsForDownstreamModules())
                 ? ScalpelReport.REASON_EXCLUDED_DOWNSTREAM

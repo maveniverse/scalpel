@@ -722,12 +722,18 @@ public final class ScalpelReport {
 
         /** Modules in the final build set (affected plus upstream prerequisites); nullable, omitted when unknown (#187). */
         public Builder buildSetSize(Integer buildSetSize) {
+            if (buildSetSize != null && buildSetSize < 0) {
+                throw new IllegalArgumentException("buildSetSize must be non-negative when set");
+            }
             this.buildSetSize = buildSetSize;
             return this;
         }
 
         /** Modules whose tests actually run; nullable, omitted when unknown (#187). */
         public Builder testedModulesCount(Integer testedModulesCount) {
+            if (testedModulesCount != null && testedModulesCount < 0) {
+                throw new IllegalArgumentException("testedModulesCount must be non-negative when set");
+            }
             this.testedModulesCount = testedModulesCount;
             return this;
         }
