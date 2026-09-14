@@ -4882,6 +4882,24 @@ class ScalpelLifecycleParticipantTest {
                 "the report must carry the detected changed files, got: " + json);
         assertTrue(json.contains("unexpected error"), "status reason preserved: " + json);
         assertTrue(json.contains("\"changedFiles\""), "changedFiles array present");
+        // The decision id must come from the DETECTED result (full-fallback build set),
+        // not from the null-git form: a regression back to computeDecisionId(null, null,
+        // ...) must fail here, not only change the digest silently.
+        String reportedId = java.util.regex.Pattern.compile("\"decisionId\": \"([0-9a-f]+)\"")
+                .matcher(json)
+                .results()
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("decisionId missing: " + json))
+                .group(1);
+        String nullGitId = eu.maveniverse.maven.scalpel.core.ScalpelReport.computeDecisionId(
+                null, null, configFromSession(session).decisionFingerprint(), java.util.List.of());
+        org.junit.jupiter.api.Assertions.assertNotEquals(
+                nullGitId, reportedId, "the id must differ from the null-git form");
+    }
+
+    private eu.maveniverse.maven.scalpel.core.ScalpelConfiguration configFromSession(MavenSession session) {
+        return eu.maveniverse.maven.scalpel.core.ScalpelConfiguration.fromProperties(
+                session.getSystemProperties(), session.getUserProperties());
     }
 
     private MavenSession createSimpleSession(Path root, List<MavenProject> allProjects, String mode) {

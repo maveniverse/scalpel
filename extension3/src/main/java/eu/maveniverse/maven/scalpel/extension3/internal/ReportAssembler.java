@@ -108,22 +108,23 @@ class ReportAssembler {
             String triggerFile,
             String decisionId,
             Timings timings,
-            long analysisStartNano) {
+            long analysisStartNano)
+            throws MavenExecutionException {
         String baseBranch = config.getBaseBranch();
+        if (config.isModeShadow() || config.isVerifyFullBuild()) {
+            writeShadowStatus(reactorRoot, status, reason);
+        }
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch(baseBranch != null ? baseBranch : "(unconfigured)")
+                .decisionId(decisionId)
+                .status(status)
+                .reason(reason)
+                .fullBuildTriggered(true)
+                .triggerFile(triggerFile)
+                .changedFiles(changedFiles == null ? Set.of() : changedFiles)
+                .timings(timings, millisSince(analysisStartNano))
+                .build();
         try {
-            if (config.isModeShadow() || config.isVerifyFullBuild()) {
-                writeShadowStatus(reactorRoot, status, reason);
-            }
-            ScalpelReport report = ScalpelReport.builder()
-                    .baseBranch(baseBranch != null ? baseBranch : "(unconfigured)")
-                    .decisionId(decisionId)
-                    .status(status)
-                    .reason(reason)
-                    .fullBuildTriggered(true)
-                    .triggerFile(triggerFile)
-                    .changedFiles(changedFiles == null ? Set.of() : changedFiles)
-                    .timings(timings, millisSince(analysisStartNano))
-                    .build();
             report.writeToFile(reactorRoot, config.getReportFile());
             logger.warn(
                     "Scalpel: Analysis did not complete (status={}, reason={}), report at {} overwritten",
@@ -189,7 +190,8 @@ class ReportAssembler {
             String triggerFile,
             String decisionId,
             Timings timings,
-            long analysisStartNano) {
+            long analysisStartNano)
+            throws MavenExecutionException {
         writeStatusReport(
                 config,
                 reactorRoot,
