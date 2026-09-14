@@ -1728,6 +1728,106 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void reportMode_fullBuildTriggerReportCarriesDecisionInputs() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add(".github/workflows/ci.yml");
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(
+                        changedFiles,
+                        new HashMap<>(),
+                        "1111111111111111111111111111111111111111",
+                        "2222222222222222222222222222222222222222"));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", ".github/**");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"triggerFile\": \".github/workflows/ci.yml\""), "should be the full-build report");
+        assertTrue(
+                json.contains("\"mergeBaseId\": \"1111111111111111111111111111111111111111\""),
+                "full-build report should carry the merge-base id the decision was computed over");
+        assertTrue(
+                json.contains("\"headId\": \"2222222222222222222222222222222222222222\""),
+                "full-build report should carry the head id the decision was computed over");
+        assertTrue(
+                json.contains("\"configFingerprint\": \"baseBranch="),
+                "full-build report should carry the decision-shaping config fingerprint");
+    }
+
+    @Test
+    void reportMode_includePathsFiltersEverythingReportCarriesDecisionInputs() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        changedFiles.add("module-b/src/main/java/Bar.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(
+                        changedFiles,
+                        new HashMap<>(),
+                        "1111111111111111111111111111111111111111",
+                        "2222222222222222222222222222222222222222"));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        session.getSystemProperties().setProperty("scalpel.includePaths", "module-z/**");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile));
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"fullBuildTriggered\": false"), "should be the no-affected-modules report");
+        assertTrue(
+                json.contains("\"mergeBaseId\": \"1111111111111111111111111111111111111111\""),
+                "no-affected-modules report should carry the merge-base id the decision was computed over");
+        assertTrue(
+                json.contains("\"headId\": \"2222222222222222222222222222222222222222\""),
+                "no-affected-modules report should carry the head id the decision was computed over");
+        assertTrue(
+                json.contains("\"configFingerprint\": \"baseBranch="),
+                "no-affected-modules report should carry the decision-shaping config fingerprint");
+    }
+
+    @Test
     void reportMode_excludePathsFiltersChangedFiles() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);

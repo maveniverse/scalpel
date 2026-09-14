@@ -194,7 +194,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             reactorRoot,
                             triggerFile,
                             changedFiles,
-                            decisionIdFor(result, config, reactorRoot, allProjects));
+                            decisionIdFor(result, config, reactorRoot, allProjects),
+                            result.getMergeBaseId(),
+                            result.getHeadId());
                 }
                 return;
             }
@@ -694,7 +696,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             cctx.changedManagedDepGAs(),
                             cctx.changedManagedPluginGAs(),
                             cctx.unmatchedPomPaths(),
-                            decisionId),
+                            decisionId,
+                            cctx.result().getMergeBaseId(),
+                            cctx.result().getHeadId(),
+                            cctx.config().decisionFingerprint()),
                     cctx.pathFilters(),
                     cctx.timings(),
                     cctx.analysisStartNano());

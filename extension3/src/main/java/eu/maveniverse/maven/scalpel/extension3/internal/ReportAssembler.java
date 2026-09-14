@@ -143,11 +143,16 @@ class ReportAssembler {
             Path reactorRoot,
             String triggerFile,
             Set<String> changedFiles,
-            String decisionId)
+            String decisionId,
+            String mergeBaseId,
+            String headId)
             throws MavenExecutionException {
         ScalpelReport report = ScalpelReport.builder()
                 .baseBranch(config.getBaseBranch())
                 .decisionId(decisionId)
+                .mergeBaseId(mergeBaseId)
+                .headId(headId)
+                .configFingerprint(config.decisionFingerprint())
                 .fullBuildTriggered(true)
                 .triggerFile(triggerFile)
                 .changedFiles(changedFiles)

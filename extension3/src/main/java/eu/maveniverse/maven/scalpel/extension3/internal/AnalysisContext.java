@@ -84,10 +84,14 @@ final class AnalysisContext {
             Set<String> changedManagedDepGAs,
             Set<String> changedManagedPluginGAs,
             Set<String> unmatchedPomPaths,
-            String decisionId) {
+            String decisionId,
+            String mergeBaseId,
+            String headId,
+            String configFingerprint) {
         return builder(changedFiles, changedProperties, changedManagedDepGAs, changedManagedPluginGAs)
                 .unmatchedPomPaths(unmatchedPomPaths)
                 .decisionId(decisionId)
+                .decisionInputs(mergeBaseId, headId, configFingerprint)
                 .build();
     }
 
