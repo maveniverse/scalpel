@@ -331,13 +331,16 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(moduleHasReason(json, "module-a", "POM_CHANGE"), "module-a should have POM_CHANGE reason");
         assertTrue(moduleHasField(json, "module-a", "category", "DIRECT"), "module-a should have DIRECT category");
 
-        // module-b should be transitively affected with DOWNSTREAM category
+        // module-b should be transitively affected with TRANSITIVE category: it is itself
+        // affected (via dependency resolution), not merely included as a courtesy
+        // downstream dependent; the report decision is seeded with allAffected, so b is a
+        // seed, matching the category trim mode already gives it
         assertTrue(
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
                 "module-b should have TRANSITIVE_DEPENDENCY reason");
         assertTrue(
-                moduleHasField(json, "module-b", "category", "DOWNSTREAM"),
-                "module-b should have DOWNSTREAM category (downstream of module-a)");
+                moduleHasField(json, "module-b", "category", "TRANSITIVE"),
+                "module-b should have TRANSITIVE category (genuinely affected, matching trim mode)");
 
         // module-c should NOT be in the report (no deps at all)
         assertFalse(modulePresent(json, "module-c"), "module-c should NOT be in report");
@@ -1084,7 +1087,8 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY_TEST"),
                 "module-b should have TRANSITIVE_DEPENDENCY_TEST (test-scoped transitive dep)");
         assertTrue(
-                moduleHasField(json, "module-b", "category", "DOWNSTREAM"), "module-b should have DOWNSTREAM category");
+                moduleHasField(json, "module-b", "category", "TRANSITIVE"),
+                "module-b should have TRANSITIVE category (a resolution seed, like trim mode gives it)");
     }
 
     @Test
@@ -1828,6 +1832,144 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void reportMode_transitiveModuleUpstreamPrerequisiteCountedInBuildSetSize() throws Exception {
+        // The report enrichment trim is seeded with directlyAffected only, but the decision
+        // identity is computed over allAffected. A transitive-only module's reactor
+        // prerequisite must reach buildSetSize and excludedUpstreamCount, which describe the
+        // build set the decisionId was computed over.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-p</module><module>module-x</module></modules>
+                  <properties>
+                    <lib.version>1.0</lib.version>
+                  </properties>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>commons-lang</groupId>
+                      <artifactId>commons-lang</artifactId>
+                      <version>${lib.version}</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        String newParentPom = oldParentPom.replace("<lib.version>1.0</lib.version>", "<lib.version>2.0</lib.version>");
+        writePom(root, "pom.xml", newParentPom);
+
+        // module-p: plain reactor module, no managed dependency, no reactor dependencies
+        String modulePPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-p</artifactId>
+                </project>
+                """;
+        writePom(root, "module-p/pom.xml", modulePPom);
+
+        // module-x: reactor-depends on module-p; the resolver hands it the changed
+        // managed dependency without the pom declaring it, so the parent property change
+        // makes it transitively affected while module-p stays unaffected and becomes x's
+        // upstream build prerequisite in the final decision.
+        String moduleXPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-x</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>module-p</artifactId><version>1.0</version></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root, "module-x/pom.xml", moduleXPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", newParentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleP = createProject("com.example", "module-p", "1.0", root, "module-p/pom.xml", modulePPom);
+        moduleP.setParent(parentProject);
+        MavenProject moduleX = createProject("com.example", "module-x", "1.0", root, "module-x/pom.xml", moduleXPom);
+        moduleX.setParent(parentProject);
+        Dependency moduleXDep = new Dependency();
+        moduleXDep.setGroupId("com.example");
+        moduleXDep.setArtifactId("module-p");
+        moduleXDep.setVersion("1.0");
+        moduleX.getDependencies().add(moduleXDep);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleP, moduleX);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, oldPoms));
+
+        org.eclipse.aether.graph.Dependency commonsLangNew = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "2.0"), "compile");
+        org.eclipse.aether.graph.Dependency commonsLangOld = new org.eclipse.aether.graph.Dependency(
+                new DefaultArtifact("commons-lang", "commons-lang", "jar", "1.0"), "compile");
+        when(dependenciesResolver.resolve(any(DefaultDependencyResolutionRequest.class)))
+                .thenAnswer(invocation -> {
+                    DefaultDependencyResolutionRequest req = invocation.getArgument(0);
+                    MavenProject reqProject = req.getMavenProject();
+                    boolean isOldResolution = allProjects.stream().noneMatch(p -> p == reqProject);
+                    if ("module-x".equals(reqProject.getArtifactId())) {
+                        DependencyResolutionResult res = mock(DependencyResolutionResult.class);
+                        when(res.getDependencyGraph())
+                                .thenReturn(createDependencyGraph(isOldResolution ? commonsLangOld : commonsLangNew));
+                        return res;
+                    }
+                    DependencyResolutionResult empty = mock(DependencyResolutionResult.class);
+                    when(empty.getDependencyGraph()).thenReturn(createDependencyGraph());
+                    return empty;
+                });
+
+        MavenSession session = mock(MavenSession.class);
+        Properties sysProps = new Properties();
+        when(session.getSystemProperties()).thenReturn(sysProps);
+        when(session.getUserProperties()).thenReturn(new Properties());
+        when(session.getProjects()).thenReturn(allProjects);
+        MavenExecutionRequest execRequest = mock(MavenExecutionRequest.class);
+        when(execRequest.getMultiModuleProjectDirectory()).thenReturn(root.toFile());
+        when(session.getRequest()).thenReturn(execRequest);
+        when(session.getRepositorySession()).thenReturn(mock(RepositorySystemSession.class));
+
+        ProjectDependencyGraph graph = mock(ProjectDependencyGraph.class);
+        when(graph.getDownstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(any(), anyBoolean())).thenReturn(List.of());
+        when(graph.getUpstreamProjects(eq(moduleX), anyBoolean())).thenReturn(List.of(moduleP));
+        when(graph.getSortedProjects()).thenReturn(allProjects);
+        when(session.getProjectDependencyGraph()).thenReturn(graph);
+
+        sysProps.setProperty("scalpel.mode", "report");
+        sysProps.setProperty("scalpel.baseBranch", "base");
+
+        participant.afterProjectsRead(session);
+
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "Report file should be created");
+        String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
+        assertTrue(
+                moduleHasReason(json, "module-x", "TRANSITIVE_DEPENDENCY"),
+                "module-x should be transitively affected by the managed dependency change");
+        assertTrue(
+                json.contains("\"excludedUpstreamCount\": 1"),
+                "module-p is an upstream prerequisite of the transitive module in the final decision");
+        assertTrue(
+                json.contains("\"buildSetSize\": 2"),
+                "buildSetSize must describe the build set the decisionId was computed over (module-x plus module-p)");
+    }
+
+    @Test
     void reportMode_excludePathsFiltersChangedFiles() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
@@ -2035,12 +2177,14 @@ class ScalpelLifecycleParticipantTest {
                 moduleHasReason(json, "module-a", "POM_CHANGE"),
                 "module-a should have POM_CHANGE reason (imports BOM with changed managed dep)");
 
-        // module-b should be transitively affected with DOWNSTREAM category
+        // module-b should be transitively affected with TRANSITIVE category (a resolution
+        // seed in the report decision, matching the category trim mode gives it)
         assertTrue(
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
                 "module-b should have TRANSITIVE_DEPENDENCY reason");
         assertTrue(
-                moduleHasField(json, "module-b", "category", "DOWNSTREAM"), "module-b should have DOWNSTREAM category");
+                moduleHasField(json, "module-b", "category", "TRANSITIVE"),
+                "module-b should have TRANSITIVE category (a resolution seed, matching trim mode)");
 
         // module-c should NOT be in the report
         assertFalse(modulePresent(json, "module-c"), "module-c should NOT be in report");
@@ -2408,9 +2552,12 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(
                 moduleHasReason(json, "module-b", "TRANSITIVE_DEPENDENCY"),
                 "module-b should have TRANSITIVE_DEPENDENCY reason");
-        assertTrue(
+        // b is itself affected (a resolution seed in the final decision), not a downstream
+        // dependent added by the trim, so it carries no downstream-exclusion marker; the
+        // skip-tests applier does not skip tests for seeds either
+        assertFalse(
                 moduleHasField(json, "module-b", "testsSkippedReason", "EXCLUDED_DOWNSTREAM"),
-                "module-b should have testsSkippedReason=EXCLUDED_DOWNSTREAM even when transitively affected");
+                "a transitive seed is not a downstream dependent and carries no exclusion marker");
     }
 
     @Test
