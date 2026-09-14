@@ -418,11 +418,11 @@ public final class ScalpelReport {
                     .append(",\n");
         }
         sb.append("  \"excludedUpstreamCount\": ").append(excludedUpstreamCount).append(",\n");
-        if (reactorModuleCount != null) {
-            sb.append("  \"reactorModuleCount\": ").append(reactorModuleCount).append(",\n");
-        }
         if (buildSetSize != null) {
             sb.append("  \"buildSetSize\": ").append(buildSetSize).append(",\n");
+        }
+        if (reactorModuleCount != null) {
+            sb.append("  \"reactorModuleCount\": ").append(reactorModuleCount).append(",\n");
         }
         if (testedModulesCount != null) {
             sb.append("  \"testedModulesCount\": ").append(testedModulesCount).append(",\n");
