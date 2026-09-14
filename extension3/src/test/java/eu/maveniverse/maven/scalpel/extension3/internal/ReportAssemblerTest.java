@@ -63,18 +63,19 @@ class ReportAssemblerTest {
 
     @Test
     void writeStatusReport_statusWriteFails_failSafeFalse_failsTheBuild() throws java.io.IOException {
-        // The reportFile itself points at an existing DIRECTORY: writeToFile cannot
-        // overwrite it, exercising the plain write failure (not containment).
+        // The reportFile is a RELATIVE path pointing at an existing directory inside the
+        // reactor, so resolveContained accepts it and Files.write fails on a directory:
+        // the plain write-failure branch, distinct from the containment branch of the
+        // first test (which used an absolute path, rejected before any write).
         ReportAssembler assembler = new ReportAssembler();
-        java.nio.file.Path dirAsFile = tempDir.resolve("dir-report");
-        java.nio.file.Files.createDirectories(dirAsFile);
+        java.nio.file.Files.createDirectories(tempDir.resolve("dir-report"));
 
         MavenExecutionException e = assertThrows(
                 MavenExecutionException.class,
                 () -> assembler.writeStatusReport(
-                        configWith(false, dirAsFile.toString()), tempDir, "skipped", "no changes detected"));
+                        configWith(false, "dir-report"), tempDir, "skipped", "no changes detected"));
         assertTrue(
-                e.getCause() != null && e.getCause().getMessage().contains("scalpel.reportFile"),
-                "the cause should name the property, got: " + e.getCause());
+                e.getCause() instanceof java.io.IOException,
+                "the cause must be the underlying write IOException, got: " + e.getCause());
     }
 }
