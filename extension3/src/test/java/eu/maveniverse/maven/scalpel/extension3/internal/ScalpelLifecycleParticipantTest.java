@@ -3525,36 +3525,42 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
-    void allFilesExcludedByPathFilters_buildsAll() throws Exception {
+    void allFilesExcludedByPathFilters_withBuildAllTrue_buildsAll() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
-        String parentPom = simpleParentPom("module-a");
+        String parentPom = simpleParentPom("module-a", "module-b");
         writePom(root, "pom.xml", parentPom);
-        String moduleAPom = simpleChildPom("module-a");
-        writePom(root, "module-a/pom.xml", moduleAPom);
+        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
+        writePom(root, "module-b/pom.xml", simpleChildPom("module-b"));
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
         parentProject.getModel().setPackaging("pom");
-        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        MavenProject moduleA =
+                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
         moduleA.setParent(parentProject);
+        MavenProject moduleB =
+                createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", simpleChildPom("module-b"));
+        moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
-        // Only .md files changed
+        // Only docs files changed, all excluded; with buildAllIfNoChanges=true the reactor
+        // must NOT be trimmed (paired with the default-false test that trims to empty).
         Set<String> changedFiles = new LinkedHashSet<>();
-        changedFiles.add("README.md");
-        changedFiles.add("CHANGELOG.md");
+        changedFiles.add("docs/guide.md");
         when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
 
         MavenSession session = createSimpleSession(root, allProjects, "trim");
-        session.getSystemProperties().setProperty("scalpel.excludePaths", "*.md");
+        session.getSystemProperties().setProperty("scalpel.excludePaths", "docs/**");
+        session.getSystemProperties().setProperty("scalpel.buildAllIfNoChanges", "true");
 
         participant.afterProjectsRead(session);
 
-        // All files excluded → builds all modules (no trimming)
+        org.mockito.Mockito.verify(session, org.mockito.Mockito.never())
+                .setProjects(org.mockito.ArgumentMatchers.anyList());
         Path reportFile = root.resolve("target/scalpel-report.json");
         assertFalse(Files.exists(reportFile));
     }

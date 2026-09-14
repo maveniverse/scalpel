@@ -177,8 +177,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // Filter out excluded paths
             changedFiles = pathFilters.filterExcludedPaths(changedFiles);
             if (changedFiles.isEmpty()) {
-                // Nothing relevant changed: the same state as "no changes", so
-                // buildAllIfNoChanges selects between a full build and an EMPTY one (#184).
+                // Everything detected was excluded: buildAllIfNoChanges selects between a
+                // full build and an EMPTY one on this branch only (#184). The no-changes
+                // gate above still builds the full reactor for both values; aligning it
+                // is deliberately out of scope here (follow-up filed).
                 if (passiveRun(config)) {
                     logger.info("Scalpel: All changed files excluded by path filters");
                     reportAssembler.writeStatusReport(
