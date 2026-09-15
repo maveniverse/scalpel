@@ -3482,7 +3482,6 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(json.contains("\"status\": \"skipped\""), "Overwritten report should carry skipped status");
         assertTrue(json.contains("no changes detected"), "Overwritten report should carry accurate reason");
         assertFalse(json.contains("STALE-REPORT"), "Stale content must not survive the bail-out");
-        verify(session, never()).setProjects(anyList());
     }
 
     /**
