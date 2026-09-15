@@ -3774,8 +3774,7 @@ class ScalpelLifecycleParticipantTest {
         participant.afterProjectsRead(session);
 
         // Should return early, building all (no trimming applied)
-        verify(session, never())
-                .setProjects(anyList());
+        verify(session, never()).setProjects(anyList());
         assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
     }
 
@@ -3857,8 +3856,7 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        verify(session, never())
-                .setProjects(anyList());
+        verify(session, never()).setProjects(anyList());
         Path reportFile = root.resolve("target/scalpel-report.json");
         assertFalse(Files.exists(reportFile));
     }
