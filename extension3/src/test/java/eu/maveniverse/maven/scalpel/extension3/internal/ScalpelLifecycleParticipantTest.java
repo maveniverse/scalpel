@@ -17,8 +17,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -3730,8 +3732,8 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        org.mockito.ArgumentCaptor<List<MavenProject>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
-        org.mockito.Mockito.verify(session).setProjects(captor.capture());
+        ArgumentCaptor<List<MavenProject>> captor = ArgumentCaptor.forClass(List.class);
+        verify(session).setProjects(captor.capture());
         assertTrue(
                 captor.getValue().isEmpty(),
                 "with no changes detected and buildAllIfNoChanges=false, the build set must be empty, got: "
@@ -3772,8 +3774,8 @@ class ScalpelLifecycleParticipantTest {
         participant.afterProjectsRead(session);
 
         // Should return early, building all (no trimming applied)
-        org.mockito.Mockito.verify(session, org.mockito.Mockito.never())
-                .setProjects(org.mockito.ArgumentMatchers.anyList());
+        verify(session, never())
+                .setProjects(anyList());
         assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
     }
 
@@ -3811,8 +3813,8 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        org.mockito.ArgumentCaptor<List<MavenProject>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
-        org.mockito.Mockito.verify(session).setProjects(captor.capture());
+        ArgumentCaptor<List<MavenProject>> captor = ArgumentCaptor.forClass(List.class);
+        verify(session).setProjects(captor.capture());
         assertTrue(
                 captor.getValue().isEmpty(),
                 "with only excluded files changed and buildAllIfNoChanges=false, the build set must be empty, got: "
@@ -3855,8 +3857,8 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        org.mockito.Mockito.verify(session, org.mockito.Mockito.never())
-                .setProjects(org.mockito.ArgumentMatchers.anyList());
+        verify(session, never())
+                .setProjects(anyList());
         Path reportFile = root.resolve("target/scalpel-report.json");
         assertFalse(Files.exists(reportFile));
     }
