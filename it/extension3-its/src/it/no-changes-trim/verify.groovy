@@ -9,5 +9,6 @@ File buildLog = new File(basedir, 'build.log')
 assert buildLog.exists()
 String log = buildLog.text
 
-// Scalpel should detect no changes and respect buildAllIfNoChanges=true (full build)
-assert log.contains('No changes detected, building all modules (buildAllIfNoChanges=true)')
+// With buildAllIfNoChanges=false (default) and no changes detected, Scalpel trims
+// the reactor to empty and Maven exits with a non-zero code (#199).
+assert log.contains('No changes detected, trimming reactor to empty (buildAllIfNoChanges=false)')
