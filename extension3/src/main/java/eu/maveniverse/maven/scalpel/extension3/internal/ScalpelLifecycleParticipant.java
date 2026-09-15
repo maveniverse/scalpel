@@ -175,10 +175,12 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             changedFiles = result.getChangedFiles();
             if (changedFiles.isEmpty()) {
-                if (config.isBuildAllIfNoChanges()) {
-                    logger.info("Scalpel: No changes detected, building all modules (buildAllIfNoChanges=true)");
-                }
+                // No changes at all: buildAllIfNoChanges selects between a full build and an
+                // EMPTY one (#199). Passive modes (report/shadow/verify) still observe the full
+                // reactor and write the status report; trim and skip-tests share the
+                // empty-build-set behaviour.
                 if (passiveRun(config)) {
+                    logger.info("Scalpel: No changes detected");
                     reportAssembler.writeStatusReport(
                             config,
                             reactorRoot,
@@ -189,7 +191,14 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             decisionIdFor(result, config, reactorRoot, allProjects),
                             timings,
                             analysisStartNano);
+                    return;
                 }
+                if (config.isBuildAllIfNoChanges()) {
+                    logger.info("Scalpel: No changes detected, building all modules (buildAllIfNoChanges=true)");
+                    return;
+                }
+                logger.info("Scalpel: No changes detected, trimming reactor to empty (buildAllIfNoChanges=false)");
+                session.setProjects(new ArrayList<>());
                 return;
             }
 
@@ -219,9 +228,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             changedFiles = pathFilters.filterExcludedPaths(changedFiles);
             if (changedFiles.isEmpty()) {
                 // Everything detected was excluded: buildAllIfNoChanges selects between a
-                // full build and an EMPTY one on this branch only (#184). The no-changes
-                // gate above still builds the full reactor for both values; aligning it
-                // is deliberately out of scope here (follow-up filed).
+                // full build and an EMPTY one on this branch, mirroring the no-changes gate
+                // above (#184, #199).
                 if (passiveRun(config)) {
                     logger.info("Scalpel: All changed files excluded by path filters");
                     reportAssembler.writeStatusReport(

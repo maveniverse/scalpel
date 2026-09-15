@@ -3700,23 +3700,68 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
-    void noChanges_withBuildAllIfNoChanges() throws Exception {
+    void noChanges_defaultTrimsToEmptyBuildSet() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
-        String parentPom = simpleParentPom("module-a");
+        String parentPom = simpleParentPom("module-a", "module-b");
         writePom(root, "pom.xml", parentPom);
-        String moduleAPom = simpleChildPom("module-a");
-        writePom(root, "module-a/pom.xml", moduleAPom);
+        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
+        writePom(root, "module-b/pom.xml", simpleChildPom("module-b"));
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
         parentProject.getModel().setPackaging("pom");
-        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        MavenProject moduleA =
+                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
         moduleA.setParent(parentProject);
+        MavenProject moduleB =
+                createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", simpleChildPom("module-b"));
+        moduleB.setParent(parentProject);
 
-        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
-        // No changed files
+        // No changed files at all; with the default buildAllIfNoChanges=false the reactor
+        // trims to EMPTY instead of building all (#199)
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(new LinkedHashSet<String>(), new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+
+        participant.afterProjectsRead(session);
+
+        org.mockito.ArgumentCaptor<List<MavenProject>> captor = org.mockito.ArgumentCaptor.forClass(List.class);
+        org.mockito.Mockito.verify(session).setProjects(captor.capture());
+        assertTrue(
+                captor.getValue().isEmpty(),
+                "with no changes detected and buildAllIfNoChanges=false, the build set must be empty, got: "
+                        + captor.getValue());
+        assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
+    }
+
+    @Test
+    void noChanges_withBuildAllIfNoChanges_true_buildsAll() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
+        writePom(root, "module-b/pom.xml", simpleChildPom("module-b"));
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA =
+                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
+        moduleA.setParent(parentProject);
+        MavenProject moduleB =
+                createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", simpleChildPom("module-b"));
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // No changed files; with buildAllIfNoChanges=true the reactor must NOT be trimmed
+        // (paired with the default-false test that trims to empty).
         when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(new LinkedHashSet<String>(), new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
@@ -3727,8 +3772,9 @@ class ScalpelLifecycleParticipantTest {
         participant.afterProjectsRead(session);
 
         // Should return early, building all (no trimming applied)
-        Path reportFile = root.resolve("target/scalpel-report.json");
-        assertFalse(Files.exists(reportFile));
+        org.mockito.Mockito.verify(session, org.mockito.Mockito.never())
+                .setProjects(org.mockito.ArgumentMatchers.anyList());
+        assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
     }
 
     @Test
