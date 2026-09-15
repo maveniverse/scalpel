@@ -242,6 +242,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                             decisionIdFor(result, config, reactorRoot, allProjects),
                             timings,
                             analysisStartNano);
+                    return;
                 }
                 if (config.isBuildAllIfNoChanges()) {
                     logger.info("Scalpel: All changed files excluded by path filters, building all modules"
