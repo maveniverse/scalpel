@@ -3477,6 +3477,7 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
+        verify(session, never()).setProjects(anyList()); // passive mode must not trim the reactor
         assertTrue(Files.exists(reportFile), "Report file should still exist (overwritten, not deleted)");
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         assertTrue(json.contains("\"status\": \"skipped\""), "Overwritten report should carry skipped status");
@@ -3520,6 +3521,7 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
+        verify(session, never()).setProjects(anyList()); // passive mode must not trim the reactor
         assertTrue(Files.exists(reportFile), "Report file should still exist (overwritten, not deleted)");
         String json = new String(Files.readAllBytes(reportFile), StandardCharsets.UTF_8);
         assertTrue(json.contains("\"status\": \"skipped\""), "Overwritten report should carry skipped status");
