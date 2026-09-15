@@ -19,6 +19,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -3480,6 +3481,7 @@ class ScalpelLifecycleParticipantTest {
         assertTrue(json.contains("\"status\": \"skipped\""), "Overwritten report should carry skipped status");
         assertTrue(json.contains("no changes detected"), "Overwritten report should carry accurate reason");
         assertFalse(json.contains("STALE-REPORT"), "Stale content must not survive the bail-out");
+        verify(session, never()).setProjects(any());
     }
 
     /**
