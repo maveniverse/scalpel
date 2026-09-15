@@ -52,6 +52,11 @@
       "minimum": 0,
       "description": "Optional. Modules in the final build set (affected plus upstream prerequisites). With affectedModules and skippedModules the reactor partition reads directly."
     },
+    "reactorModuleCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional. Total number of modules in the Maven reactor. Together with buildSetSize lets consumers compute 'built N of M' directly from the report."
+    },
     "testedModulesCount": {
       "type": "integer",
       "minimum": 0,

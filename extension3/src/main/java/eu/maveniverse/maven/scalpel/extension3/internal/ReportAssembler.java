@@ -78,9 +78,10 @@ class ReportAssembler {
         builder.excludedUpstreamCount(excludedUpstream);
         addSkippedModules(builder, allProjects, ctx, reactorRoot);
         // The reactor partitions as affectedModules + excludedUpstreamCount + skippedModules:
-        // emitting the build-set size and tested count makes the split readable directly
-        // instead of inferred (#187). Among affected modules, only the downstream
+        // emitting the reactor size and build-set size lets consumers compute "built N of M"
+        // directly from the report (#193). Among affected modules, only the downstream
         // exclusion (skipTestsForDownstreamModules) suppresses tests.
+        builder.reactorModuleCount(allProjects.size());
         builder.buildSetSize(emitted.size() + excludedUpstream);
         int testSuppressed = 0;
         for (MavenProject project : emitted) {

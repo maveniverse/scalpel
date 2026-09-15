@@ -1965,6 +1965,9 @@ class ScalpelLifecycleParticipantTest {
                 json.contains("\"excludedUpstreamCount\": 1"),
                 "module-p is an upstream prerequisite of the transitive module in the final decision");
         assertTrue(
+                json.contains("\"reactorModuleCount\": 3"),
+                "reactorModuleCount must equal allProjects.size() (parent + module-p + module-x)");
+        assertTrue(
                 json.contains("\"buildSetSize\": 2"),
                 "buildSetSize must describe the build set the decisionId was computed over (module-x plus module-p)");
     }

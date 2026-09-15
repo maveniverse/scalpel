@@ -237,6 +237,7 @@ class ScalpelReportSchemaTest {
                 .configFingerprint("fp=1;")
                 .buildSetSize(3)
                 .testedModulesCount(3)
+                .reactorModuleCount(10)
                 .status("skipped")
                 .reason("drift guard fixture")
                 .fullBuildTriggered(false)

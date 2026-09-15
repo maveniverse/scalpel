@@ -891,13 +891,34 @@ class ScalpelReportTest {
                 .baseBranch("origin/main")
                 .fullBuildTriggered(false)
                 .excludedUpstreamCount(38)
+                .reactorModuleCount(57)
                 .buildSetSize(48)
                 .testedModulesCount(48)
                 .build();
         Map<String, Object> parsed = parsed(report);
         assertEquals(38, ((Number) parsed.get("excludedUpstreamCount")).intValue());
+        assertEquals(57, ((Number) parsed.get("reactorModuleCount")).intValue());
         assertEquals(48, ((Number) parsed.get("buildSetSize")).intValue());
         assertEquals(48, ((Number) parsed.get("testedModulesCount")).intValue());
+    }
+
+    @Test
+    void toJson_reactorModuleCountOmittedWhenNull() {
+        // reactorModuleCount is optional; must not appear in the JSON when not set.
+        ScalpelReport report = ScalpelReport.builder()
+                .baseBranch("origin/main")
+                .fullBuildTriggered(false)
+                .build();
+        Map<String, Object> parsed = parsed(report);
+        assertFalse(parsed.containsKey("reactorModuleCount"), "reactorModuleCount must be absent when not set");
+    }
+
+    @Test
+    void toJson_reactorModuleCountNegativeRejected() {
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> ScalpelReport.builder().reactorModuleCount(-1),
+                "negative reactorModuleCount must be rejected");
     }
 
     @SuppressWarnings("unchecked")
