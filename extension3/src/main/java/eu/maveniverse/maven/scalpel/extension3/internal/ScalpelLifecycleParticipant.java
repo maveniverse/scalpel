@@ -198,7 +198,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                     return;
                 }
                 logger.info("Scalpel: No changes detected, trimming reactor to empty (buildAllIfNoChanges=false)");
-                session.setProjects(new ArrayList<>());
+                trimReactorToEmpty(session, allProjects);
                 return;
             }
 
@@ -251,7 +251,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                 }
                 logger.info("Scalpel: All changed files excluded by path filters, trimming reactor to empty"
                         + " (buildAllIfNoChanges=false)");
-                session.setProjects(new ArrayList<>());
+                trimReactorToEmpty(session, allProjects);
                 return;
             }
 
@@ -868,6 +868,33 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
     static boolean isSafeImpactedLogPath(String path) {
         return ImpactedLogWriter.isSafeImpactedLogPath(path);
+    }
+
+    /**
+     * Trims the reactor to an empty project list and preserves a non-null current project.
+     *
+     * <p>When {@link MavenSession#setProjects(java.util.List)} is called with an empty list,
+     * Maven resets its internal {@code currentProject} ThreadLocal to an empty one, making
+     * {@link MavenSession#getCurrentProject()} return {@code null}. Extensions that run in
+     * {@code afterProjectsRead} after Scalpel (e.g. {@code kr.motd.maven:os-maven-plugin})
+     * may call {@code getCurrentProject()} and NPE on a null result (#204).
+     *
+     * <p>To prevent this, we call {@link MavenSession#setCurrentProject(MavenProject)} with
+     * the execution-root project after clearing the list, so downstream extensions still see
+     * a valid (though non-buildable) current project.
+     */
+    private static void trimReactorToEmpty(MavenSession session, List<MavenProject> allProjects) {
+        session.setProjects(new ArrayList<>());
+        // Restore a non-null currentProject so extensions calling getCurrentProject() after us
+        // (e.g. os-maven-plugin) do not NPE. Pick the execution root; fall back to the first
+        // project in the pre-trim list when no explicit root is marked.
+        MavenProject executionRoot = allProjects.stream()
+                .filter(MavenProject::isExecutionRoot)
+                .findFirst()
+                .orElseGet(() -> allProjects.isEmpty() ? null : allProjects.get(0));
+        if (executionRoot != null) {
+            session.setCurrentProject(executionRoot);
+        }
     }
 
     /** True when the run leaves the reactor untouched and writes report artifacts. */

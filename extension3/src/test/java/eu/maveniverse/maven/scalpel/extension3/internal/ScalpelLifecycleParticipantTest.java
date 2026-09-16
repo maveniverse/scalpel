@@ -3716,6 +3716,7 @@ class ScalpelLifecycleParticipantTest {
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
         parentProject.getModel().setPackaging("pom");
+        parentProject.setExecutionRoot(true);
         MavenProject moduleA =
                 createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
         moduleA.setParent(parentProject);
@@ -3741,6 +3742,45 @@ class ScalpelLifecycleParticipantTest {
                 captor.getValue().isEmpty(),
                 "with no changes detected and buildAllIfNoChanges=false, the build set must be empty, got: "
                         + captor.getValue());
+        // setCurrentProject must be called with the execution root so downstream extensions
+        // (e.g. os-maven-plugin) do not NPE on getCurrentProject() returning null (#204)
+        verify(session).setCurrentProject(parentProject);
+        assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
+    }
+
+    @Test
+    void noChanges_defaultTrimsToEmptyBuildSet_fallsBackToFirstProjectWhenNoExecutionRoot() throws Exception {
+        // Verifies that when no project has isExecutionRoot()==true, trimReactorToEmpty
+        // falls back to the first project in allProjects to set as currentProject (#204).
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        writePom(root, "module-a/pom.xml", simpleChildPom("module-a"));
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        // Deliberately do NOT call setExecutionRoot(true) — exercises the fallback path
+        MavenProject moduleA =
+                createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
+        moduleA.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA);
+
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(new LinkedHashSet<String>(), new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+
+        participant.afterProjectsRead(session);
+
+        ArgumentCaptor<List<MavenProject>> captor = ArgumentCaptor.forClass(List.class);
+        verify(session).setProjects(captor.capture());
+        assertTrue(captor.getValue().isEmpty(), "build set must be empty");
+        // With no execution root marked, the first project (parentProject) is used as fallback
+        verify(session).setCurrentProject(parentProject);
         assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
     }
 
@@ -3793,6 +3833,7 @@ class ScalpelLifecycleParticipantTest {
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
         parentProject.getModel().setPackaging("pom");
+        parentProject.setExecutionRoot(true);
         MavenProject moduleA =
                 createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
         moduleA.setParent(parentProject);
@@ -3821,6 +3862,9 @@ class ScalpelLifecycleParticipantTest {
                 captor.getValue().isEmpty(),
                 "with only excluded files changed and buildAllIfNoChanges=false, the build set must be empty, got: "
                         + captor.getValue());
+        // setCurrentProject must be called with the execution root so downstream extensions
+        // (e.g. os-maven-plugin) do not NPE on getCurrentProject() returning null (#204)
+        verify(session).setCurrentProject(parentProject);
         assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
     }
 
