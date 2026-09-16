@@ -3716,6 +3716,7 @@ class ScalpelLifecycleParticipantTest {
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
         parentProject.getModel().setPackaging("pom");
+        parentProject.setExecutionRoot(true);
         MavenProject moduleA =
                 createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
         moduleA.setParent(parentProject);
@@ -3741,6 +3742,9 @@ class ScalpelLifecycleParticipantTest {
                 captor.getValue().isEmpty(),
                 "with no changes detected and buildAllIfNoChanges=false, the build set must be empty, got: "
                         + captor.getValue());
+        // setCurrentProject must be called with the execution root so downstream extensions
+        // (e.g. os-maven-plugin) do not NPE on getCurrentProject() returning null (#204)
+        verify(session).setCurrentProject(parentProject);
         assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
     }
 
@@ -3793,6 +3797,7 @@ class ScalpelLifecycleParticipantTest {
 
         MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
         parentProject.getModel().setPackaging("pom");
+        parentProject.setExecutionRoot(true);
         MavenProject moduleA =
                 createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", simpleChildPom("module-a"));
         moduleA.setParent(parentProject);
@@ -3821,6 +3826,9 @@ class ScalpelLifecycleParticipantTest {
                 captor.getValue().isEmpty(),
                 "with only excluded files changed and buildAllIfNoChanges=false, the build set must be empty, got: "
                         + captor.getValue());
+        // setCurrentProject must be called with the execution root so downstream extensions
+        // (e.g. os-maven-plugin) do not NPE on getCurrentProject() returning null (#204)
+        verify(session).setCurrentProject(parentProject);
         assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
     }
 
