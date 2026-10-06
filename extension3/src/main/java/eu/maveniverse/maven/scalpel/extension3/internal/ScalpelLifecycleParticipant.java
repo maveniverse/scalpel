@@ -276,12 +276,30 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             ChangedFileClassifier.ClassificationResult classification =
                     changedFileClassifier.classifyChanges(changedFiles);
 
+            // Derive the directory prefixes of deleted modules: POM paths that appear in
+            // changedFiles but do not match any reactor project at HEAD. Files under these
+            // directories belong to the deleted module and must not be attributed to any
+            // surviving ancestor (#216).
+            Set<String> deletedModuleDirs = new LinkedHashSet<>();
+            for (String pomPath : classification.pomChanges) {
+                if (!allPomPaths.contains(pomPath)) {
+                    // Strip "/pom.xml" (or "pom.xml" for the root, which is never deleted)
+                    int lastSlash = pomPath.lastIndexOf('/');
+                    if (lastSlash > 0) {
+                        deletedModuleDirs.add(pomPath.substring(0, lastSlash));
+                    }
+                }
+            }
+            if (!deletedModuleDirs.isEmpty()) {
+                logger.debug("Scalpel: Deleted module directories (source files ignored): {}", deletedModuleDirs);
+            }
+
             // Map source changes to modules
             ModuleMapper.Result sourceResult;
             timings.start(Timings.PHASE_MODULE_MAPPING);
             try {
                 sourceResult = moduleMapper.mapToProjectsClassified(
-                        classification.sourceChanges, allProjects, reactorRoot, config.isExplain());
+                        classification.sourceChanges, allProjects, reactorRoot, config.isExplain(), deletedModuleDirs);
             } finally {
                 timings.stop(Timings.PHASE_MODULE_MAPPING);
             }

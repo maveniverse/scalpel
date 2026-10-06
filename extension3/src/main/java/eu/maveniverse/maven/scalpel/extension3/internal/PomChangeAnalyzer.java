@@ -2040,7 +2040,6 @@ class PomChangeAnalyzer {
             Path reactorRoot,
             ModelResolutionContext resolutionCtx,
             Set<String> neededRelPaths) {
-        List<String> allActiveProfileIds = collectAllActiveProfileIds(allProjects);
         Path absRoot = reactorRoot.toAbsolutePath().normalize();
 
         // Build a GAV→file map pointing to the actual (current) POM files.

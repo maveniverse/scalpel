@@ -60,11 +60,28 @@ class ModuleMapper {
     }
 
     public Result mapToProjectsClassified(Set<String> changedFiles, List<MavenProject> projects, Path reactorRoot) {
-        return mapToProjectsClassified(changedFiles, projects, reactorRoot, true);
+        return mapToProjectsClassified(changedFiles, projects, reactorRoot, true, Set.of());
     }
 
     public Result mapToProjectsClassified(
             Set<String> changedFiles, List<MavenProject> projects, Path reactorRoot, boolean explain) {
+        return mapToProjectsClassified(changedFiles, projects, reactorRoot, explain, Set.of());
+    }
+
+    /**
+     * Maps changed files to their owning modules.
+     *
+     * @param deletedModuleDirs directory prefixes (e.g. {@code "libs/lib-gone"}) of modules that
+     *                          existed at the base revision but were deleted in the current branch.
+     *                          Files under these prefixes are treated as belonging to a deleted module
+     *                          and are excluded from attribution to any surviving ancestor (#216).
+     */
+    public Result mapToProjectsClassified(
+            Set<String> changedFiles,
+            List<MavenProject> projects,
+            Path reactorRoot,
+            boolean explain,
+            Set<String> deletedModuleDirs) {
         // Track for each project whether it has any main (non-test) source changes
         Map<MavenProject, Boolean> hasMainChange = new LinkedHashMap<>();
         // Track which changed file triggered each project (explain-mode evidence)
@@ -89,7 +106,7 @@ class ModuleMapper {
         }
 
         for (String changedFile : changedFiles) {
-            MavenProject matched = findOwningModule(changedFile, moduleByDir, rootProject, rootDir);
+            MavenProject matched = findOwningModule(changedFile, moduleByDir, rootProject, rootDir, deletedModuleDirs);
             if (matched != null) {
                 String projectPath = matched == rootProject ? "" : pathByProject.get(matched);
                 boolean isTest = isTestPath(changedFile, projectPath);
@@ -129,10 +146,18 @@ class ModuleMapper {
      * deepest to root, doing hash lookups. The first match is the most specific (deepest-nested)
      * module, preserving the same semantics as the previous length-descending sort approach.
      *
+     * @param deletedModuleDirs directory prefixes of modules that were deleted in the current branch.
+     *                          When a directory on the walk matches one of these prefixes, the file
+     *                          belongs to the deleted module and must not be attributed to any
+     *                          surviving ancestor (#216).
      * @return the owning project, or {@code null} if no module owns this file
      */
     private static MavenProject findOwningModule(
-            String changedFile, Map<String, MavenProject> moduleByDir, MavenProject rootProject, Path rootDir) {
+            String changedFile,
+            Map<String, MavenProject> moduleByDir,
+            MavenProject rootProject,
+            Path rootDir,
+            Set<String> deletedModuleDirs) {
         // Walk parent directories from deepest to shallowest
         int slash = changedFile.lastIndexOf('/');
         if (slash <= 0) {
@@ -152,6 +177,14 @@ class ModuleMapper {
             // does not contain and must contribute nothing, rather than falling through
             // to the root project and marking the whole reactor affected (#185).
             if (Files.isRegularFile(rootDir.resolve(dir).resolve("pom.xml"))) {
+                return null;
+            }
+            // For deleted modules, the pom.xml no longer exists on disk, so the above
+            // guard cannot fire. Instead, check whether the directory prefix was a module
+            // at the base revision (its pom.xml appears in the deleted-module set). If so,
+            // the file belongs to the deleted module and must not be attributed to any
+            // surviving ancestor (#216).
+            if (deletedModuleDirs.contains(dir)) {
                 return null;
             }
             slash = dir.lastIndexOf('/');
