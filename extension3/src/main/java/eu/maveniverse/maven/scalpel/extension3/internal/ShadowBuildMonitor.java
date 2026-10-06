@@ -44,6 +44,10 @@ import org.slf4j.LoggerFactory;
  *       skipped, from a single full build with no control group</li>
  *   <li>{@code wouldHaveSkippedButFailed}: modules Scalpel would have skipped that failed
  *       in the full build, the false-negative counter</li>
+ *   <li>{@code upstreamOnlyTestFailures}: upstream build prerequisites (inside the build
+ *       set, never in the skipped set) that failed in the full build, the counter a consumer
+ *       accumulates across shadow runs to decide whether {@code skipTestsForUpstream} is
+ *       safe (#222); such failures are invisible to {@code wouldHaveSkippedButFailed}</li>
  * </ul>
  *
  * Every event is forwarded to the wrapped listener unchanged (a {@code null} delegate is
@@ -68,6 +72,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     private final Path reactorRoot;
     private final List<String> wouldHaveBuilt;
     private final Set<String> wouldHaveSkipped;
+    private final Set<String> upstreamOnly;
     private final String scalpelVersion;
     private final String baseBranch;
     private final List<String> changedFiles;
@@ -95,6 +100,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         this.reactorRoot = reactorRoot;
         this.wouldHaveBuilt = new ArrayList<>(decision.getWouldHaveBuilt());
         this.wouldHaveSkipped = new LinkedHashSet<>(decision.getWouldHaveSkipped());
+        this.upstreamOnly = new LinkedHashSet<>(decision.getUpstreamOnly());
         this.scalpelVersion = scalpelVersion;
         this.baseBranch = baseBranch;
         this.changedFiles = changedFiles == null ? List.of() : new ArrayList<>(changedFiles);
@@ -170,6 +176,21 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         return result;
     }
 
+    /**
+     * Upstream build prerequisites that failed in the full build (#222). They sit inside the
+     * build set, so {@link #getWouldHaveSkippedButFailed()} cannot surface them, yet they are
+     * exactly the modules whose tests {@code skipTestsForUpstream} would skip.
+     */
+    public Set<String> getUpstreamOnlyTestFailures() {
+        Set<String> result = new LinkedHashSet<>();
+        for (String module : upstreamOnly) {
+            if (failedModules.contains(module)) {
+                result.add(module);
+            }
+        }
+        return result;
+    }
+
     /** Summed duration of the would-have-skipped modules, in seconds. */
     public double getEstimatedSecondsSaved() {
         long nanos = 0;
@@ -188,7 +209,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         delegate.sessionEnded(event);
         Set<String> falseNegatives = getWouldHaveSkippedButFailed();
         try {
-            writeOutputs(falseNegatives);
+            writeOutputs(falseNegatives, getUpstreamOnlyTestFailures());
         } catch (IOException e) {
             // Shadow measurement must never fail the build it is observing.
             logger.warn("Scalpel: Failed to write shadow outputs: {}", e.getMessage());
@@ -235,24 +256,27 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     }
 
     void writeOutputs() throws IOException {
-        writeOutputs(getWouldHaveSkippedButFailed());
+        writeOutputs(getWouldHaveSkippedButFailed(), getUpstreamOnlyTestFailures());
     }
 
-    void writeOutputs(Set<String> wouldHaveSkippedButFailed) throws IOException {
+    void writeOutputs(Set<String> wouldHaveSkippedButFailed, Set<String> upstreamOnlyTestFailures) throws IOException {
         String estimatedSecondsSaved = String.format(Locale.ROOT, "%.3f", getEstimatedSecondsSaved());
         Files.createDirectories(reactorRoot.resolve(SHADOW_FILE).getParent());
         Files.write(
                 reactorRoot.resolve(SHADOW_FILE),
-                shadowJson(wouldHaveSkippedButFailed, estimatedSecondsSaved).getBytes(StandardCharsets.UTF_8));
+                shadowJson(wouldHaveSkippedButFailed, upstreamOnlyTestFailures, estimatedSecondsSaved)
+                        .getBytes(StandardCharsets.UTF_8));
         Files.write(
                 reactorRoot.resolve(HISTORY_FILE),
-                (historyLine(wouldHaveSkippedButFailed, estimatedSecondsSaved) + System.lineSeparator())
+                (historyLine(wouldHaveSkippedButFailed, upstreamOnlyTestFailures, estimatedSecondsSaved)
+                                + System.lineSeparator())
                         .getBytes(StandardCharsets.UTF_8),
                 StandardOpenOption.CREATE,
                 StandardOpenOption.APPEND);
     }
 
-    private String shadowJson(Set<String> wouldHaveSkippedButFailed, String estimatedSecondsSaved) {
+    private String shadowJson(
+            Set<String> wouldHaveSkippedButFailed, Set<String> upstreamOnlyTestFailures, String estimatedSecondsSaved) {
         List<String> fields = new ArrayList<>();
         fields.add(field("version", "1"));
         fields.add(field("mode", "shadow"));
@@ -268,6 +292,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         fields.add("\"moduleMillis\": " + moduleMillisJson());
         fields.add("\"estimatedSecondsSaved\": " + estimatedSecondsSaved);
         fields.add(arrayField("wouldHaveSkippedButFailed", new ArrayList<>(wouldHaveSkippedButFailed)));
+        fields.add(arrayField("upstreamOnlyTestFailures", new ArrayList<>(upstreamOnlyTestFailures)));
         return "{\n  " + String.join(",\n  ", fields) + "\n}\n";
     }
 
@@ -305,7 +330,8 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         return "{\n    " + String.join(",\n    ", entries) + "\n  }";
     }
 
-    private String historyLine(Set<String> wouldHaveSkippedButFailed, String estimatedSecondsSaved) {
+    private String historyLine(
+            Set<String> wouldHaveSkippedButFailed, Set<String> upstreamOnlyTestFailures, String estimatedSecondsSaved) {
         return "{"
                 + "\"timestamp\": " + jsonString(Instant.now().toString())
                 + ", \"baseBranch\": " + jsonString(baseBranch)
@@ -316,6 +342,8 @@ public final class ShadowBuildMonitor implements ExecutionListener {
                 + ", \"wouldHaveSkipped\": " + jsonStringArray(new ArrayList<>(wouldHaveSkipped))
                 + ", \"wouldHaveSkippedButFailed\": "
                 + jsonStringArray(new ArrayList<>(wouldHaveSkippedButFailed))
+                + ", \"upstreamOnlyTestFailures\": "
+                + jsonStringArray(new ArrayList<>(upstreamOnlyTestFailures))
                 + "}";
     }
 

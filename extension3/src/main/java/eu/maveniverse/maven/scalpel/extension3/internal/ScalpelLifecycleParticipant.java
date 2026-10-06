@@ -548,6 +548,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         project -> moduleKeyOf(reactorRoot, project);
                 Set<String> wouldHaveBuilt = null;
                 Set<String> wouldHaveSkipped = null;
+                Set<String> upstreamOnlyKeys = null;
                 String decisionId;
                 if (config.isModeShadow() || verify) {
                     wouldHaveBuilt = new LinkedHashSet<>();
@@ -564,6 +565,17 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         String path = moduleKey.apply(project);
                         if (!wouldHaveBuilt.contains(path)) {
                             wouldHaveSkipped.add(path);
+                        }
+                    }
+                    // Upstream prerequisites (#222), keyed like the decision above and kept
+                    // inside wouldHaveBuilt: include filters can drop an upstream module from
+                    // the build set, and that module is then would-have-skipped, where its
+                    // failures are already counted by wouldHaveSkippedButFailed.
+                    upstreamOnlyKeys = new LinkedHashSet<>();
+                    for (MavenProject project : finalDecision.getUpstreamOnly()) {
+                        String path = moduleKey.apply(project);
+                        if (wouldHaveBuilt.contains(path)) {
+                            upstreamOnlyKeys.add(path);
                         }
                     }
                     decisionId = ScalpelReport.computeDecisionId(
@@ -628,8 +640,9 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         skipReasons.put(skipped, ScalpelReport.SKIP_REASON_NOT_AFFECTED);
                     }
                     ShadowDecision decision = verify
-                            ? ShadowDecision.verifying(wouldHaveBuilt, wouldHaveSkipped, skipReasons, decisionId)
-                            : ShadowDecision.measuring(wouldHaveBuilt, wouldHaveSkipped, decisionId);
+                            ? ShadowDecision.verifying(
+                                    wouldHaveBuilt, wouldHaveSkipped, skipReasons, upstreamOnlyKeys, decisionId)
+                            : ShadowDecision.measuring(wouldHaveBuilt, wouldHaveSkipped, upstreamOnlyKeys, decisionId);
                     session.getRequest()
                             .setExecutionListener(new ShadowBuildMonitor(
                                     session.getRequest().getExecutionListener(),
@@ -952,7 +965,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             skipReasons.put(path, ScalpelReport.SKIP_REASON_NOT_AFFECTED);
         }
         String decisionId = decisionIdFor(result, config, reactorRoot, List.<MavenProject>of());
-        ShadowDecision decision = ShadowDecision.verifying(wouldHaveBuilt, wouldHaveSkipped, skipReasons, decisionId);
+        ShadowDecision decision =
+                ShadowDecision.verifying(wouldHaveBuilt, wouldHaveSkipped, skipReasons, Set.of(), decisionId);
         session.getRequest()
                 .setExecutionListener(new ShadowBuildMonitor(
                         session.getRequest().getExecutionListener(),

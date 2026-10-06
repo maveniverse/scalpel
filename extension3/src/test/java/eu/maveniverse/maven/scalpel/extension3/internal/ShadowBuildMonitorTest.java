@@ -110,7 +110,8 @@ class ShadowBuildMonitorTest {
                 Arrays.asList("module-b/src/Foo.java"),
                 clock,
                 MavenProject::getArtifactId,
-                ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a", "module-c"), null));
+                ShadowDecision.measuring(
+                        Arrays.asList("module-b"), Arrays.asList("module-a", "module-c"), List.of(), null));
 
         MavenProject a = project(reactorRoot, "module-a");
         MavenProject b = project(reactorRoot, "module-b");
@@ -172,7 +173,8 @@ class ShadowBuildMonitorTest {
                         "wouldHaveSkipped",
                         "moduleMillis",
                         "estimatedSecondsSaved",
-                        "wouldHaveSkippedButFailed"),
+                        "wouldHaveSkippedButFailed",
+                        "upstreamOnlyTestFailures"),
                 emitted);
 
         Path history = reactorRoot.resolve("target/scalpel-shadow-history.jsonl");
@@ -239,7 +241,7 @@ class ShadowBuildMonitorTest {
                     Arrays.asList("module-b/src/Foo.java"),
                     clock,
                     MavenProject::getArtifactId,
-                    ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), null));
+                    ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), List.of(), null));
             MavenProject b = project(reactorRoot, "module-b");
             monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, b));
             monitor.projectSucceeded(event(ExecutionEvent.Type.ProjectSucceeded, b));
@@ -263,7 +265,7 @@ class ShadowBuildMonitorTest {
                 null,
                 new SteppingClock(),
                 MavenProject::getArtifactId,
-                ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), null));
+                ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), List.of(), null));
 
         monitor.sessionEnded(event(ExecutionEvent.Type.SessionEnded, null));
 
@@ -297,6 +299,7 @@ class ShadowBuildMonitorTest {
                         Arrays.asList("module-b"),
                         Arrays.asList("module-a"),
                         java.util.Map.of("module-a", "NOT_AFFECTED"),
+                        List.of(),
                         "decision-id-1"));
 
         MavenProject a = project(reactorRoot, "module-a");
@@ -336,6 +339,7 @@ class ShadowBuildMonitorTest {
                         Arrays.asList("module-b"),
                         Arrays.asList("module-a"),
                         java.util.Map.of("module-a", "NOT_AFFECTED"),
+                        List.of(),
                         "decision-id-2"));
 
         MavenProject b = project(reactorRoot, "module-b");
