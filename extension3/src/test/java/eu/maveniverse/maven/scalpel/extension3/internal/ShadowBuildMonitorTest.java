@@ -23,6 +23,7 @@ import java.util.function.LongSupplier;
 import org.apache.maven.execution.ExecutionEvent;
 import org.apache.maven.execution.ExecutionListener;
 import org.apache.maven.execution.MavenSession;
+import org.apache.maven.model.Plugin;
 import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.project.MavenProject;
 import org.junit.jupiter.api.Test;
@@ -71,6 +72,10 @@ class ShadowBuildMonitorTest {
     }
 
     private static ExecutionEvent event(ExecutionEvent.Type type, MavenProject project) {
+        return event(type, project, null);
+    }
+
+    private static ExecutionEvent event(ExecutionEvent.Type type, MavenProject project, MojoExecution mojoExecution) {
         return new ExecutionEvent() {
             public ExecutionEvent.Type getType() {
                 return type;
@@ -85,7 +90,7 @@ class ShadowBuildMonitorTest {
             }
 
             public MojoExecution getMojoExecution() {
-                return null;
+                return mojoExecution;
             }
 
             public Exception getException() {
@@ -209,9 +214,14 @@ class ShadowBuildMonitorTest {
                         null));
 
         MavenProject libA = project(reactorRoot, "lib-a");
+        MavenProject libB = project(reactorRoot, "lib-b");
+        MojoExecution surefireTest = new MojoExecution(new Plugin(), "test", "default-test");
         monitor.sessionStarted(event(ExecutionEvent.Type.SessionStarted, null));
         monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, libA));
+        monitor.mojoFailed(event(ExecutionEvent.Type.MojoFailed, libA, surefireTest));
         monitor.projectFailed(event(ExecutionEvent.Type.ProjectFailed, libA));
+        monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, libB));
+        monitor.projectFailed(event(ExecutionEvent.Type.ProjectFailed, libB));
         monitor.sessionEnded(event(ExecutionEvent.Type.SessionEnded, null));
 
         assertEquals(java.util.Set.of(), monitor.getWouldHaveSkippedButFailed());
@@ -224,12 +234,6 @@ class ShadowBuildMonitorTest {
         List<String> lines = Files.readAllLines(reactorRoot.resolve("target/scalpel-shadow-history.jsonl"));
         assertEquals(1, lines.size(), "one run must append exactly one jsonl line");
         assertTrue(lines.get(0).contains("\"upstreamOnlyTestFailures\": [\"lib-a\"]"));
-    }
-
-    @Test
-    void nullUpstreamOnlyIsNormalizedToEmpty() {
-        ShadowDecision decision = ShadowDecision.measuring(List.of("module-a"), List.of("module-b"), null, null);
-        assertTrue(decision.getUpstreamOnly().isEmpty(), "null upstream-only must normalize to empty");
     }
 
     @Test

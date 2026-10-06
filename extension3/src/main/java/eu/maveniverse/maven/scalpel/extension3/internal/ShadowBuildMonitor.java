@@ -45,9 +45,10 @@ import org.slf4j.LoggerFactory;
  *   <li>{@code wouldHaveSkippedButFailed}: modules Scalpel would have skipped that failed
  *       in the full build, the false-negative counter</li>
  *   <li>{@code upstreamOnlyTestFailures}: upstream build prerequisites (inside the build
- *       set, never in the skipped set) that failed in the full build, the counter a consumer
- *       accumulates across shadow runs to decide whether {@code skipTestsForUpstream} is
- *       safe (#222); such failures are invisible to {@code wouldHaveSkippedButFailed}</li>
+ *       set, never in the skipped set) whose test execution failed in the full build, the
+ *       counter a consumer accumulates across shadow runs to decide whether
+ *       {@code skipTestsForUpstream} is safe (#222); such failures are invisible to
+ *       {@code wouldHaveSkippedButFailed}</li>
  * </ul>
  *
  * Every event is forwarded to the wrapped listener unchanged (a {@code null} delegate is
@@ -86,6 +87,8 @@ public final class ShadowBuildMonitor implements ExecutionListener {
 
     private final ConcurrentMap<String, Long> durationNanos = new ConcurrentHashMap<>();
     private final Set<String> failedModules = ConcurrentHashMap.newKeySet();
+
+    private final Set<String> testFailedModules = ConcurrentHashMap.newKeySet();
 
     public ShadowBuildMonitor(
             ExecutionListener delegate,
@@ -139,6 +142,25 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         }
     }
 
+    @Override
+    public void mojoFailed(ExecutionEvent event) {
+        delegate.mojoFailed(event);
+        // upstreamOnlyTestFailures promises test failures: skipTestsForUpstream only skips
+        // tests, so a compile or resolution failure in an upstream module would surface in
+        // the trimmed build too and must not count as hidden test risk (#222).
+        if (event.getProject() != null && isTestExecution(event.getMojoExecution())) {
+            testFailedModules.add(moduleKey.apply(event.getProject()));
+        }
+    }
+
+    private static boolean isTestExecution(org.apache.maven.plugin.MojoExecution execution) {
+        if (execution == null) {
+            return false;
+        }
+        String goal = execution.getGoal();
+        return "test".equals(goal) || "integration-test".equals(goal);
+    }
+
     private String stopModule(MavenProject project) {
         if (project == null) {
             return null;
@@ -177,14 +199,15 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     }
 
     /**
-     * Upstream build prerequisites that failed in the full build (#222). They sit inside the
-     * build set, so {@link #getWouldHaveSkippedButFailed()} cannot surface them, yet they are
-     * exactly the modules whose tests {@code skipTestsForUpstream} would skip.
+     * Upstream build prerequisites whose test execution failed in the full build (#222).
+     * They sit inside the build set, so {@link #getWouldHaveSkippedButFailed()} cannot
+     * surface them, yet they are exactly the modules whose tests {@code skipTestsForUpstream}
+     * would skip.
      */
     public Set<String> getUpstreamOnlyTestFailures() {
         Set<String> result = new LinkedHashSet<>();
         for (String module : upstreamOnly) {
-            if (failedModules.contains(module)) {
+            if (testFailedModules.contains(module)) {
                 result.add(module);
             }
         }
@@ -428,11 +451,6 @@ public final class ShadowBuildMonitor implements ExecutionListener {
     @Override
     public void mojoSucceeded(ExecutionEvent event) {
         delegate.mojoSucceeded(event);
-    }
-
-    @Override
-    public void mojoFailed(ExecutionEvent event) {
-        delegate.mojoFailed(event);
     }
 
     @Override

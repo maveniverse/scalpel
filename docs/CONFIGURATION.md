@@ -94,7 +94,7 @@ Shadow behaves exactly like `report` (full build, reactor untouched, all tests r
 mvn verify -Dscalpel.mode=shadow -Dscalpel.baseBranch=origin/main
 ```
 
-Run it on a few representative pull requests, then read `estimatedSecondsSaved` and `wouldHaveSkippedButFailed`: the first tells you whether your topology benefits from trimming, the second whether Scalpel's analysis is safe for it. A shadow run never modifies the reactor and never skips a test.
+Run it on a few representative pull requests, then read `estimatedSecondsSaved`, `wouldHaveSkippedButFailed`, and `upstreamOnlyTestFailures`: the first tells you whether your topology benefits from trimming, the second whether Scalpel's analysis is safe for it, the third whether skipping upstream tests (`skipTestsForUpstream`) would have hidden a failure. A shadow run never modifies the reactor and never skips a test.
 
 ### `target/scalpel-shadow.json`
 

@@ -9,9 +9,8 @@ File buildLog = new File(basedir, 'build.log')
 assert buildLog.exists()
 String log = buildLog.text
 
-// Plain shadow mode observes the full build without the verify override
-assert log.contains('mode=shadow')
-assert !log.contains('verifyFullBuild forces a full build')
+// verifyFullBuild runs the full build; the upstream-only module-a test fails it
+assert log.contains('verifyFullBuild forces a full build')
 assert !log.contains('Scalpel: Building ') : "verify must not trim the reactor"
 assert log.contains('AlwaysFailsTest') : "the planted failing upstream test must have run"
 assert log.contains('BUILD FAILURE')

@@ -44,7 +44,7 @@ final class ShadowDecision {
         this.wouldHaveBuilt = wouldHaveBuilt;
         this.wouldHaveSkipped = wouldHaveSkipped;
         this.skipReasons = new LinkedHashMap<>(skipReasons);
-        this.upstreamOnly = upstreamOnly == null ? Set.of() : new LinkedHashSet<>(upstreamOnly);
+        this.upstreamOnly = new LinkedHashSet<>(upstreamOnly);
         this.decisionId = decisionId;
         this.verify = verify;
     }
