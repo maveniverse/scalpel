@@ -4264,6 +4264,296 @@ class PomChangeAnalyzerTest {
     }
 
     /**
+     * Regression test for issue #221.
+     * <p>
+     * A child POM declares a property derived from {@code ${maven.build.timestamp}}.
+     * When only an unrelated property in the parent changes, the child should NOT
+     * be reported as affected: the timestamp resolves to the model-building time,
+     * which differs between the old and new effective model builds whenever the
+     * configured format is finer than the interval between the two builds.
+     */
+    @Test
+    void analyzeChanges_timeAnchoredPropertyDoesNotCauseChildToBeAffected() throws Exception {
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <properties>
+                      <foo.version>2.0</foo.version>
+                      <maven.build.timestamp.format>yyyy-MM-dd HH:mm:ss.SSS</maven.build.timestamp.format>
+                  </properties>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        // module-a: property derived from ${maven.build.timestamp}, should NOT be flagged
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <properties>
+                      <stamp>${maven.build.timestamp}</stamp>
+                  </properties>
+                </project>
+                """;
+
+        // module-b: literal property, should NOT be flagged either (control)
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <properties>
+                      <stamp>literal</stamp>
+                  </properties>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPom);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPomXml, moduleBPomXml);
+
+        // Old parent had foo.version=1.0, so the only change is this unrelated property
+        String oldParentPom = newParentPom.replace("<foo.version>2.0</foo.version>", "<foo.version>1.0</foo.version>");
+        Map<String, byte[]> changedPoms = Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(Set.of("pom.xml"), changedPoms, projects, root);
+
+        assertFalse(
+                result.getAffectedProjects().contains(projects.get(1)),
+                "module-a uses ${maven.build.timestamp}, must NOT be marked affected by a time-anchored false positive");
+        assertFalse(
+                result.getAffectedProjects().contains(projects.get(2)),
+                "module-b uses a literal value, must NOT be marked affected");
+    }
+
+    /**
+     * The apicurio shape of #221: the timestamp property is declared in the parent and
+     * reaches the child only through a filtered resource, so the child-level property
+     * loop never sees it. The parent-level effective comparison feeds
+     * {@code changedProperties} and the filtered-resource scan; both must stay clean
+     * when only an unrelated parent property changes.
+     */
+    @Test
+    void analyzeChanges_parentDeclaredTimestampDoesNotAffectResourceFilteringChild() throws Exception {
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <properties>
+                      <foo.version>2.0</foo.version>
+                      <maven.build.timestamp.format>yyyy-MM-dd HH:mm:ss.SSS</maven.build.timestamp.format>
+                      <timestamp>${maven.build.timestamp}</timestamp>
+                  </properties>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPom);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPomXml, moduleBPomXml);
+
+        // module-b filters a resource that references the parent-declared timestamp
+        Path resourceDir = root.resolve("module-b/src/main/resources");
+        Files.createDirectories(resourceDir);
+        Files.writeString(resourceDir.resolve("application.properties"), "app.date=${timestamp}");
+        MavenProject moduleB = projects.get(2);
+        Resource resource = new Resource();
+        resource.setDirectory(resourceDir.toString());
+        resource.setFiltering(true);
+        Build build = new Build();
+        build.addResource(resource);
+        moduleB.getModel().setBuild(build);
+
+        String oldParentPom = newParentPom.replace("<foo.version>2.0</foo.version>", "<foo.version>1.0</foo.version>");
+        Map<String, byte[]> changedPoms = Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(Set.of("pom.xml"), changedPoms, projects, root);
+
+        assertFalse(
+                result.getChangedProperties().contains("timestamp"),
+                "the clock-resolved timestamp must not appear in changedProperties");
+        assertFalse(
+                result.getAffectedProjects().contains(moduleB),
+                "module-b filters ${timestamp}, must NOT be marked affected by a time-anchored false positive");
+    }
+
+    /**
+     * One level of indirection must not reintroduce #221: the child references a
+     * parent-declared property that itself derives from {@code ${maven.build.timestamp}}.
+     */
+    @Test
+    void analyzeChanges_indirectTimestampReferenceDoesNotAffectChild() throws Exception {
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <properties>
+                      <foo.version>2.0</foo.version>
+                      <maven.build.timestamp.format>yyyy-MM-dd HH:mm:ss.SSS</maven.build.timestamp.format>
+                      <ts>${maven.build.timestamp}</ts>
+                  </properties>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        // module-a references the parent property, so its raw value names a user property
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <properties>
+                      <stamp>${ts}</stamp>
+                  </properties>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <properties>
+                      <stamp>literal</stamp>
+                  </properties>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPom);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPomXml, moduleBPomXml);
+
+        String oldParentPom = newParentPom.replace("<foo.version>2.0</foo.version>", "<foo.version>1.0</foo.version>");
+        Map<String, byte[]> changedPoms = Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(Set.of("pom.xml"), changedPoms, projects, root);
+
+        assertFalse(
+                result.getAffectedProjects().contains(projects.get(1)),
+                "module-a references ${ts} whose value is clock-derived, must NOT be marked affected");
+        assertFalse(
+                result.getAffectedProjects().contains(projects.get(2)),
+                "module-b uses a literal value, must NOT be marked affected");
+    }
+
+    /**
+     * A real change of {@code maven.build.timestamp.format} still compares as changed
+     * under the pinned build start time (#221): the same instant formats differently,
+     * so modules consuming the timestamp are rebuilt. This pins the detection the pin
+     * must not swallow.
+     */
+    @Test
+    void analyzeChanges_timestampFormatChangeStillAffectsChild() throws Exception {
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <properties>
+                      <maven.build.timestamp.format>yyyy-MM-dd HH:mm:ss.SSS</maven.build.timestamp.format>
+                  </properties>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <properties>
+                      <stamp>${maven.build.timestamp}</stamp>
+                  </properties>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <properties>
+                      <stamp>literal</stamp>
+                  </properties>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPom);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPomXml, moduleBPomXml);
+
+        // Old parent used a coarser format: the stamp's effective value genuinely changes
+        String oldParentPom = newParentPom.replace("yyyy-MM-dd HH:mm:ss.SSS", "yyyy");
+        Map<String, byte[]> changedPoms = Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(Set.of("pom.xml"), changedPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(1)),
+                "module-a consumes the timestamp, a format change must rebuild it");
+        assertFalse(
+                result.getAffectedProjects().contains(projects.get(2)),
+                "module-b does not consume the timestamp, must NOT be marked affected");
+    }
+
+    /**
      * ModelResolver that resolves parents and BOM imports from the test reactor.
      * Maps GAV coordinates to POM files written by test helpers.
      */
