@@ -703,16 +703,20 @@ class PomChangeAnalyzer {
 
         // Use effective models for property and managed dep/plugin diffs.
         // Effective models have properties interpolated and profiles merged.
-        Model newEffectiveModel = ctx.newEffectiveModels.getOrDefault(
-                ctx.normalizedRoot
-                        .relativize(parentProject
-                                .getFile()
-                                .toPath()
-                                .toAbsolutePath()
-                                .normalize())
-                        .toString()
-                        .replace('\\', '/'),
-                parentProject.getModel());
+        // No session-model fallback: the session model was interpolated with the real
+        // build clock, so diffing it against the pinned old model reports every
+        // time-derived property as changed (#221); when the pinned build is unavailable,
+        // treat the parent conservatively as affected, mirroring the old-side path.
+        Model newEffectiveModel = ctx.newEffectiveModels.get(ctx.normalizedRoot
+                .relativize(parentProject.getFile().toPath().toAbsolutePath().normalize())
+                .toString()
+                .replace('\\', '/'));
+        boolean newEffectiveModelMissing = newEffectiveModel == null;
+        if (newEffectiveModelMissing) {
+            newEffectiveModel = new Model();
+            logger.debug("New effective model unavailable for {}, marking conservatively affected", key(parentProject));
+            parentSelfAffected = true;
+        }
         Set<String> changedProperties =
                 diffProperties(oldEffectiveModel.getProperties(), newEffectiveModel.getProperties());
 
@@ -1702,17 +1706,6 @@ class PomChangeAnalyzer {
      * old vs new effective values.  Properties whose raw value references <em>only</em> these
      * expressions are skipped during effective-value comparison.
      */
-    /**
-     * Fixed build start time for every effective-model build (#221). Old and new models
-     * are built in separate requests that each resolve {@code ${maven.build.timestamp}}
-     * from the request's own clock, so any property derived from it compared as changed
-     * whenever the configured format was finer than the interval between the requests,
-     * for child-declared, parent-declared, and indirect references alike. Pinning one
-     * instant makes the two sides identical for time-derived expressions, while a real
-     * change of {@code maven.build.timestamp.format} itself still compares as changed.
-     */
-    private static final Date EFFECTIVE_MODEL_BUILD_TIME = new Date(0L);
-
     static final Set<String> PATH_ANCHORED_PROPERTIES = Set.of(
             "project.basedir",
             "basedir",
@@ -2140,7 +2133,15 @@ class PomChangeAnalyzer {
             DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
             request.setPomFile(pomFile.toFile());
             request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
-            request.setBuildStartTime(EFFECTIVE_MODEL_BUILD_TIME);
+            // Pin one build start time on every request this analyzer builds: the old and
+            // new models resolve ${maven.build.timestamp} from the request's own clock, so
+            // any property derived from it compares as changed whenever the configured
+            // format is finer than the interval between the two requests, for child-
+            // declared, parent-declared, and indirect references alike (#221). A real
+            // change of maven.build.timestamp.format itself still compares as changed.
+            // Fresh instance per request: java.util.Date is mutable and shared state here
+            // would be corruption-prone.
+            request.setBuildStartTime(Date.from(java.time.Instant.EPOCH));
 
             ProjectModelResolver repoResolver = new ProjectModelResolver(
                     resolutionCtx.repoSession(),
