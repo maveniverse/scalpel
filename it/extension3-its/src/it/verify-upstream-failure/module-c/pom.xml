@@ -3,8 +3,8 @@
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
-        <groupId>eu.maveniverse.maven.scalpel.it.shadowupstreamfailure</groupId>
-        <artifactId>shadow-upstream-failure</artifactId>
+        <groupId>eu.maveniverse.maven.scalpel.it.verifyupstreamfailure</groupId>
+        <artifactId>verify-upstream-failure</artifactId>
         <version>0.1.0-SNAPSHOT</version>
     </parent>
 
@@ -16,7 +16,7 @@
          module-b and module-a, which are upstream-only modules (#222). -->
     <dependencies>
         <dependency>
-            <groupId>eu.maveniverse.maven.scalpel.it.shadowupstreamfailure</groupId>
+            <groupId>eu.maveniverse.maven.scalpel.it.verifyupstreamfailure</groupId>
             <artifactId>module-b</artifactId>
             <version>${project.version}</version>
         </dependency>

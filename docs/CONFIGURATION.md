@@ -112,7 +112,8 @@ Run it on a few representative pull requests, then read `estimatedSecondsSaved`,
 | `moduleMillis` | object | Measured wall-clock per module path, in millis, for the full build that ran |
 | `estimatedSecondsSaved` | number | Summed duration of the would-have-skipped modules, in seconds |
 | `wouldHaveSkippedButFailed` | string[] | Modules it would have skipped that failed: the false-negative counter |
-| `upstreamOnlyTestFailures` | string[] | Upstream-only modules (inside the build set, never skipped) whose tests failed; accumulating this empty across runs is the evidence that `skipTestsForUpstream` is safe for your topology |
+| `upstreamOnly` | string[] | Upstream-only module paths, the denominator of the safety counter |
+| `upstreamOnlyTestFailures` | string[] | Upstream-only modules whose test execution failed; empty with a non-empty `upstreamOnly` across runs is the evidence that `skipTestsForUpstream` is safe for your topology |
 
 When a shadow run bails out before any measurement (no base branch, not a git repository, disable triggers, a full-build trigger, or a fail-safe error), the document is overwritten with a minimal status document (`status` and `reason`) so a previous run's measurement can never be mistaken for current results, mirroring the JSON report's semantics. The history file is appended only by measured runs, so a gap there means "not measured", never "measured zero".
 

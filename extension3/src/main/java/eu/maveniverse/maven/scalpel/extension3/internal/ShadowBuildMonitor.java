@@ -29,6 +29,7 @@ import java.util.function.Function;
 import java.util.function.LongSupplier;
 import org.apache.maven.execution.ExecutionEvent;
 import org.apache.maven.execution.ExecutionListener;
+import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.project.MavenProject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -147,18 +148,23 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         delegate.mojoFailed(event);
         // upstreamOnlyTestFailures promises test failures: skipTestsForUpstream only skips
         // tests, so a compile or resolution failure in an upstream module would surface in
-        // the trimmed build too and must not count as hidden test risk (#222).
+        // the trimmed build too and must not count as hidden test risk (#222). Plugin
+        // coordinates, not goal names: failsafe reports its verdict from the verify goal,
+        // not from integration-test.
         if (event.getProject() != null && isTestExecution(event.getMojoExecution())) {
             testFailedModules.add(moduleKey.apply(event.getProject()));
         }
     }
 
-    private static boolean isTestExecution(org.apache.maven.plugin.MojoExecution execution) {
-        if (execution == null) {
+    private static boolean isTestExecution(MojoExecution execution) {
+        if (execution == null || execution.getPlugin() == null) {
             return false;
         }
-        String goal = execution.getGoal();
-        return "test".equals(goal) || "integration-test".equals(goal);
+        if (!"org.apache.maven.plugins".equals(execution.getPlugin().getGroupId())) {
+            return false;
+        }
+        String artifactId = execution.getPlugin().getArtifactId();
+        return "maven-surefire-plugin".equals(artifactId) || "maven-failsafe-plugin".equals(artifactId);
     }
 
     private String stopModule(MavenProject project) {
@@ -311,6 +317,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         fields.add("\"moduleMillis\": " + moduleMillisJson());
         fields.add("\"estimatedSecondsSaved\": " + estimatedSecondsSaved);
         fields.add(arrayField("wouldHaveSkippedButFailed", new ArrayList<>(wouldHaveSkippedButFailed)));
+        fields.add(arrayField("upstreamOnly", new ArrayList<>(upstreamOnly)));
         fields.add(arrayField("upstreamOnlyTestFailures", new ArrayList<>(upstreamOnlyTestFailures)));
         return "{\n  " + String.join(",\n  ", fields) + "\n}\n";
     }
@@ -361,6 +368,7 @@ public final class ShadowBuildMonitor implements ExecutionListener {
                 + ", \"wouldHaveSkipped\": " + jsonStringArray(new ArrayList<>(wouldHaveSkipped))
                 + ", \"wouldHaveSkippedButFailed\": "
                 + jsonStringArray(new ArrayList<>(wouldHaveSkippedButFailed))
+                + ", \"upstreamOnlyCount\": " + upstreamOnly.size()
                 + ", \"upstreamOnlyTestFailures\": "
                 + jsonStringArray(new ArrayList<>(upstreamOnlyTestFailures))
                 + "}";

@@ -179,6 +179,7 @@ class ShadowBuildMonitorTest {
                         "moduleMillis",
                         "estimatedSecondsSaved",
                         "wouldHaveSkippedButFailed",
+                        "upstreamOnly",
                         "upstreamOnlyTestFailures"),
                 emitted);
 
@@ -215,12 +216,22 @@ class ShadowBuildMonitorTest {
 
         MavenProject libA = project(reactorRoot, "lib-a");
         MavenProject libB = project(reactorRoot, "lib-b");
-        MojoExecution surefireTest = new MojoExecution(new Plugin(), "test", "default-test");
+        Plugin surefire = new Plugin();
+        surefire.setGroupId("org.apache.maven.plugins");
+        surefire.setArtifactId("maven-surefire-plugin");
+        Plugin compiler = new Plugin();
+        compiler.setGroupId("org.apache.maven.plugins");
+        compiler.setArtifactId("maven-compiler-plugin");
         monitor.sessionStarted(event(ExecutionEvent.Type.SessionStarted, null));
+        // lib-a: surefire test failure, counted
         monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, libA));
-        monitor.mojoFailed(event(ExecutionEvent.Type.MojoFailed, libA, surefireTest));
+        monitor.mojoFailed(
+                event(ExecutionEvent.Type.MojoFailed, libA, new MojoExecution(surefire, "test", "default-test")));
         monitor.projectFailed(event(ExecutionEvent.Type.ProjectFailed, libA));
+        // lib-b: compiler failure only, NOT counted (would surface without tests too)
         monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, libB));
+        monitor.mojoFailed(
+                event(ExecutionEvent.Type.MojoFailed, libB, new MojoExecution(compiler, "compile", "default-compile")));
         monitor.projectFailed(event(ExecutionEvent.Type.ProjectFailed, libB));
         monitor.sessionEnded(event(ExecutionEvent.Type.SessionEnded, null));
 
