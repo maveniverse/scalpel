@@ -227,6 +227,12 @@ class ShadowBuildMonitorTest {
     }
 
     @Test
+    void nullUpstreamOnlyIsNormalizedToEmpty() {
+        ShadowDecision decision = ShadowDecision.measuring(List.of("module-a"), List.of("module-b"), null, null);
+        assertTrue(decision.getUpstreamOnly().isEmpty(), "null upstream-only must normalize to empty");
+    }
+
+    @Test
     void appendsOneHistoryLinePerRun(@TempDir Path tmp) throws IOException {
         SteppingClock clock = new SteppingClock();
         Path reactorRoot = tmp.resolve("reactor");
@@ -273,6 +279,7 @@ class ShadowBuildMonitorTest {
         assertEquals(0.0, monitor.getEstimatedSecondsSaved(), 1e-9);
         assertTrue(monitor.getFailedModules().isEmpty());
         assertTrue(monitor.getWouldHaveSkippedButFailed().isEmpty());
+        assertEquals(Set.of(), monitor.getUpstreamOnlyTestFailures(), "empty case stays empty");
 
         Path shadowJson = reactorRoot.resolve("target/scalpel-shadow.json");
         assertTrue(Files.exists(shadowJson), "shadow json is still written with nothing measured");

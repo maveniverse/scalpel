@@ -255,10 +255,6 @@ public final class ShadowBuildMonitor implements ExecutionListener {
         return skipReasons.getOrDefault(module, ScalpelReport.SKIP_REASON_NOT_AFFECTED);
     }
 
-    void writeOutputs() throws IOException {
-        writeOutputs(getWouldHaveSkippedButFailed(), getUpstreamOnlyTestFailures());
-    }
-
     void writeOutputs(Set<String> wouldHaveSkippedButFailed, Set<String> upstreamOnlyTestFailures) throws IOException {
         String estimatedSecondsSaved = String.format(Locale.ROOT, "%.3f", getEstimatedSecondsSaved());
         Files.createDirectories(reactorRoot.resolve(SHADOW_FILE).getParent());

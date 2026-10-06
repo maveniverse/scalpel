@@ -568,9 +568,10 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         }
                     }
                     // Upstream prerequisites (#222), keyed like the decision above and kept
-                    // inside wouldHaveBuilt: include filters can drop an upstream module from
-                    // the build set, and that module is then would-have-skipped, where its
-                    // failures are already counted by wouldHaveSkippedButFailed.
+                    // inside wouldHaveBuilt: filterBuildSet currently exempts upstream modules
+                    // from include filters, so this intersection pins that invariant; were an
+                    // upstream module ever to fall out of the build set, it would be
+                    // would-have-skipped and its failures counted by wouldHaveSkippedButFailed.
                     upstreamOnlyKeys = new LinkedHashSet<>();
                     for (MavenProject project : finalDecision.getUpstreamOnly()) {
                         String path = moduleKey.apply(project);
