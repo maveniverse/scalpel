@@ -34,7 +34,7 @@ The tradeoff: Scalpel has fewer knobs. If Scalpel's analysis is wrong, your esca
 
 **Java 17 compatibility.** Scalpel requires Java 17+. GIB requires Java 11+.
 
-**Shadow mode.** `mode=shadow` measures what Scalpel would save on your reactor from a single full build — zero extra runner-hours, no control group. It records per-module wall-clock, computes the trim decision it would have made, and emits `estimatedSecondsSaved` and `wouldHaveSkippedButFailed` to `target/scalpel-shadow.json`. GIB has no equivalent.
+**Shadow mode.** `mode=shadow` measures what Scalpel would save on your reactor from a single full build; zero extra runner-hours, no control group. It records per-module wall-clock, computes the trim decision it would have made, and emits `estimatedSecondsSaved`, `wouldHaveSkippedButFailed`, and `upstreamOnlyTestFailures` to `target/scalpel-shadow.json`. GIB has no equivalent.
 
 **Explain mode.** `-Dscalpel.explain=true` adds per-module decision evidence to the report: each `affectedModules` entry gets an `evidence` array naming the exact file, property, dependency, or graph relationship that put it in the build set. Diagnose surprising results without guessing.
 
