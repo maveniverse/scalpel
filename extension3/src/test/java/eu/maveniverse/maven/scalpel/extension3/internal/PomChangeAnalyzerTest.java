@@ -4485,6 +4485,75 @@ class PomChangeAnalyzerTest {
     }
 
     /**
+     * A real change of {@code maven.build.timestamp.format} still compares as changed
+     * under the pinned build start time (#221): the same instant formats differently,
+     * so modules consuming the timestamp are rebuilt. This pins the detection the pin
+     * must not swallow.
+     */
+    @Test
+    void analyzeChanges_timestampFormatChangeStillAffectsChild() throws Exception {
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <properties>
+                      <maven.build.timestamp.format>yyyy-MM-dd HH:mm:ss.SSS</maven.build.timestamp.format>
+                  </properties>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <properties>
+                      <stamp>${maven.build.timestamp}</stamp>
+                  </properties>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <properties>
+                      <stamp>literal</stamp>
+                  </properties>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPom);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPomXml, moduleBPomXml);
+
+        // Old parent used a coarser format: the stamp's effective value genuinely changes
+        String oldParentPom = newParentPom.replace("yyyy-MM-dd HH:mm:ss.SSS", "yyyy");
+        Map<String, byte[]> changedPoms = Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(Set.of("pom.xml"), changedPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(1)),
+                "module-a consumes the timestamp, a format change must rebuild it");
+        assertFalse(
+                result.getAffectedProjects().contains(projects.get(2)),
+                "module-b does not consume the timestamp, must NOT be marked affected");
+    }
+
+    /**
      * ModelResolver that resolves parents and BOM imports from the test reactor.
      * Maps GAV coordinates to POM files written by test helpers.
      */

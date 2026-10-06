@@ -24,6 +24,7 @@ import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -1701,6 +1702,17 @@ class PomChangeAnalyzer {
      * old vs new effective values.  Properties whose raw value references <em>only</em> these
      * expressions are skipped during effective-value comparison.
      */
+    /**
+     * Fixed build start time for every effective-model build (#221). Old and new models
+     * are built in separate requests that each resolve {@code ${maven.build.timestamp}}
+     * from the request's own clock, so any property derived from it compared as changed
+     * whenever the configured format was finer than the interval between the requests,
+     * for child-declared, parent-declared, and indirect references alike. Pinning one
+     * instant makes the two sides identical for time-derived expressions, while a real
+     * change of {@code maven.build.timestamp.format} itself still compares as changed.
+     */
+    private static final Date EFFECTIVE_MODEL_BUILD_TIME = new Date(0L);
+
     static final Set<String> PATH_ANCHORED_PROPERTIES = Set.of(
             "project.basedir",
             "basedir",
@@ -2128,6 +2140,7 @@ class PomChangeAnalyzer {
             DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
             request.setPomFile(pomFile.toFile());
             request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
+            request.setBuildStartTime(EFFECTIVE_MODEL_BUILD_TIME);
 
             ProjectModelResolver repoResolver = new ProjectModelResolver(
                     resolutionCtx.repoSession(),
