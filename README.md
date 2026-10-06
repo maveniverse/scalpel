@@ -84,7 +84,7 @@ Note that report mode is not a sandbox: `mvn validate` on untrusted PR content s
 
 ### `shadow`
 
-Behaves exactly like `report` and additionally measures the full build: it records the trim decision it would have made, per-module durations, `estimatedSecondsSaved`, and `wouldHaveSkippedButFailed` (the false-negative counter) to `target/scalpel-shadow.json`, appending one line per run to `target/scalpel-shadow-history.jsonl`. This is the recommended first step of the adoption path: one full build tells you what Scalpel would save on your topology.
+Behaves exactly like `report` and additionally measures the full build: it records the trim decision it would have made, per-module durations, `estimatedSecondsSaved`, `wouldHaveSkippedButFailed` (the false-negative counter), and `upstreamOnlyTestFailures` (the `skipTestsForUpstream` safety counter) to `target/scalpel-shadow.json`, appending one line per run to `target/scalpel-shadow-history.jsonl`. This is the recommended first step of the adoption path: one full build tells you what Scalpel would save on your topology.
 
 ```bash
 mvn verify -Dscalpel.mode=shadow -Dscalpel.baseBranch=origin/main
