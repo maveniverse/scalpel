@@ -183,6 +183,48 @@ class ShadowBuildMonitorTest {
     }
 
     @Test
+    void upstreamOnlyTestFailuresSurfaceInShadowArtifacts(@TempDir Path tmp) throws IOException {
+        Path reactorRoot = tmp.resolve("reactor");
+        Files.createDirectories(reactorRoot);
+
+        // lib-a and lib-b are upstream build prerequisites of the changed app-c: they sit
+        // inside wouldHaveBuilt and never in wouldHaveSkipped. lib-a fails during the
+        // observed full build (#222): the failure must surface in upstreamOnlyTestFailures
+        // because wouldHaveSkippedButFailed cannot see modules inside the build set, and a
+        // consumer needs this join to measure whether skipTestsForUpstream is safe.
+        ShadowBuildMonitor monitor = new ShadowBuildMonitor(
+                null,
+                reactorRoot,
+                "0.4.3",
+                "base",
+                Arrays.asList("app-c/src/App.java"),
+                () -> 0L,
+                MavenProject::getArtifactId,
+                ShadowDecision.measuring(
+                        Arrays.asList(".", "lib-a", "lib-b", "app-c"),
+                        Arrays.asList(),
+                        Arrays.asList("lib-a", "lib-b"),
+                        null));
+
+        MavenProject libA = project(reactorRoot, "lib-a");
+        monitor.sessionStarted(event(ExecutionEvent.Type.SessionStarted, null));
+        monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, libA));
+        monitor.projectFailed(event(ExecutionEvent.Type.ProjectFailed, libA));
+        monitor.sessionEnded(event(ExecutionEvent.Type.SessionEnded, null));
+
+        assertEquals(java.util.Set.of(), monitor.getWouldHaveSkippedButFailed());
+        assertEquals(java.util.Set.of("lib-a"), monitor.getUpstreamOnlyTestFailures());
+
+        String json = Files.readString(reactorRoot.resolve("target/scalpel-shadow.json"));
+        assertTrue(json.contains("\"upstreamOnlyTestFailures\": ["));
+        assertTrue(json.contains("lib-a"));
+
+        List<String> lines = Files.readAllLines(reactorRoot.resolve("target/scalpel-shadow-history.jsonl"));
+        assertEquals(1, lines.size(), "one run must append exactly one jsonl line");
+        assertTrue(lines.get(0).contains("\"upstreamOnlyTestFailures\": [\"lib-a\"]"));
+    }
+
+    @Test
     void appendsOneHistoryLinePerRun(@TempDir Path tmp) throws IOException {
         SteppingClock clock = new SteppingClock();
         Path reactorRoot = tmp.resolve("reactor");
