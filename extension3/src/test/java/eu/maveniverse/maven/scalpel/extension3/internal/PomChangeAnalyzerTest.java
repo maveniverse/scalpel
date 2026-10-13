@@ -4554,6 +4554,78 @@ class PomChangeAnalyzerTest {
     }
 
     /**
+     * When the new-side effective model cannot be built (here: the current parent POM
+     * on disk is corrupted after the session models exist), the analyzer must mirror
+     * the unavailable-old-model path: the parent and all its dependents are marked
+     * affected, and no property diff runs. Diffing against an empty model would report
+     * every old property as removed and mark children through the filtered-resource
+     * scan on no evidence, while a genuinely new property would go unreported.
+     */
+    @Test
+    void analyzeChanges_unbuildableNewParentModelMarksAllDependentsAffected() throws Exception {
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <properties>
+                      <foo.version>2.0</foo.version>
+                  </properties>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), parentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+
+        // Corrupt the current parent POM on disk after the session models exist: the
+        // new-side effective build fails while the old side (built from the old bytes
+        // below) succeeds
+        Files.writeString(root.resolve("pom.xml"), "<project><broken");
+
+        String oldParentPom = parentPomXml.replace("<foo.version>2.0</foo.version>", "<foo.version>1.0</foo.version>");
+        Map<String, byte[]> changedPoms = Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(Set.of("pom.xml"), changedPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(1)),
+                "module-a is a dependent of the changed parent, must be conservatively affected");
+        assertTrue(
+                result.getAffectedProjects().contains(projects.get(2)),
+                "module-b is a dependent of the changed parent, must be conservatively affected");
+        assertFalse(
+                result.getChangedProperties().contains("foo.version"),
+                "no property diff may run against an empty model");
+    }
+
+    /**
      * ModelResolver that resolves parents and BOM imports from the test reactor.
      * Maps GAV coordinates to POM files written by test helpers.
      */

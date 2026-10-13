@@ -626,6 +626,26 @@ class PomChangeAnalyzer {
             return;
         }
 
+        // Same conservative posture when the new-side model is unavailable: diffing
+        // against an empty model would report every old property as removed and mark
+        // children through the filtered-resource scan on no evidence, while a genuinely
+        // new property would go unreported (#221 review).
+        if (!ctx.newEffectiveModels.containsKey(changedPomPath)) {
+            if (logger.isWarnEnabled()) {
+                logger.warn(
+                        "Cannot build effective model for new {}, marking all dependents as affected", key(project));
+            }
+            ctx.affected.add(project);
+            ctx.affected.addAll(dependents);
+            if (ctx.explain) {
+                addEvidence(ctx.evidence, project, "unbuildable new pom " + changedPomPath);
+                for (MavenProject dependent : dependents) {
+                    addEvidence(ctx.evidence, dependent, "unbuildable new pom " + changedPomPath);
+                }
+            }
+            return;
+        }
+
         try {
             analyzeParentPomChange(project, oldPomBytes, oldEffectiveModel, dependents, ctx);
         } catch (Exception e) {
@@ -706,17 +726,11 @@ class PomChangeAnalyzer {
         // Effective models have properties interpolated and profiles merged.
         // No session-model fallback: the session model was interpolated with the real
         // build clock, so diffing it against the pinned old model reports every
-        // time-derived property as changed (#221); when the pinned build is unavailable,
-        // treat the parent conservatively as affected, mirroring the old-side path.
+        // time-derived property as changed (#221).
         Model newEffectiveModel = ctx.newEffectiveModels.get(ctx.normalizedRoot
                 .relativize(parentProject.getFile().toPath().toAbsolutePath().normalize())
                 .toString()
                 .replace('\\', '/'));
-        if (newEffectiveModel == null) {
-            newEffectiveModel = new Model();
-            logger.debug("New effective model unavailable for {}, marking conservatively affected", key(parentProject));
-            parentSelfAffected = true;
-        }
         Set<String> changedProperties =
                 diffProperties(oldEffectiveModel.getProperties(), newEffectiveModel.getProperties());
 
