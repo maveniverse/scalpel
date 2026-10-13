@@ -23,6 +23,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.EnumSet;
@@ -711,8 +712,7 @@ class PomChangeAnalyzer {
                 .relativize(parentProject.getFile().toPath().toAbsolutePath().normalize())
                 .toString()
                 .replace('\\', '/'));
-        boolean newEffectiveModelMissing = newEffectiveModel == null;
-        if (newEffectiveModelMissing) {
+        if (newEffectiveModel == null) {
             newEffectiveModel = new Model();
             logger.debug("New effective model unavailable for {}, marking conservatively affected", key(parentProject));
             parentSelfAffected = true;
@@ -2141,7 +2141,7 @@ class PomChangeAnalyzer {
             // change of maven.build.timestamp.format itself still compares as changed.
             // Fresh instance per request: java.util.Date is mutable and shared state here
             // would be corruption-prone.
-            request.setBuildStartTime(Date.from(java.time.Instant.EPOCH));
+            request.setBuildStartTime(Date.from(Instant.EPOCH));
 
             ProjectModelResolver repoResolver = new ProjectModelResolver(
                     resolutionCtx.repoSession(),
