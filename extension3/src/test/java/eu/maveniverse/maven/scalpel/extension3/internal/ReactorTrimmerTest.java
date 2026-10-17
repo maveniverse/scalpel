@@ -19,12 +19,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.apache.maven.execution.ProjectDependencyGraph;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Model;
 import org.apache.maven.project.MavenProject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 class ReactorTrimmerTest {
 
@@ -86,13 +90,14 @@ class ReactorTrimmerTest {
         assertTrue(result.getDownstreamTestOnly().isEmpty(), "No test-only downstream expected");
     }
 
-    @Test
-    void computeBuildSet_testOnlyModuleOnlyPropagatesViaTestJar() {
-        // A is test-only, B depends on A with test-jar type, C depends on A without test-jar
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("testJarForms")
+    void computeBuildSet_testOnlyModuleOnlyPropagatesViaTestJar(String form, String type, String classifier) {
+        // A is test-only, B consumes A's test-jar in the given form, C depends on A without test-jar
         MavenProject projectA = createProject("com.example", "module-a");
         MavenProject projectB = createProject("com.example", "module-b");
         MavenProject projectC = createProject("com.example", "module-c");
-        addTestJarDependency(projectB, "com.example", "module-a");
+        addArtifactDependency(projectB, "com.example", "module-a", type, classifier);
         addDependency(projectC, "com.example", "module-a", "compile");
 
         List<MavenProject> sortedProjects = List.of(projectA, projectB, projectC);
@@ -109,10 +114,36 @@ class ReactorTrimmerTest {
 
         assertTrue(
                 result.getBuildSet().contains(projectB),
-                "B has test-jar dependency on test-only A - should be included");
+                "B has test-jar dependency (" + form + ") on test-only A - should be included");
         assertFalse(
                 result.getBuildSet().contains(projectC),
                 "C has regular dependency on test-only A - should NOT be included");
+    }
+
+    static Stream<Arguments> testJarForms() {
+        return Stream.of(
+                Arguments.of("type test-jar", "test-jar", null),
+                // Same artifact as type test-jar, declared by classifier with the default type
+                Arguments.of("classifier tests", "jar", "tests"));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("dependencyForms")
+    void hasTestJarDependency_matchesOnlyTestJarForms(String form, String type, String classifier, boolean expected) {
+        MavenProject upstream = createProject("com.example", "module-a");
+        MavenProject downstream = createProject("com.example", "module-b");
+        addArtifactDependency(downstream, "com.example", "module-a", type, classifier);
+
+        assertEquals(expected, trimmer.hasTestJarDependency(downstream, upstream));
+    }
+
+    static Stream<Arguments> dependencyForms() {
+        return Stream.of(
+                Arguments.of("type test-jar", "test-jar", null, true),
+                Arguments.of("type test-jar with classifier tests", "test-jar", "tests", true),
+                Arguments.of("type jar with classifier tests", "jar", "tests", true),
+                Arguments.of("type jar with classifier sources", "jar", "sources", false),
+                Arguments.of("main jar", "jar", null, false));
     }
 
     @Test
@@ -380,10 +411,16 @@ class ReactorTrimmerTest {
     }
 
     private void addTestJarDependency(MavenProject project, String groupId, String artifactId) {
+        addArtifactDependency(project, groupId, artifactId, "test-jar", null);
+    }
+
+    private void addArtifactDependency(
+            MavenProject project, String groupId, String artifactId, String type, String classifier) {
         Dependency dep = new Dependency();
         dep.setGroupId(groupId);
         dep.setArtifactId(artifactId);
-        dep.setType("test-jar");
+        dep.setType(type);
+        dep.setClassifier(classifier);
         project.getDependencies().add(dep);
     }
 

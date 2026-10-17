@@ -57,7 +57,7 @@ Scalpel distinguishes between main source changes (`src/main/`) and test-only ch
 
 ### Test-only changes
 
-When only test sources (`src/test/`) change in a module, the module itself is built and tested (DIRECT), but only downstream modules that declare a `<type>test-jar</type>` dependency on it are included. Regular dependents are NOT affected, since the main artifact is unchanged.
+When only test sources (`src/test/`) change in a module, the module itself is built and tested (DIRECT), but only downstream modules that depend on its test-jar are included, whether they declare it as `<type>test-jar</type>` or as `<classifier>tests</classifier>`. Regular dependents are NOT affected, since the main artifact is unchanged.
 
 ### Main source changes
 
@@ -74,23 +74,30 @@ transitive dependents (52 of them direct) but only 25 modules declaring a `test-
 it. A change to a test base class in `camel-core` triggers testing of only those 25 modules instead
 of all 518 (measured on Camel main @ `384a00a8`, 2026-08-27). Reproduce the 25: build the
 reactor-internal dependency graph from the POMs and count the modules whose `<dependency>` block
-for `org.apache.camel:camel-core` also carries `<type>test-jar</type>`:
+for `org.apache.camel:camel-core` also carries `<type>test-jar</type>` or `<classifier>tests</classifier>`:
 
 ```bash
 git clone --depth 1 --filter=blob:none --sparse https://github.com/apache/camel.git
 cd camel && git sparse-checkout set --no-cone '*.xml'
 find . -name pom.xml | while read f; do
-  awk 'BEGIN{RS="</dependency>"} /<artifactId>camel-core<\/artifactId>/ && /<type>test-jar<\/type>/ {print FILENAME}' "$f"
+  awk 'BEGIN{RS="</dependency>"} /<artifactId>camel-core<\/artifactId>/ && (/<type>test-jar<\/type>/ || /<classifier>tests<\/classifier>/) {print FILENAME}' "$f"
 done | sort -u | wc -l   # -> 25
 ```
 
-Test-jar dependencies are declared in Maven as:
+Test-jar dependencies are declared in Maven in either of two equivalent forms, which resolve the same artifact:
 
 ```xml
 <dependency>
     <groupId>org.apache.camel</groupId>
     <artifactId>camel-core</artifactId>
     <type>test-jar</type>
+    <scope>test</scope>
+</dependency>
+
+<dependency>
+    <groupId>org.apache.camel</groupId>
+    <artifactId>camel-core</artifactId>
+    <classifier>tests</classifier>
     <scope>test</scope>
 </dependency>
 ```

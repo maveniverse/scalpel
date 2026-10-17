@@ -19,6 +19,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
+import org.apache.maven.model.Dependency;
 import org.apache.maven.project.MavenProject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -134,6 +135,31 @@ class SkipTestsApplierTest {
         assertFalse(producer.getProperties().containsKey("maven.test.skip"));
         assertEquals("true", producer.getProperties().getProperty("skipTests"));
         assertTrue(skippedProjects.isEmpty()); // Producer removed from skipped list
+    }
+
+    @Test
+    void softenTestJarProducers_softensForTestsClassifierConsumer() {
+        // Real ReactorTrimmer, so the classifier form goes through hasTestJarDependency itself
+        SkipTestsApplier realTrimmerApplier = new SkipTestsApplier(new ReactorTrimmer(), transitiveImpactAnalyzer);
+        MavenProject consumer = createProject("consumer");
+        MavenProject producer = createProject("producer");
+        producer.getProperties().setProperty("maven.test.skip", "true");
+        Dependency testsClassifier = new Dependency();
+        testsClassifier.setGroupId("com.example");
+        testsClassifier.setArtifactId("producer");
+        testsClassifier.setClassifier("tests");
+        when(consumer.getDependencies()).thenReturn(List.of(testsClassifier));
+
+        List<MavenProject> testProjects = new ArrayList<>(List.of(consumer));
+        List<MavenProject> skippedProjects = new ArrayList<>(List.of(producer));
+
+        Set<MavenProject> softened = realTrimmerApplier.softenTestJarProducers(testProjects, skippedProjects);
+
+        assertEquals(1, softened.size());
+        assertTrue(softened.contains(producer));
+        assertFalse(producer.getProperties().containsKey("maven.test.skip"));
+        assertEquals("true", producer.getProperties().getProperty("skipTests"));
+        assertTrue(skippedProjects.isEmpty());
     }
 
     @Test

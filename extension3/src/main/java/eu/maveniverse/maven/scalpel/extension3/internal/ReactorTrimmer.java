@@ -258,21 +258,25 @@ class ReactorTrimmer {
     }
 
     /**
-     * Returns true if {@code downstream} has a direct {@code <type>test-jar</type>} dependency
-     * on {@code upstream}. Package-private so {@link ScalpelLifecycleParticipant} can reuse this
+     * Returns true if {@code downstream} has a direct dependency on the test-jar of
+     * {@code upstream}, declared either as {@code <type>test-jar</type>} or as
+     * {@code <classifier>tests</classifier>} with the default {@code jar} type. Both forms
+     * resolve the same artifact. Package-private so {@link SkipTestsApplier} can reuse this
      * check when deciding whether a skip-test candidate's test-compile must be preserved.
      */
     boolean hasTestJarDependency(MavenProject downstream, MavenProject upstream) {
         String groupId = upstream.getGroupId();
         String artifactId = upstream.getArtifactId();
         for (Dependency dep : downstream.getDependencies()) {
-            if (groupId.equals(dep.getGroupId())
-                    && artifactId.equals(dep.getArtifactId())
-                    && "test-jar".equals(dep.getType())) {
+            if (groupId.equals(dep.getGroupId()) && artifactId.equals(dep.getArtifactId()) && isTestJar(dep)) {
                 return true;
             }
         }
         return false;
+    }
+
+    private static boolean isTestJar(Dependency dep) {
+        return "test-jar".equals(dep.getType()) || ("jar".equals(dep.getType()) && "tests".equals(dep.getClassifier()));
     }
 
     /**
