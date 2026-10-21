@@ -23,7 +23,9 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileAttribute;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -624,6 +626,26 @@ class PomChangeAnalyzer {
             return;
         }
 
+        // Same conservative posture when the new-side model is unavailable: diffing
+        // against an empty model would report every old property as removed and mark
+        // children through the filtered-resource scan on no evidence, while a genuinely
+        // new property would go unreported (#221 review).
+        if (!ctx.newEffectiveModels.containsKey(changedPomPath)) {
+            if (logger.isWarnEnabled()) {
+                logger.warn(
+                        "Cannot build effective model for new {}, marking all dependents as affected", key(project));
+            }
+            ctx.affected.add(project);
+            ctx.affected.addAll(dependents);
+            if (ctx.explain) {
+                addEvidence(ctx.evidence, project, "unbuildable new pom " + changedPomPath);
+                for (MavenProject dependent : dependents) {
+                    addEvidence(ctx.evidence, dependent, "unbuildable new pom " + changedPomPath);
+                }
+            }
+            return;
+        }
+
         try {
             analyzeParentPomChange(project, oldPomBytes, oldEffectiveModel, dependents, ctx);
         } catch (Exception e) {
@@ -702,16 +724,13 @@ class PomChangeAnalyzer {
 
         // Use effective models for property and managed dep/plugin diffs.
         // Effective models have properties interpolated and profiles merged.
-        Model newEffectiveModel = ctx.newEffectiveModels.getOrDefault(
-                ctx.normalizedRoot
-                        .relativize(parentProject
-                                .getFile()
-                                .toPath()
-                                .toAbsolutePath()
-                                .normalize())
-                        .toString()
-                        .replace('\\', '/'),
-                parentProject.getModel());
+        // No session-model fallback: the session model was interpolated with the real
+        // build clock, so diffing it against the pinned old model reports every
+        // time-derived property as changed (#221).
+        Model newEffectiveModel = ctx.newEffectiveModels.get(ctx.normalizedRoot
+                .relativize(parentProject.getFile().toPath().toAbsolutePath().normalize())
+                .toString()
+                .replace('\\', '/'));
         Set<String> changedProperties =
                 diffProperties(oldEffectiveModel.getProperties(), newEffectiveModel.getProperties());
 
@@ -2128,6 +2147,15 @@ class PomChangeAnalyzer {
             DefaultModelBuildingRequest request = new DefaultModelBuildingRequest();
             request.setPomFile(pomFile.toFile());
             request.setValidationLevel(ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL);
+            // Pin one build start time on every request this analyzer builds: the old and
+            // new models resolve ${maven.build.timestamp} from the request's own clock, so
+            // any property derived from it compares as changed whenever the configured
+            // format is finer than the interval between the two requests, for child-
+            // declared, parent-declared, and indirect references alike (#221). A real
+            // change of maven.build.timestamp.format itself still compares as changed.
+            // Fresh instance per request: java.util.Date is mutable and shared state here
+            // would be corruption-prone.
+            request.setBuildStartTime(Date.from(Instant.EPOCH));
 
             ProjectModelResolver repoResolver = new ProjectModelResolver(
                     resolutionCtx.repoSession(),
