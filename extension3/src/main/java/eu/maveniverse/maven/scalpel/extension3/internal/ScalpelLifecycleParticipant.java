@@ -37,6 +37,7 @@ import org.apache.maven.model.Model;
 import org.apache.maven.project.DependencyResolutionResult;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
+import org.codehaus.plexus.PlexusContainer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -49,6 +50,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
     private final ModuleMapper moduleMapper;
     private final PomChangeAnalyzer pomChangeAnalyzer;
     private final ReactorTrimmer reactorTrimmer;
+    private final PlexusContainer container;
 
     // Internal collaborators (not DI components)
     private final ChangedFileClassifier changedFileClassifier;
@@ -64,11 +66,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             ModuleMapper moduleMapper,
             PomChangeAnalyzer pomChangeAnalyzer,
             ReactorTrimmer reactorTrimmer,
-            ProjectDependenciesResolver dependenciesResolver) {
+            ProjectDependenciesResolver dependenciesResolver,
+            PlexusContainer container) {
         this.scalpelCore = requireNonNull(scalpelCore, "scalpelCore");
         this.moduleMapper = requireNonNull(moduleMapper, "moduleMapper");
         this.pomChangeAnalyzer = requireNonNull(pomChangeAnalyzer, "pomChangeAnalyzer");
         this.reactorTrimmer = requireNonNull(reactorTrimmer, "reactorTrimmer");
+        this.container = requireNonNull(container, "container");
 
         this.changedFileClassifier = new ChangedFileClassifier();
         this.forceBuildMatcher = new ForceBuildMatcher();
@@ -78,8 +82,30 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
         this.impactedLogWriter = new ImpactedLogWriter(reportAssembler);
     }
 
+    /**
+     * Runs the analysis with the container realm as the thread context class loader (#226).
+     *
+     * <p>Maven 3 calls this method with the extension's own realm as the context class loader, and
+     * Sisu shows an injected bean collection only the beans visible from that loader. Maven's core
+     * components live in the container realm, which an extension realm cannot see. The lifecycle
+     * mappings the model builder needs then read as empty, and on Maven 3.10.0, with Sisu 1.1.0,
+     * so do the resolver's dependency collectors and connector factories. The container realm sees
+     * all of them. Maven 4 also ships Sisu 1.1.0, but already imports the container realm into
+     * extension realms (apache/maven#12554), so the swap changes nothing there.
+     */
     @Override
     public void afterProjectsRead(MavenSession session) throws MavenExecutionException {
+        Thread thread = Thread.currentThread();
+        ClassLoader original = thread.getContextClassLoader();
+        thread.setContextClassLoader(container.getContainerRealm());
+        try {
+            analyze(session);
+        } finally {
+            thread.setContextClassLoader(original);
+        }
+    }
+
+    private void analyze(MavenSession session) throws MavenExecutionException {
         ScalpelConfiguration config;
         try {
             config = ScalpelConfiguration.fromProperties(session.getSystemProperties(), session.getUserProperties());

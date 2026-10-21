@@ -61,6 +61,16 @@
       <artifactId>org.eclipse.sisu.inject</artifactId>
       <scope>provided</scope>
     </dependency>
+    <dependency>
+      <groupId>org.eclipse.sisu</groupId>
+      <artifactId>org.eclipse.sisu.plexus</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.codehaus.plexus</groupId>
+      <artifactId>plexus-classworlds</artifactId>
+      <scope>provided</scope>
+    </dependency>
 
     <!-- Test -->
     <dependency>
