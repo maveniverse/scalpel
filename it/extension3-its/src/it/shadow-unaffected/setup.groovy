@@ -7,9 +7,10 @@
  */
 
 // Stale-shadow-document fixture for the no-affected-modules exit: the only change is a
-// file under docs/, owned by no reactor module, so the analysis completes with nothing
-// affected and the passive branch writes a report with an empty affected set. A previous
-// run's scalpel-shadow.json is planted to prove this exit overwrites it too.
+// profile-gated module POM (gated-module/pom.xml) that is present on disk but not part
+// of the current reactor. ModuleMapper's pom.xml-boundary guard fires and returns null
+// for gated-module/pom.xml, so it lands in unmatchedPomPaths → no modules affected.
+// A previous run's scalpel-shadow.json is planted to prove this exit overwrites it too.
 def dir = basedir
 
 def exec = { String... args ->
@@ -29,11 +30,26 @@ exec('git', 'add', '.')
 exec('git', 'commit', '-m', 'initial')
 exec('git', 'branch', 'base')
 
-// A repo-ROOT file maps to no module at all: the root aggregator stopped catching
-// repo-root files in #66, so the analysis completes with nothing affected.
-new File(dir, 'notes.md').text = 'root-level note owned by no module'
+// Add a pom.xml for a profile-gated module that is NOT listed in the reactor.
+// ModuleMapper sees gated-module/pom.xml → walks to "gated-module" → not in moduleByDir
+// → finds gated-module/pom.xml on disk → returns null (pom.xml boundary guard).
+// ScalpelLifecycleParticipant routes it through POM analysis as an unmatchedPomPath
+// → no reactor module affected → "No modules affected by changes" early return.
+new File(dir, 'gated-module').mkdirs()
+new File(dir, 'gated-module/pom.xml').text = '''\
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>eu.maveniverse.maven.scalpel.it.shadowunaffected</groupId>
+    <artifactId>gated-module</artifactId>
+    <version>0.1.0-SNAPSHOT</version>
+</project>
+'''
 exec('git', 'add', '.')
-exec('git', 'commit', '-m', 'root-level file change')
+exec('git', 'commit', '-m', 'update gated-module/pom.xml — not part of reactor, no module affected')
 
 new File(dir, 'target').mkdirs()
 new File(dir, 'target/scalpel-shadow.json').text = '{"stale": "previous-run-measurement"}'

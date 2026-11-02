@@ -56,6 +56,9 @@ class ModuleMapperOutsideReactorTest {
         assertTrue(result.getMainAffected().isEmpty(), "outside-reactor files must not affect any module");
         assertTrue(result.getTestOnlyAffected().isEmpty());
         assertTrue(result.getAllAffected().isEmpty(), "the build set must not widen to the root project");
+        assertTrue(
+                result.getUnmappedFiles().isEmpty(),
+                "files in inactive/non-reactor modules must not appear in unmappedFiles — they are intentionally ignored, not unowned");
     }
 
     @Test
