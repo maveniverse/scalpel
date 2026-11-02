@@ -225,6 +225,259 @@ class PomChangeAnalyzerTest {
         assertTrue(changed.isEmpty());
     }
 
+    // --- diffEffectivePlugins unit tests ---
+
+    @Test
+    void diffEffectivePlugins_noChanges() {
+        org.apache.maven.model.Plugin p = new org.apache.maven.model.Plugin();
+        p.setGroupId("org.apache.maven.plugins");
+        p.setArtifactId("maven-compiler-plugin");
+        p.setVersion("3.13.0");
+        assertTrue(analyzer.diffEffectivePlugins(List.of(p), List.of(p)).isEmpty());
+    }
+
+    @Test
+    void diffEffectivePlugins_versionChange() {
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.2.5");
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+
+        Set<String> changed = analyzer.diffEffectivePlugins(List.of(old), List.of(newer));
+        assertEquals(Set.of("org.apache.maven.plugins:maven-surefire-plugin"), changed);
+    }
+
+    @Test
+    void diffEffectivePlugins_configurationChange() {
+        // Same version, but configuration differs — the key case for issue #228
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineOld.setValue("-Dexample.flag=a");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineNew.setValue("-Dexample.flag=b");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed = analyzer.diffEffectivePlugins(List.of(old), List.of(newer));
+        assertEquals(Set.of("org.apache.maven.plugins:maven-surefire-plugin"), changed);
+    }
+
+    @Test
+    void diffEffectivePlugins_newPluginNotReported() {
+        // Brand-new plugin in new model: must NOT be reported (issue #131)
+        org.apache.maven.model.Plugin p = new org.apache.maven.model.Plugin();
+        p.setGroupId("org.apache.maven.plugins");
+        p.setArtifactId("maven-compiler-plugin");
+        p.setVersion("3.13.0");
+
+        Set<String> changed = analyzer.diffEffectivePlugins(List.of(), List.of(p));
+        assertTrue(changed.isEmpty(), "Brand-new plugins must not be reported (issue #131)");
+    }
+
+    @Test
+    void diffEffectivePlugins_removedPluginIsReported() {
+        org.apache.maven.model.Plugin p = new org.apache.maven.model.Plugin();
+        p.setGroupId("org.apache.maven.plugins");
+        p.setArtifactId("maven-compiler-plugin");
+        p.setVersion("3.13.0");
+
+        Set<String> changed = analyzer.diffEffectivePlugins(List.of(p), List.of());
+        assertEquals(Set.of("org.apache.maven.plugins:maven-compiler-plugin"), changed);
+    }
+
+    // --- analyzeChanges integration tests (issue #228) ---
+
+    @Test
+    void analyzeChanges_parentPluginManagementConfigChangeAffectsAllChildren() throws Exception {
+        // Issue #228: parent changes <argLine> in <pluginManagement> — all children must be affected
+        Path root = setupReactorRoot();
+
+        String newParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                      <configuration><argLine>-Dexample.flag=b</argLine></configuration>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String oldParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                      <configuration><argLine>-Dexample.flag=a</argLine></configuration>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPomXml, moduleAPomXml, moduleBPomXml);
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleA), "module-a should be affected: parent pluginManagement <argLine> changed");
+        assertTrue(
+                affected.contains(moduleB), "module-b should be affected: parent pluginManagement <argLine> changed");
+    }
+
+    @Test
+    void analyzeChanges_parentPropertyUsedOnlyInPluginConfigAffectsAllChildren() throws Exception {
+        // Issue #228: parent changes ${jdk.release} used only in compiler plugin config — all children affected
+        Path root = setupReactorRoot();
+
+        String newParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><jdk.release>21</jdk.release></properties>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-compiler-plugin</artifactId>
+                      <version>3.13.0</version>
+                      <configuration><release>${jdk.release}</release></configuration>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String oldParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><jdk.release>17</jdk.release></properties>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-compiler-plugin</artifactId>
+                      <version>3.13.0</version>
+                      <configuration><release>${jdk.release}</release></configuration>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPomXml, moduleAPomXml, moduleBPomXml);
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleA),
+                "module-a should be affected: parent ${jdk.release} (used only in plugin config) changed 17→21");
+        assertTrue(
+                affected.contains(moduleB),
+                "module-b should be affected: parent ${jdk.release} (used only in plugin config) changed 17→21");
+    }
+
     // --- analyzeChanges integration tests ---
 
     @Test

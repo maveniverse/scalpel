@@ -139,7 +139,14 @@ import org.slf4j.LoggerFactory;
  *             dependency see no diff and are <em>not</em> affected (issue #131).</li>
  *         <li>Old vs new <em>effective plugin versions</em> — version-only comparison
  *             (configuration/execution diffs are ignored since the parent POM is already
- *             in the changeset).</li>
+ *             in the changeset for the lifecycle-bound plugins path).  Only version
+ *             changes from managed plugin updates indicate a real build-input change for
+ *             the child.</li>
+ *         <li>Old vs new <em>effective pluginManagement configurations</em> — for plugins
+ *             explicitly declared in the parent's raw {@code <pluginManagement>}, a full
+ *             (version + config + executions) comparison restricted to same-version
+ *             entries catches config-only changes that are invisible to the version-only
+ *             check (issue #228: {@code <argLine>} or {@code ${jdk.release}} changes).</li>
  *       </ul></li>
  *
  *   <li><b>Effective property comparison</b> (per dependent):
@@ -776,6 +783,23 @@ class PomChangeAnalyzer {
 
         Path absReactorRoot = ctx.normalizedRoot;
 
+        // Collect the GA set of managed plugins explicitly declared in the parent's raw
+        // <pluginManagement> (union of old and new raw models).  This anchors the deep
+        // plugin-config comparison in hasEffectiveChanges to user-declared entries only —
+        // lifecycle-default plugins (not in any raw <pluginManagement>) are excluded,
+        // preventing false positives from model-building artifacts (issue #228).
+        Set<String> parentRawManagedPluginGAs = new LinkedHashSet<>();
+        if (oldModel.getBuild() != null && oldModel.getBuild().getPluginManagement() != null) {
+            for (Plugin p : oldModel.getBuild().getPluginManagement().getPlugins()) {
+                parentRawManagedPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+            }
+        }
+        if (newModel.getBuild() != null && newModel.getBuild().getPluginManagement() != null) {
+            for (Plugin p : newModel.getBuild().getPluginManagement().getPlugins()) {
+                parentRawManagedPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+            }
+        }
+
         // Check each dependent (child or BOM importer) for impact.
         // Compare effective dependencies and plugins (the resolved dependency tree and
         // merged plugin list, not managed declarations). This catches managed version
@@ -793,7 +817,7 @@ class PomChangeAnalyzer {
             // <dependencies>, so this detects managed version changes that flow
             // into the module's actual dependency tree.
             if (!childAffected) {
-                childAffected = hasEffectiveChanges(child, absReactorRoot, ctx);
+                childAffected = hasEffectiveChanges(child, absReactorRoot, ctx, parentRawManagedPluginGAs);
             }
 
             // Check if child has filtered resources referencing changed properties.
@@ -852,7 +876,8 @@ class PomChangeAnalyzer {
      * normalized change path (e.g. {@code properties/foo.version}, {@code dependencies/g:a})
      * and filtered before deciding whether the child is affected (issue #148).
      */
-    private boolean hasEffectiveChanges(MavenProject child, Path absReactorRoot, AnalysisContext ctx) {
+    private boolean hasEffectiveChanges(
+            MavenProject child, Path absReactorRoot, AnalysisContext ctx, Set<String> parentRawManagedPluginGAs) {
         Path childPomPath = child.getFile().toPath().toAbsolutePath().normalize();
         String childRelPath = absReactorRoot.relativize(childPomPath).toString().replace('\\', '/');
         Model oldChildEffective = ctx.oldEffectiveModels.get(childRelPath);
@@ -906,11 +931,18 @@ class PomChangeAnalyzer {
         // plugin configuration changes are already covered by the POM diff (the parent
         // POM is in the changeset).  Only version changes from managed plugin updates
         // indicate a real build-input change for the child.
+        // However, for plugins that are ONLY in <pluginManagement> (not yet bound to the
+        // child's lifecycle), a version change does not appear in getEffectivePlugins() —
+        // those are caught separately via diffEffectiveManagedPluginConfigs() below.
         Set<String> changedPlugins = diffManagedPluginVersions(
                 getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
-        if (!changedPlugins.isEmpty()) {
+        Set<String> changedManagedPluginConfigs = diffEffectiveManagedPluginConfigs(
+                getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective), parentRawManagedPluginGAs);
+        Set<String> allChangedPlugins = new LinkedHashSet<>(changedPlugins);
+        allChangedPlugins.addAll(changedManagedPluginConfigs);
+        if (!allChangedPlugins.isEmpty()) {
             Set<String> acceptedPlugins = new LinkedHashSet<>();
-            for (String ga : changedPlugins) {
+            for (String ga : allChangedPlugins) {
                 if (filter.accepts("plugins/" + ga)) {
                     acceptedPlugins.add(ga);
                 } else if (logger.isDebugEnabled()) {
@@ -1274,13 +1306,99 @@ class PomChangeAnalyzer {
     }
 
     /**
+     * Compare effective plugins by full equality: version, configuration, and executions.
+     * <p>
+     * Both lists come from effective models produced by the same {@link ModelBuilder} instance,
+     * so property interpolation and parent inheritance are applied consistently on both sides.
+     * This means a parent-only change to {@code <pluginManagement>} configuration (e.g.
+     * {@code <argLine>}) or a property used only in plugin configuration (e.g.
+     * {@code ${jdk.release}}) is reflected in the child's effective model and detected here.
+     * <p>
+     * Only report modifications and removals — not brand-new entries (issue #131).
+     */
+    Set<String> diffEffectivePlugins(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
+        Set<String> changed = new LinkedHashSet<>();
+        Map<String, Plugin> oldMap = new LinkedHashMap<>();
+        for (Plugin p : oldPlugins) {
+            oldMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
+        }
+        Map<String, Plugin> newMap = new LinkedHashMap<>();
+        for (Plugin p : newPlugins) {
+            newMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
+        }
+        for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
+            Plugin newPlugin = newMap.get(e.getKey());
+            if (newPlugin == null) {
+                // Plugin removed in new model
+                changed.add(e.getKey());
+            } else if (!equalPlugin(e.getValue(), newPlugin)) {
+                // Version, configuration, or executions changed
+                changed.add(e.getKey());
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Compare the effective {@code <pluginManagement>} entries for configuration and execution
+     * changes — reporting only plugins that are present in <em>both</em> old and new models
+     * (modifications only, never additions or removals).
+     * <p>
+     * Lifecycle-default plugins may appear or disappear across old vs new effective model builds
+     * due to model-building artifacts (e.g. the old model is built in a temp directory with a
+     * standalone {@link org.apache.maven.model.building.ModelBuilder}).  By restricting to
+     * the intersection of GAs present in both sides, these lifecycle artifacts are ignored
+     * while genuine configuration changes to user-declared managed plugins are still detected.
+     * <p>
+     * This method is used to catch the issue #228 scenario where a parent changes
+     * {@code <pluginManagement>} configuration (e.g. {@code <argLine>}) or a property
+     * consumed only in plugin configuration (e.g. {@code ${jdk.release}}).  The child
+     * inherits the managed configuration and is affected even if it does not explicitly
+     * declare the plugin in its own POM.
+     */
+    Set<String> diffEffectiveManagedPluginConfigs(
+            List<Plugin> oldPlugins, List<Plugin> newPlugins, Set<String> allowedGAs) {
+        Set<String> changed = new LinkedHashSet<>();
+        Map<String, Plugin> oldMap = new LinkedHashMap<>();
+        for (Plugin p : oldPlugins) {
+            oldMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
+        }
+        Map<String, Plugin> newMap = new LinkedHashMap<>();
+        for (Plugin p : newPlugins) {
+            newMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
+        }
+        // Only compare GAs present in both old and new AND explicitly declared in the
+        // parent's raw <pluginManagement>.  This avoids false positives from lifecycle-default
+        // plugins that may differ between old (temp-dir build) and new (real-path build) models.
+        // Skip plugins where the version changed — those are caught by diffEffectivePlugins()
+        // on the child's effective <plugins> list (which only includes actually-used plugins,
+        // preserving the precision guarantee from issue #131).  This path only needs to catch
+        // configuration/execution changes to plugins whose version is unchanged.
+        for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
+            String ga = e.getKey();
+            if (!allowedGAs.contains(ga)) {
+                continue; // not explicitly declared by the parent — skip
+            }
+            Plugin newPlugin = newMap.get(ga);
+            if (newPlugin == null) {
+                continue; // removal — not handled here
+            }
+            if (!Objects.equals(e.getValue().getVersion(), newPlugin.getVersion())) {
+                continue; // version changed — handled by diffEffectivePlugins() on effective <plugins>
+            }
+            if (!equalPlugin(e.getValue(), newPlugin)) {
+                changed.add(ga);
+            }
+        }
+        return changed;
+    }
+
+    /**
      * Compare managed plugins by GA + version only, ignoring configuration and executions.
      * <p>
-     * Old effective models built with a standalone {@code DefaultModelBuilder} may produce
-     * subtly different Xpp3Dom configuration/execution structures compared to the live reactor
-     * model (e.g. attribute handling, default configuration merging).  These are model-building
-     * artifacts, not real POM changes.  Real plugin configuration changes are already detected
-     * by the POM file diff (the parent POM appears in the changeset).
+     * Used for the child's raw-model managed plugin check: when the child explicitly declares
+     * a plugin in its own {@code <pluginManagement>}, only version changes matter there
+     * (the child-defined configuration is handled by the POM file diff).
      * <p>
      * Only report modifications and removals — not brand-new entries (issue #131).
      */
