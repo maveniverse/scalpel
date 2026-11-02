@@ -707,7 +707,8 @@ class PomChangeAnalyzer {
             logger.warn(
                     "Cannot parse old POM for {}, marking all dependents as affected: {}",
                     key(project),
-                    e.getMessage());
+                    e.getMessage(),
+                    e);
             ctx.affected.add(project);
             ctx.affected.addAll(dependents);
             if (ctx.explain) {
@@ -2377,7 +2378,8 @@ class PomChangeAnalyzer {
             logger.warn(
                     "Cannot build effective model for {}: {} (downstream comparisons will treat this conservatively)",
                     relPath,
-                    e.getMessage());
+                    e.getMessage(),
+                    e);
             return null;
         }
     }
