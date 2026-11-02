@@ -137,11 +137,10 @@ import org.slf4j.LoggerFactory;
  *             (e.g. jackson 2.17→2.18 in the BOM) shows up here only for modules that
  *             actually declare that dependency.  Modules that don't use the managed
  *             dependency see no diff and are <em>not</em> affected (issue #131).</li>
- *         <li>Old vs new <em>effective plugin versions</em> — version-only comparison
- *             (configuration/execution diffs are ignored since the parent POM is already
- *             in the changeset for the lifecycle-bound plugins path).  Only version
- *             changes from managed plugin updates indicate a real build-input change for
- *             the child.</li>
+ *         <li>Old vs new <em>effective bound plugins</em> — full equality comparison
+ *             (version, configuration, and executions) for plugins actually bound to the
+ *             child's lifecycle. Configuration and execution changes from inherited
+ *             pluginManagement are reflected here via the effective model.</li>
  *         <li>Old vs new <em>effective pluginManagement configurations</em> — for plugins
  *             explicitly declared in the parent's raw {@code <pluginManagement>}, a full
  *             (version + config + executions) comparison restricted to same-version

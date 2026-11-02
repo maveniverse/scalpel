@@ -229,11 +229,15 @@ class PomChangeAnalyzerTest {
 
     @Test
     void diffEffectivePlugins_noChanges() {
-        org.apache.maven.model.Plugin p = new org.apache.maven.model.Plugin();
-        p.setGroupId("org.apache.maven.plugins");
-        p.setArtifactId("maven-compiler-plugin");
-        p.setVersion("3.13.0");
-        assertTrue(analyzer.diffEffectivePlugins(List.of(p), List.of(p)).isEmpty());
+        org.apache.maven.model.Plugin p1 = new org.apache.maven.model.Plugin();
+        p1.setGroupId("org.apache.maven.plugins");
+        p1.setArtifactId("maven-compiler-plugin");
+        p1.setVersion("3.13.0");
+        org.apache.maven.model.Plugin p2 = new org.apache.maven.model.Plugin();
+        p2.setGroupId("org.apache.maven.plugins");
+        p2.setArtifactId("maven-compiler-plugin");
+        p2.setVersion("3.13.0");
+        assertTrue(analyzer.diffEffectivePlugins(List.of(p1), List.of(p2)).isEmpty());
     }
 
     @Test
