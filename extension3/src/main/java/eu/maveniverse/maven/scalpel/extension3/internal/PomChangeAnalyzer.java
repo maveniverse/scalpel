@@ -1504,27 +1504,74 @@ class PomChangeAnalyzer {
      * because they have different base-directory prefixes, they represent the same logical
      * path and should compare as equal.
      * <p>
-     * The normalization strategy: if the value starts with the given base directory path
-     * (as a string prefix followed by a separator), relativize it; otherwise return the
-     * value unchanged.
+     * Two normalization strategies are applied in order:
+     * <ol>
+     *   <li>If the value <em>is</em> an absolute path rooted at {@code base}, relativize it.</li>
+     *   <li>Otherwise, replace any occurrence of the base-directory string inside the value
+     *       with a fixed placeholder (handles embedded paths such as
+     *       {@code -Dtmp=<base>/target/tmp}).  The base string is only replaced when it
+     *       appears as a complete path component — i.e. followed by {@code /}, {@code \},
+     *       or end-of-string — so sibling directories such as {@code <base>-old} are
+     *       not affected.</li>
+     * </ol>
      */
     private static String normalizeBasePath(String value, Path base) {
         if (value == null || base == null) {
             return value;
         }
-        // Only consider absolute paths that look like file-system paths
-        if (!value.startsWith("/") && !(value.length() > 2 && value.charAt(1) == ':')) {
-            return value; // not an absolute path
-        }
-        try {
-            Path valuePath = Path.of(value).normalize();
-            if (valuePath.startsWith(base)) {
-                return base.relativize(valuePath).toString();
+        // Strategy 1: value IS an absolute path rooted at base — relativize it.
+        if (value.startsWith("/") || (value.length() > 2 && value.charAt(1) == ':')) {
+            try {
+                Path valuePath = Path.of(value).normalize();
+                if (valuePath.startsWith(base)) {
+                    return base.relativize(valuePath).toString();
+                }
+            } catch (IllegalArgumentException ignored) {
+                // not a valid path — fall through to strategy 2
             }
-        } catch (IllegalArgumentException ignored) {
-            // not a valid path — compare as-is
         }
-        return value;
+        // Strategy 2: base-directory path is embedded inside a larger value (e.g.
+        // "-Dtmp=/tmp/scalpel-old/child/target/tmp").  Replace the base path string
+        // with a fixed placeholder so that old-model and new-model values that differ
+        // only in their base-directory prefix compare as equal.
+        // Only match when followed by a path separator or end-of-string to avoid
+        // matching sibling directories like "<base>-old".
+        String normalized = replaceBasePathInValue(value, base.toString());
+        // On Windows the Path.toString() uses backslashes; also try forward-slash form.
+        String slashBase = base.toString().replace('\\', '/');
+        if (!slashBase.equals(base.toString())) {
+            normalized = replaceBasePathInValue(normalized, slashBase);
+        }
+        return normalized;
+    }
+
+    /**
+     * Replace {@code baseStr} in {@code value} only when followed by a path separator
+     * ({@code /} or {@code \}) or end-of-string.  This prevents matching sibling directories
+     * whose name starts with the same prefix (e.g. {@code /base-old}).
+     */
+    private static String replaceBasePathInValue(String value, String baseStr) {
+        int idx = value.indexOf(baseStr);
+        if (idx < 0) {
+            return value;
+        }
+        StringBuilder sb = new StringBuilder(value.length());
+        int start = 0;
+        while (idx >= 0) {
+            int end = idx + baseStr.length();
+            // Only replace when the match is followed by a path separator or end-of-string
+            if (end >= value.length() || value.charAt(end) == '/' || value.charAt(end) == '\\') {
+                sb.append(value, start, idx);
+                sb.append("<basedir>");
+                start = end;
+            } else {
+                sb.append(value, start, idx + 1);
+                start = idx + 1;
+            }
+            idx = value.indexOf(baseStr, start);
+        }
+        sb.append(value, start, value.length());
+        return sb.toString();
     }
 
     private boolean equalXpp3Dom(Xpp3Dom a, Xpp3Dom b) {

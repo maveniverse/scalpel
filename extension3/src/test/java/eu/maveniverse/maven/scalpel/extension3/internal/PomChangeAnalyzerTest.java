@@ -474,6 +474,83 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void diffEffectiveManagedPluginConfigs_embeddedPathAnchoredConfigValues_notReported() {
+        // When the base-directory path is embedded inside a larger configuration value
+        // (e.g. "-Dtmp=<oldBase>/target/tmp"), normalizeBasePath must still suppress the
+        // false positive that would otherwise be caused by the temp-dir vs real-dir difference.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineOld.setValue("-Djava.io.tmpdir=/tmp/scalpel-old-poms-test/child/target/tmp");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineNew.setValue("-Djava.io.tmpdir=/real/project/child/target/tmp");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Embedded path-anchored config values that differ only by base-dir prefix must not be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_siblingPathNotNormalized() {
+        // A value containing a directory that merely starts with the same prefix as the base
+        // (e.g. "<base>-old") must still be detected as a genuine change — the sibling path
+        // is different from the base-directory path and must not be erased by normalization.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        // Value uses a sibling directory ("<base>-old") — NOT rooted at oldBase itself
+        argLineOld.setValue("-Dtmp=/tmp/scalpel-old-poms-test/child-old/target");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        // New value uses a different sibling — this IS a genuine change
+        argLineNew.setValue("-Dtmp=/real/project/child-new/target");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertEquals(
+                Set.of("org.apache.maven.plugins:maven-surefire-plugin"),
+                changed,
+                "Sibling-path changes (not rooted at the base dir) must still be reported as genuine changes");
+    }
+
+    @Test
     void effectivePluginManagement_doesNotContainLifecycleDefaultPlugins() throws Exception {
         // Verify empirically that Maven's DefaultModelBuilder does NOT inject lifecycle-default
         // plugins into <pluginManagement>. Lifecycle injection (via LifecycleBindingsInjector)
