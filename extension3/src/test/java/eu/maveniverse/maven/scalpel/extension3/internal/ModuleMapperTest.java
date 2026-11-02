@@ -148,6 +148,25 @@ class ModuleMapperTest {
         ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
 
         assertTrue(result.getAllAffected().isEmpty(), "repo-root files should not map to any module");
+        assertEquals(changedFiles, result.getUnmappedFiles(), "bare root files should be reported as unmapped (#229)");
+    }
+
+    @Test
+    void mapToProjectsClassified_unmappedFileAlongsideModuleChange() {
+        Path root = tempDir;
+        List<MavenProject> projects = createProjects(root);
+
+        // Mixed: a bare root file (unmapped) + a module source file (#229)
+        Set<String> changedFiles =
+                new LinkedHashSet<>(List.of("settings.properties", "module-a/src/main/java/Foo.java"));
+
+        ModuleMapper.Result result = mapper.mapToProjectsClassified(changedFiles, projects, root);
+
+        assertEquals(1, result.getMainAffected().size(), "module-a should be directly affected");
+        assertEquals(
+                Set.of("settings.properties"),
+                result.getUnmappedFiles(),
+                "settings.properties is not owned by any module and must appear in unmappedFiles");
     }
 
     @Test

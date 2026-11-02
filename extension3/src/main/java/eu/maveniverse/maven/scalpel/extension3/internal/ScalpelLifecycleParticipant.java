@@ -336,6 +336,30 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         "Test-only modules (no downstream propagation): {}", keys(sourceResult.getTestOnlyAffected()));
             }
 
+            // Unmapped source files: bare root-level files (e.g. settings.properties, lombok.config)
+            // that do not belong to any module. Their effect on the build is unknown — they may be
+            // read at runtime by any module — so the only safe decision is a full build (#229).
+            // This mirrors the fullBuildTriggers behaviour: when combined with module changes the
+            // unmapped files would otherwise be silently dropped, causing a wrong incremental build.
+            Set<String> unmappedSourceFiles = sourceResult.getUnmappedFiles();
+            if (!unmappedSourceFiles.isEmpty()) {
+                String unmappedFile = unmappedSourceFiles.iterator().next();
+                logger.info(
+                        "Scalpel: Full build triggered by unattributable root-level file {} (not owned by any module)",
+                        unmappedFile);
+                if (passiveRun(config)) {
+                    reportAssembler.writeFullBuildReport(
+                            config,
+                            reactorRoot,
+                            unmappedFile,
+                            changedFiles,
+                            decisionIdFor(result, config, reactorRoot, allProjects),
+                            result.getMergeBaseId(),
+                            result.getHeadId());
+                }
+                return;
+            }
+
             // Analyze POM changes
             Set<MavenProject> affectedByPom = new LinkedHashSet<>();
             Map<String, Model> oldEffectiveModels = Map.of();

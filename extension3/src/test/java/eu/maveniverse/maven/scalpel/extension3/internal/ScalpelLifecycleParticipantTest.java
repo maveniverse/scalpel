@@ -4227,9 +4227,9 @@ class ScalpelLifecycleParticipantTest {
 
         List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
 
-        // Change a file that doesn't map to any module (e.g. root-level non-pom file)
+        // Change a module-owned file only (no unmapped root file) so no-affected-modules path is exercised
         Set<String> changedFiles = new LinkedHashSet<>();
-        changedFiles.add(".gitignore");
+        changedFiles.add("module-a/src/test/java/FooTest.java");
         when(scalpelCore.detectChanges(any(), any(), any(), any()))
                 .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
         setupEmptyDependencyResolution();
@@ -4238,15 +4238,140 @@ class ScalpelLifecycleParticipantTest {
 
         participant.afterProjectsRead(session);
 
-        // All modules should have tests skipped when no modules are affected
-        assertEquals(
-                "true",
-                moduleA.getProperties().getProperty("maven.test.skip"),
-                "module-a should have tests skipped (no modules affected)");
+        // module-a has test-only changes, module-b is unaffected; skip-tests mode skips tests on unaffected modules
+        assertNull(
+                moduleA.getProperties().getProperty("maven.test.skip"), "module-a has test changes — tests must run");
         assertEquals(
                 "true",
                 moduleB.getProperties().getProperty("maven.test.skip"),
-                "module-b should have tests skipped (no modules affected)");
+                "module-b is unaffected — tests should be skipped");
+    }
+
+    @Test
+    void unmappedRootFile_skipTestsMode_triggersFullBuild() throws Exception {
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // A bare root-level file that does not belong to any module (#229)
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add(".gitignore");
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
+        // Override default fullBuildTriggers (.mvn/**) so the unmapped-file path is exercised
+        session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", "");
+
+        participant.afterProjectsRead(session);
+
+        // Unmapped root file triggers a full build: no tests must be skipped
+        assertNull(
+                moduleA.getProperties().getProperty("maven.test.skip"),
+                "module-a: unmapped root file must not skip tests");
+        assertNull(
+                moduleB.getProperties().getProperty("maven.test.skip"),
+                "module-b: unmapped root file must not skip tests");
+        verify(session, never()).setProjects(any());
+    }
+
+    @Test
+    void unmappedRootFile_trimMode_withModuleChange_triggersFullBuild() throws Exception {
+        // Regression test for #229: root-level file (not owned by any module) combined
+        // with a module change must trigger a full build, not just build the changed module.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // Mixed: unmapped root file + a module source file
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("settings.properties");
+        changedFiles.add("module-a/src/main/java/Foo.java");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        // Override default fullBuildTriggers (.mvn/**) so the unmapped-file path is exercised
+        session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", "");
+
+        participant.afterProjectsRead(session);
+
+        // Full build: setProjects must NOT have been called (reactor untouched)
+        verify(session, never()).setProjects(any());
+        // No report in trim mode
+        assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
+    }
+
+    @Test
+    void unmappedRootFile_trimMode_aloneTriggersFullBuild() throws Exception {
+        // Regression test for #229: a bare root-level file alone must produce a full build,
+        // and the full-build must be consistent whether or not other module changes are present.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("settings.properties");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", "");
+
+        participant.afterProjectsRead(session);
+
+        // Full build: reactor must not have been trimmed
+        verify(session, never()).setProjects(any());
+        assertFalse(Files.exists(root.resolve("target/scalpel-report.json")));
     }
 
     @Test

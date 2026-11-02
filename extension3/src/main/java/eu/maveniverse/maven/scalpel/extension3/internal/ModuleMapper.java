@@ -27,14 +27,17 @@ class ModuleMapper {
         private final Set<MavenProject> mainAffected;
         private final Set<MavenProject> testOnlyAffected;
         private final Map<MavenProject, Set<String>> triggeringFiles;
+        private final Set<String> unmappedFiles;
 
         Result(
                 Set<MavenProject> mainAffected,
                 Set<MavenProject> testOnlyAffected,
-                Map<MavenProject, Set<String>> triggeringFiles) {
+                Map<MavenProject, Set<String>> triggeringFiles,
+                Set<String> unmappedFiles) {
             this.mainAffected = mainAffected;
             this.testOnlyAffected = testOnlyAffected;
             this.triggeringFiles = triggeringFiles;
+            this.unmappedFiles = unmappedFiles;
         }
 
         Set<MavenProject> getAllAffected() {
@@ -56,6 +59,19 @@ class ModuleMapper {
          */
         Map<MavenProject, Set<String>> getTriggeringFiles() {
             return triggeringFiles;
+        }
+
+        /**
+         * Changed source files that could not be attributed to any reactor module.
+         *
+         * <p>Bare root-level files (e.g. {@code settings.properties}, {@code lombok.config})
+         * sit outside every module's directory tree. When such a file appears alongside other
+         * module changes it is silently dropped by the module-mapping step, causing an
+         * incorrect incremental build that ignores the root-level change. The caller should
+         * treat a non-empty unmapped set as a full-build trigger (#229).</p>
+         */
+        Set<String> getUnmappedFiles() {
+            return unmappedFiles;
         }
     }
 
@@ -86,6 +102,8 @@ class ModuleMapper {
         Map<MavenProject, Boolean> hasMainChange = new LinkedHashMap<>();
         // Track which changed file triggered each project (explain-mode evidence)
         Map<MavenProject, Set<String>> triggeringFiles = new LinkedHashMap<>();
+        // Track files that could not be attributed to any module (#229)
+        Set<String> unmappedFiles = new LinkedHashSet<>();
 
         // Precompute the relative path per project once; normalize the reactor root
         // once rather than on every call. Build a lookup map keyed by module directory
@@ -121,6 +139,8 @@ class ModuleMapper {
                             .computeIfAbsent(matched, k -> new LinkedHashSet<>())
                             .add(changedFile);
                 }
+            } else {
+                unmappedFiles.add(changedFile);
             }
         }
 
@@ -134,7 +154,7 @@ class ModuleMapper {
             }
         }
 
-        return new Result(mainAffected, testOnlyAffected, triggeringFiles);
+        return new Result(mainAffected, testOnlyAffected, triggeringFiles, unmappedFiles);
     }
 
     public Set<MavenProject> mapToProjects(Set<String> changedFiles, List<MavenProject> projects, Path reactorRoot) {
