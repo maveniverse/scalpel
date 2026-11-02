@@ -1579,7 +1579,7 @@ class PomChangeAnalyzer {
             if (valuePath.startsWith(base)) {
                 return base.relativize(valuePath).toString();
             }
-        } catch (Exception ignored) {
+        } catch (IllegalArgumentException ignored) {
             // not a valid path — compare as-is
         }
         return value;
