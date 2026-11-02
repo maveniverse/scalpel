@@ -13,6 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -67,6 +68,9 @@ import org.apache.maven.project.DependencyResolutionException;
 import org.apache.maven.project.DependencyResolutionResult;
 import org.apache.maven.project.MavenProject;
 import org.apache.maven.project.ProjectDependenciesResolver;
+import org.codehaus.plexus.PlexusContainer;
+import org.codehaus.plexus.classworlds.ClassWorld;
+import org.codehaus.plexus.classworlds.realm.ClassRealm;
 import org.eclipse.aether.RepositorySystem;
 import org.eclipse.aether.RepositorySystemSession;
 import org.eclipse.aether.artifact.DefaultArtifact;
@@ -85,6 +89,8 @@ class ScalpelLifecycleParticipantTest {
 
     private ScalpelCore scalpelCore;
     private ProjectDependenciesResolver dependenciesResolver;
+    private ClassRealm containerRealm;
+    private PlexusContainer container;
     private ScalpelLifecycleParticipant participant;
 
     /**
@@ -100,6 +106,10 @@ class ScalpelLifecycleParticipantTest {
         reactorPomFiles.clear();
         scalpelCore = mock(ScalpelCore.class);
         dependenciesResolver = mock(ProjectDependenciesResolver.class);
+        containerRealm =
+                new ClassRealm(new ClassWorld(), "maven.ext", getClass().getClassLoader());
+        container = mock(PlexusContainer.class);
+        when(container.getContainerRealm()).thenReturn(containerRealm);
         // Configure mock RepositorySystem to resolve POM artifacts from the test reactor.
         // When a GAV matches a reactor project (registered via reactorPomFiles), the mock
         // returns the POM file. This allows buildEffectiveModels to resolve parent POMs
@@ -134,7 +144,60 @@ class ScalpelLifecycleParticipantTest {
                         mock(RemoteRepositoryManager.class),
                         new org.apache.maven.model.building.DefaultModelBuilderFactory().newInstance()),
                 new ReactorTrimmer(),
-                dependenciesResolver);
+                dependenciesResolver,
+                container);
+    }
+
+    // ─── context class loader ────────────────────────────────────────────────
+
+    @Test
+    void afterProjectsRead_analysesWithContainerRealmAsContextClassLoader() throws Exception {
+        Path root = tempDir.resolve("project");
+        List<MavenProject> allProjects = singleModuleReactor(root);
+        List<ClassLoader> seen = new ArrayList<>();
+        when(scalpelCore.detectChanges(any(), any(), any(), any())).thenAnswer(invocation -> {
+            seen.add(Thread.currentThread().getContextClassLoader());
+            return new ChangeDetectionResult(Set.of(), Map.of());
+        });
+        ClassLoader original = Thread.currentThread().getContextClassLoader();
+
+        participant.afterProjectsRead(createSimpleSession(root, allProjects, "trim"));
+
+        assertEquals(List.of(containerRealm), seen);
+        assertSame(original, Thread.currentThread().getContextClassLoader());
+    }
+
+    @Test
+    void afterProjectsRead_restoresContextClassLoaderWhenAnalysisFails() throws Exception {
+        Path root = tempDir.resolve("project");
+        List<MavenProject> allProjects = singleModuleReactor(root);
+        List<ClassLoader> seen = new ArrayList<>();
+        when(scalpelCore.detectChanges(any(), any(), any(), any())).thenAnswer(invocation -> {
+            seen.add(Thread.currentThread().getContextClassLoader());
+            throw new ScalpelException("Could not find merge base between origin/main and HEAD");
+        });
+        MavenSession session = createSimpleSession(root, allProjects, "trim");
+        session.getSystemProperties().setProperty("scalpel.failSafe", "false");
+        ClassLoader original = Thread.currentThread().getContextClassLoader();
+
+        assertThrows(MavenExecutionException.class, () -> participant.afterProjectsRead(session));
+
+        assertEquals(List.of(containerRealm), seen);
+        assertSame(original, Thread.currentThread().getContextClassLoader());
+    }
+
+    private List<MavenProject> singleModuleReactor(Path root) throws Exception {
+        Files.createDirectories(root);
+        String parentPom = simpleParentPom("module-a");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        setupEmptyDependencyResolution();
+        return List.of(parentProject, moduleA);
     }
 
     // ─── snapshotSystemProperties ────────────────────────────────────────────
