@@ -308,6 +308,95 @@ class PomChangeAnalyzerTest {
         assertEquals(Set.of("org.apache.maven.plugins:maven-compiler-plugin"), changed);
     }
 
+    // --- diffEffectiveManagedPluginConfigs unit tests ---
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_configChange_reported() {
+        // Same version, different config in allowed GA → must be reported
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom releaseOld = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
+        releaseOld.setValue("11");
+        configOld.addChild(releaseOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom releaseNew = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
+        releaseNew.setValue("17");
+        configNew.addChild(releaseNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-compiler-plugin");
+        newer.setVersion("3.13.0");
+        newer.setConfiguration(configNew);
+
+        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs);
+        assertEquals(Set.of("org.apache.maven.plugins:maven-compiler-plugin"), changed);
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_versionChange_skipped() {
+        // Different version in allowed GA → must NOT be reported (delegated to diffManagedPluginVersions)
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-compiler-plugin");
+        newer.setVersion("3.14.0");
+
+        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs);
+        assertTrue(changed.isEmpty(), "Version changes must be skipped (delegated to diffManagedPluginVersions)");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_notInAllowedGAs_skipped() {
+        // Config changed but GA not in allowedGAs → must NOT be reported (lifecycle-default plugin)
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom child = new org.codehaus.plexus.util.xml.Xpp3Dom("option");
+        child.setValue("true");
+        configNew.addChild(child);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-resources-plugin");
+        old.setVersion("3.3.1");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-resources-plugin");
+        newer.setVersion("3.3.1");
+        newer.setConfiguration(configNew);
+
+        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin"); // resources NOT included
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs);
+        assertTrue(changed.isEmpty(), "Plugins not in allowedGAs must be skipped");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_removal_ignored() {
+        // Plugin present in old but absent in new → must NOT be reported
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+
+        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(), allowedGAs);
+        assertTrue(changed.isEmpty(), "Removed plugins must not be reported by this method");
+    }
+
     // --- analyzeChanges integration tests (issue #228) ---
 
     @Test
