@@ -30,6 +30,7 @@ exec('git', 'branch', 'base')
 
 // Commit a bare root-level file alongside a module-a change (#229)
 new File(dir, 'settings.properties').text = 'timeout=30\n'
+new File(dir, 'module-a/src/main/java').mkdirs()
 new File(dir, 'module-a/src/main/java/Foo.java').text = 'class Foo {}\n'
 exec('git', 'add', '.')
 exec('git', 'commit', '-m', 'add settings.properties and change module-a')
