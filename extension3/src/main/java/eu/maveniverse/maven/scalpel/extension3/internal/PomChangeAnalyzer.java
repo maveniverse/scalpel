@@ -798,7 +798,8 @@ class PomChangeAnalyzer {
         // consulted, those GAs are missing and the config change goes undetected.
         Set<String> parentRawManagedPluginGAs = new LinkedHashSet<>();
         if (oldModel.getBuild() != null && oldModel.getBuild().getPluginManagement() != null) {
-            List<Plugin> oldManagedPlugins = oldModel.getBuild().getPluginManagement().getPlugins();
+            List<Plugin> oldManagedPlugins =
+                    oldModel.getBuild().getPluginManagement().getPlugins();
             if (oldManagedPlugins != null) {
                 for (Plugin p : oldManagedPlugins) {
                     parentRawManagedPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
@@ -806,7 +807,8 @@ class PomChangeAnalyzer {
             }
         }
         if (newModel.getBuild() != null && newModel.getBuild().getPluginManagement() != null) {
-            List<Plugin> newManagedPlugins = newModel.getBuild().getPluginManagement().getPlugins();
+            List<Plugin> newManagedPlugins =
+                    newModel.getBuild().getPluginManagement().getPlugins();
             if (newManagedPlugins != null) {
                 for (Plugin p : newManagedPlugins) {
                     parentRawManagedPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
@@ -1590,7 +1592,11 @@ class PomChangeAnalyzer {
         if (!Objects.equals(a.getName(), b.getName())) {
             return false;
         }
-        // Compare values, treating null and empty/whitespace-only as equivalent
+        // Compare values, treating null and empty/whitespace-only as equivalent.
+        // When base dirs are provided, normalize absolute-path values relative to
+        // their respective base dir before comparing — this suppresses false positives
+        // from path-anchored expressions (e.g. ${project.build.directory}) that resolve
+        // to different absolute prefixes in old (temp-dir) vs new (real-dir) models.
         String aVal = a.getValue() != null ? a.getValue().trim() : null;
         String bVal = b.getValue() != null ? b.getValue().trim() : null;
         if (aVal != null && aVal.isEmpty()) {
@@ -1600,7 +1606,12 @@ class PomChangeAnalyzer {
             bVal = null;
         }
         if (!Objects.equals(aVal, bVal)) {
-            return false;
+            // Give path normalization a chance before declaring inequality
+            String aNorm = normalizeBasePath(aVal, oldBase);
+            String bNorm = normalizeBasePath(bVal, newBase);
+            if (!Objects.equals(aNorm, bNorm)) {
+                return false;
+            }
         }
         // Compare attributes
         String[] aAttrs = a.getAttributeNames();
@@ -1613,12 +1624,12 @@ class PomChangeAnalyzer {
                 return false;
             }
         }
-        // Compare children recursively
+        // Compare children recursively — propagate base dirs for nested path-anchored values
         if (a.getChildCount() != b.getChildCount()) {
             return false;
         }
         for (int i = 0; i < a.getChildCount(); i++) {
-            if (!equalXpp3Dom(a.getChild(i), b.getChild(i))) {
+            if (!equalXpp3Dom(a.getChild(i), b.getChild(i), oldBase, newBase)) {
                 return false;
             }
         }
