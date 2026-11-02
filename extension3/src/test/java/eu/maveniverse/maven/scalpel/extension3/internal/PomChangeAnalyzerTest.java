@@ -513,21 +513,23 @@ class PomChangeAnalyzerTest {
     @Test
     void diffEffectiveManagedPluginConfigs_siblingPathNotNormalized() {
         // A value containing a directory that merely starts with the same prefix as the base
-        // (e.g. "<base>-old") must still be detected as a genuine change — the sibling path
+        // (e.g. "<base>-x") must still be detected as a genuine change — the sibling path
         // is different from the base-directory path and must not be erased by normalization.
         Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
         Path newBase = Path.of("/real/project/child");
 
         org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
         org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
-        // Value uses a sibling directory ("<base>-old") — NOT rooted at oldBase itself
-        argLineOld.setValue("-Dtmp=/tmp/scalpel-old-poms-test/child-old/target");
+        // Value uses a sibling directory ("<base>-x") — NOT rooted at oldBase itself; same suffix on both
+        // sides ensures the test fails if normalization incorrectly erases the sibling path
+        argLineOld.setValue("-Dtmp=/tmp/scalpel-old-poms-test/child-x/target");
         configOld.addChild(argLineOld);
 
         org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
         org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
-        // New value uses a different sibling — this IS a genuine change
-        argLineNew.setValue("-Dtmp=/real/project/child-new/target");
+        // New value uses the same sibling suffix — if normalization wrongly strips the sibling path, both
+        // values would compare equal and the test would fail (catching the regression)
+        argLineNew.setValue("-Dtmp=/real/project/child-x/target");
         configNew.addChild(argLineNew);
 
         org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
