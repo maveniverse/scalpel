@@ -2107,6 +2107,62 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void analyzeChanges_leafModulePropertyAndTestDepChange_isFullyAffected() throws Exception {
+        // When a leaf POM changes a property in addition to a test-scoped dep,
+        // the module must be fully affected (not test-only): the property change may
+        // affect compile-time dependencies via version interpolation (#220).
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+        MavenProject moduleA = projects.get(1);
+
+        String oldModuleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <properties><some.lib.version>1.0</some.lib.version></properties>
+                  <dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>test-helper</artifactId><version>2.0</version><scope>test</scope>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+
+        // New POM: bumped the property (potentially affects compile deps) AND changed a test dep
+        String newModuleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <properties><some.lib.version>2.0</some.lib.version></properties>
+                  <dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>test-helper</artifactId><version>3.0</version><scope>test</scope>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+
+        writePom(root.resolve("module-a/pom.xml"), newModuleAPom);
+        moduleA.setOriginalModel(parseModel(newModuleAPom));
+
+        Set<String> changedPoms = Set.of("module-a/pom.xml");
+        Map<String, byte[]> oldPoms = Map.of("module-a/pom.xml", oldModuleAPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a must be fully affected: property change disqualifies test-only classification");
+        assertFalse(
+                result.getTestOnlyAffectedProjects().contains(moduleA),
+                "module-a must NOT be in test-only affected when a property also changed");
+    }
+
+    @Test
     void analyzeChanges_leafAndParentPomBothChange_leafPromotedToAffected() throws Exception {
         // When both a leaf module's POM and its parent's POM change at the same time,
         // the leaf should be promoted from testOnlyAffected to affected.
@@ -2196,13 +2252,15 @@ class PomChangeAnalyzerTest {
         PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
 
         // The parent's effective dep change (inherited test dep) means children see effective model changes.
-        // PomChangeAnalyzer.Result may have module-a in both sets — it's the consumer
-        // (ScalpelLifecycleParticipant) that enforces disjointness via removeAll(affectedByPom).
-        // At the PomChangeAnalyzer level, module-a appears in affected because the parent's
-        // child-propagation loop detects an effective model change.
+        // The parent-POM child-propagation loop detects the effective model change and adds the leaf
+        // to ctx.affected — and must also remove it from ctx.testOnlyAffected to enforce the invariant
+        // that a module cannot appear in both sets simultaneously.
         assertTrue(
                 result.getAffectedProjects().contains(moduleA),
                 "module-a should be in affected: parent's effective model change propagates to children");
+        assertFalse(
+                result.getTestOnlyAffectedProjects().contains(moduleA),
+                "module-a must NOT be in testOnlyAffected when it is already in affected (invariant)");
     }
 
     @Test

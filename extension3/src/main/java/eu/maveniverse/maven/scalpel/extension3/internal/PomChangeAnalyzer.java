@@ -702,7 +702,7 @@ class PomChangeAnalyzer {
 
         try {
             analyzeParentPomChange(project, oldPomBytes, oldEffectiveModel, dependents, ctx);
-        } catch (Exception e) {
+        } catch (XmlPullParserException | IOException e) {
             // If we can't parse the old POM, be conservative and mark all dependents
             logger.warn(
                     "Cannot parse old POM for {}, marking all dependents as affected: {}",
@@ -892,6 +892,11 @@ class PomChangeAnalyzer {
                     logger.debug("Child {} is DIRECTLY AFFECTED by parent {} change", key(child), key(parentProject));
                 }
                 ctx.affected.add(child);
+                // A fully affected child overrides any earlier test-only classification
+                // (e.g. if the child's own leaf POM was processed first and classified it
+                // as test-only, the parent-triggered promotion must win).
+                // Enforce invariant: a module cannot be in both affected and testOnlyAffected.
+                ctx.testOnlyAffected.remove(child);
             } else {
                 if (logger.isDebugEnabled()) {
                     logger.debug("Child {} is NOT affected by parent {} change", key(child), key(parentProject));
@@ -1553,6 +1558,13 @@ class PomChangeAnalyzer {
 
             // Any non-dep change ⇒ not test-only
             if (!Objects.equals(oldModel.getPackaging(), newModel.getPackaging())) {
+                return false;
+            }
+            // Property changes may affect compile-scoped dependencies or other build inputs
+            // (e.g. a version property used by an unchanged compile dep). Any property change
+            // disqualifies the leaf from the test-only fast path (#220).
+            if (!diffProperties(oldModel.getProperties(), newModel.getProperties())
+                    .isEmpty()) {
                 return false;
             }
             if (!equalPluginLists(getPlugins(oldModel), getPlugins(newModel))) {
