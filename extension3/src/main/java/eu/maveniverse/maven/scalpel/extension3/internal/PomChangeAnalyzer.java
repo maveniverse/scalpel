@@ -39,6 +39,7 @@ import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
 import org.apache.maven.model.Dependency;
+import org.apache.maven.model.Exclusion;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Parent;
 import org.apache.maven.model.Plugin;
@@ -1407,7 +1408,25 @@ class PomChangeAnalyzer {
                 && Objects.equals(normalizeScope(a.getScope()), normalizeScope(b.getScope()))
                 && Objects.equals(normalizeType(a.getType()), normalizeType(b.getType()))
                 && Objects.equals(a.getClassifier(), b.getClassifier())
-                && Objects.equals(String.valueOf(a.isOptional()), String.valueOf(b.isOptional()));
+                && Objects.equals(String.valueOf(a.isOptional()), String.valueOf(b.isOptional()))
+                && equalExclusions(a.getExclusions(), b.getExclusions());
+    }
+
+    private boolean equalExclusions(List<Exclusion> a, List<Exclusion> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        // Compare as unordered sets keyed by GA
+        Map<String, Boolean> setA = new LinkedHashMap<>();
+        for (Exclusion e : a) {
+            setA.put(e.getGroupId() + ":" + e.getArtifactId(), Boolean.TRUE);
+        }
+        for (Exclusion e : b) {
+            if (setA.remove(e.getGroupId() + ":" + e.getArtifactId()) == null) {
+                return false;
+            }
+        }
+        return setA.isEmpty();
     }
 
     /**
@@ -1572,11 +1591,34 @@ class PomChangeAnalyzer {
             if (!Objects.equals(oldModel.getPackaging(), newModel.getPackaging())) {
                 return false;
             }
+            // Parent declaration change (different GAV or relativePath) affects inherited
+            // properties, managed deps, and plugin management — always non-test.
+            Parent oldParent = oldModel.getParent();
+            Parent newParent = newModel.getParent();
+            if (!Objects.equals(
+                            oldParent == null ? null : oldParent.getGroupId(),
+                            newParent == null ? null : newParent.getGroupId())
+                    || !Objects.equals(
+                            oldParent == null ? null : oldParent.getArtifactId(),
+                            newParent == null ? null : newParent.getArtifactId())
+                    || !Objects.equals(
+                            oldParent == null ? null : oldParent.getVersion(),
+                            newParent == null ? null : newParent.getVersion())) {
+                return false;
+            }
             // Property changes may affect compile-scoped dependencies or other build inputs
             // (e.g. a version property used by an unchanged compile dep). Any property change
             // disqualifies the leaf from the test-only fast path (#220).
             if (!diffProperties(oldModel.getProperties(), newModel.getProperties())
                     .isEmpty()) {
+                return false;
+            }
+            // Managed dependency/plugin changes can affect the effective compile classpath
+            // of this module's dependents even when no direct dep changed scope.
+            if (!equalDependencyLists(getManagedDependencies(oldModel), getManagedDependencies(newModel))) {
+                return false;
+            }
+            if (!equalPluginLists(getManagedPlugins(oldModel), getManagedPlugins(newModel))) {
                 return false;
             }
             if (!equalPluginLists(getPlugins(oldModel), getPlugins(newModel))) {
