@@ -1945,6 +1945,165 @@ class PomChangeAnalyzerTest {
         assertEquals(1, affected.size());
     }
 
+    // --- test-only POM changes (#220): only test-scoped direct deps changed ---
+
+    @Test
+    void classifyDirectDependencyChanges_noChange_returnsNone() {
+        List<Dependency> deps = List.of(makeDep("com.example", "lib", "1.0", "compile"));
+        assertEquals(PomChangeAnalyzer.DependencyChangeKind.NONE, analyzer.classifyDirectDependencyChanges(deps, deps));
+    }
+
+    @Test
+    void classifyDirectDependencyChanges_testScopedAddition_returnsTestOnly() {
+        List<Dependency> oldDeps = List.of(makeDep("com.example", "lib", "1.0", "compile"));
+        List<Dependency> newDeps = List.of(
+                makeDep("com.example", "lib", "1.0", "compile"), makeDep("com.example", "test-helper", "2.0", "test"));
+        assertEquals(
+                PomChangeAnalyzer.DependencyChangeKind.TEST_ONLY,
+                analyzer.classifyDirectDependencyChanges(oldDeps, newDeps));
+    }
+
+    @Test
+    void classifyDirectDependencyChanges_testScopedVersionChange_returnsTestOnly() {
+        List<Dependency> oldDeps = List.of(makeDep("com.example", "test-helper", "1.0", "test"));
+        List<Dependency> newDeps = List.of(makeDep("com.example", "test-helper", "2.0", "test"));
+        assertEquals(
+                PomChangeAnalyzer.DependencyChangeKind.TEST_ONLY,
+                analyzer.classifyDirectDependencyChanges(oldDeps, newDeps));
+    }
+
+    @Test
+    void classifyDirectDependencyChanges_compileScopedVersionChange_returnsNonTest() {
+        List<Dependency> oldDeps = List.of(makeDep("com.example", "lib", "1.0", "compile"));
+        List<Dependency> newDeps = List.of(makeDep("com.example", "lib", "2.0", "compile"));
+        assertEquals(
+                PomChangeAnalyzer.DependencyChangeKind.NON_TEST,
+                analyzer.classifyDirectDependencyChanges(oldDeps, newDeps));
+    }
+
+    @Test
+    void classifyDirectDependencyChanges_mixedChanges_returnsNonTest() {
+        // Both a test dep and a compile dep changed — must return NON_TEST
+        List<Dependency> oldDeps = List.of(
+                makeDep("com.example", "lib", "1.0", "compile"), makeDep("com.example", "test-helper", "1.0", "test"));
+        List<Dependency> newDeps = List.of(
+                makeDep("com.example", "lib", "2.0", "compile"), makeDep("com.example", "test-helper", "2.0", "test"));
+        assertEquals(
+                PomChangeAnalyzer.DependencyChangeKind.NON_TEST,
+                analyzer.classifyDirectDependencyChanges(oldDeps, newDeps));
+    }
+
+    @Test
+    void analyzeChanges_leafModuleTestOnlyDepChange_isTestOnlyAffected() throws Exception {
+        // When a leaf module adds/changes only test-scoped dependencies, it should be
+        // classified as test-only (not fully) affected so compile-time downstreams are
+        // not pulled into the build set (#220).
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+        MavenProject moduleA = projects.get(1);
+
+        // Old module-a POM: no test dep
+        String oldModuleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        // New module-a POM (current): added a test-scoped dep
+        String newModuleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>junit</groupId><artifactId>junit</artifactId><version>4.13</version><scope>test</scope>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+
+        // Update module-a on disk and in the model to reflect the new POM
+        writePom(root.resolve("module-a/pom.xml"), newModuleAPom);
+        moduleA.setOriginalModel(parseModel(newModuleAPom));
+
+        Set<String> changedPoms = Set.of("module-a/pom.xml");
+        Map<String, byte[]> oldPoms = Map.of("module-a/pom.xml", oldModuleAPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(result.getAffectedProjects().isEmpty(), "No module should be in the full affected set");
+        assertTrue(
+                result.getTestOnlyAffectedProjects().contains(moduleA),
+                "module-a should be in the test-only affected set");
+    }
+
+    @Test
+    void analyzeChanges_leafModuleNonTestDepChange_isFullyAffected() throws Exception {
+        // When a leaf module changes a compile-scoped dep, it must be fully affected
+        // (not test-only) so compile-time downstreams are included.
+        Path root = setupReactorRoot();
+        List<MavenProject> projects = createSimpleReactor(root);
+        MavenProject moduleA = projects.get(1);
+
+        String oldModuleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>some-lib</artifactId><version>1.0</version>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+
+        String newModuleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>some-lib</artifactId><version>2.0</version>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+
+        writePom(root.resolve("module-a/pom.xml"), newModuleAPom);
+        moduleA.setOriginalModel(parseModel(newModuleAPom));
+
+        Set<String> changedPoms = Set.of("module-a/pom.xml");
+        Map<String, byte[]> oldPoms = Map.of("module-a/pom.xml", oldModuleAPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a should be in the full affected set for a compile-scoped dep change");
+        assertTrue(
+                result.getTestOnlyAffectedProjects().isEmpty(),
+                "Test-only affected set should be empty for a compile-scoped dep change");
+    }
+
+    /** Creates a minimal {@link Dependency} for use in unit tests. */
+    private static Dependency makeDep(String groupId, String artifactId, String version, String scope) {
+        Dependency dep = new Dependency();
+        dep.setGroupId(groupId);
+        dep.setArtifactId(artifactId);
+        dep.setVersion(version);
+        dep.setScope(scope);
+        return dep;
+    }
+
     @Test
     void analyzeChanges_directPluginChangeAffectsParent() throws Exception {
         Path root = setupReactorRoot();

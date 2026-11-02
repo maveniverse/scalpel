@@ -201,6 +201,23 @@ import org.slf4j.LoggerFactory;
 @Named
 class PomChangeAnalyzer {
 
+    /**
+     * Categorises a change to a module's direct {@code <dependencies>} list.
+     * <p>
+     * {@code NONE}: no differences (lists are equal).
+     * <br>
+     * {@code TEST_ONLY}: all differences are test-scoped (scope = "test") — the module must
+     * rerun its own tests but compile-time downstreams need not rebuild (#220).
+     * <br>
+     * {@code NON_TEST}: at least one difference involves a non-test dependency — a full rebuild
+     * of the module and its downstream is required.
+     */
+    enum DependencyChangeKind {
+        NONE,
+        TEST_ONLY,
+        NON_TEST
+    }
+
     private final Logger logger = LoggerFactory.getLogger(getClass());
     private final RepositorySystem repositorySystem;
     private final RemoteRepositoryManager remoteRepositoryManager;
@@ -224,6 +241,7 @@ class PomChangeAnalyzer {
      */
     static class Result {
         private final Set<MavenProject> affectedProjects;
+        private final Set<MavenProject> testOnlyAffectedProjects;
         private final Map<String, Model> oldEffectiveModels;
         private final Map<String, Model> newEffectiveModels;
         private final Set<String> changedProperties;
@@ -236,11 +254,20 @@ class PomChangeAnalyzer {
                 Map<String, Model> oldEffectiveModels,
                 Map<String, Model> newEffectiveModels,
                 Set<String> changedProperties) {
-            this(affectedProjects, oldEffectiveModels, newEffectiveModels, changedProperties, Map.of(), List.of(), 0L);
+            this(
+                    affectedProjects,
+                    Set.of(),
+                    oldEffectiveModels,
+                    newEffectiveModels,
+                    changedProperties,
+                    Map.of(),
+                    List.of(),
+                    0L);
         }
 
         Result(
                 Set<MavenProject> affectedProjects,
+                Set<MavenProject> testOnlyAffectedProjects,
                 Map<String, Model> oldEffectiveModels,
                 Map<String, Model> newEffectiveModels,
                 Set<String> changedProperties,
@@ -248,6 +275,7 @@ class PomChangeAnalyzer {
                 List<String> unmatchedPomPaths,
                 long resourcesVisited) {
             this.affectedProjects = affectedProjects;
+            this.testOnlyAffectedProjects = testOnlyAffectedProjects;
             this.oldEffectiveModels = oldEffectiveModels;
             this.newEffectiveModels = newEffectiveModels;
             this.changedProperties = changedProperties;
@@ -258,6 +286,16 @@ class PomChangeAnalyzer {
 
         Set<MavenProject> getAffectedProjects() {
             return affectedProjects;
+        }
+
+        /**
+         * Modules whose POM changed only in test-scoped direct dependencies.
+         * These modules need to rebuild their own tests but should not cause
+         * compile-time downstream modules to be included in the build set
+         * (only test-jar consumers are propagated, just like source test-only changes).
+         */
+        Set<MavenProject> getTestOnlyAffectedProjects() {
+            return testOnlyAffectedProjects;
         }
 
         Map<String, Model> getOldEffectiveModels() {
@@ -312,6 +350,12 @@ class PomChangeAnalyzer {
 
         // Accumulators — populated during analysis
         final Set<MavenProject> affected = new LinkedHashSet<>();
+        /**
+         * Modules whose POM changed only in test-scoped direct dependencies.
+         * A module is only added here if it is NOT in {@code affected}.
+         */
+        final Set<MavenProject> testOnlyAffected = new LinkedHashSet<>();
+
         final Map<MavenProject, Set<String>> evidence = new LinkedHashMap<>();
         final Set<String> allChangedProperties = new LinkedHashSet<>();
         final List<String> unmatchedPomPaths = new ArrayList<>();
@@ -549,11 +593,13 @@ class PomChangeAnalyzer {
                     ctx.unmatchedPomPaths);
         }
         logger.debug(
-                "POM change analysis complete: {} affected modules, changedProperties={}",
+                "POM change analysis complete: {} affected modules, {} test-only affected, changedProperties={}",
                 ctx.affected.size(),
+                ctx.testOnlyAffected.size(),
                 ctx.allChangedProperties);
         return new Result(
                 ctx.affected,
+                ctx.testOnlyAffected,
                 ctx.oldEffectiveModels,
                 ctx.newEffectiveModels,
                 ctx.allChangedProperties,
@@ -579,9 +625,17 @@ class PomChangeAnalyzer {
         List<MavenProject> dependents = collectDependents(project, ctx.parents, ctx.bomImporters, ctx.descendantMap);
 
         if (dependents.isEmpty()) {
-            // Leaf module: its own POM changed, mark it as affected
-            logger.debug("Leaf module POM changed: {}", key(project));
-            ctx.affected.add(project);
+            // Leaf module: its own POM changed. If only test-scoped direct dependencies
+            // changed, treat the module as test-only affected so that compile-time
+            // downstream modules are not pulled into the build set (#220).
+            byte[] oldPomBytes = ctx.oldPomContents.get(changedPomPath);
+            if (oldPomBytes != null && isOnlyTestScopedDirectDepChange(oldPomBytes, project)) {
+                logger.debug("Leaf module POM changed (test-only direct dep change): {}", key(project));
+                ctx.testOnlyAffected.add(project);
+            } else {
+                logger.debug("Leaf module POM changed: {}", key(project));
+                ctx.affected.add(project);
+            }
             if (ctx.explain) {
                 addEvidence(ctx.evidence, project, "own pom " + changedPomPath + " changed");
             }
@@ -679,6 +733,9 @@ class PomChangeAnalyzer {
         Model newModel = parentProject.getOriginalModel();
 
         boolean parentSelfAffected = false;
+        // Tracks whether all direct dep changes are test-scoped; reset to false when
+        // any non-test change is detected (parentSelfAffected takes priority then).
+        boolean parentTestOnlyDepsChanged = false;
 
         // Check packaging
         if (!Objects.equals(oldModel.getPackaging(), newModel.getPackaging())) {
@@ -686,10 +743,17 @@ class PomChangeAnalyzer {
             parentSelfAffected = true;
         }
 
-        // Check direct dependencies (not managed)
-        if (!equalDependencyLists(oldModel.getDependencies(), newModel.getDependencies())) {
-            logger.debug("Direct dependencies changed in {}", key(parentProject));
+        // Check direct dependencies (not managed).
+        // Distinguish test-only changes (test-scoped deps only) from non-test changes
+        // so callers can treat the module as test-only affected when safe to do so (#220).
+        DependencyChangeKind depChangeKind =
+                classifyDirectDependencyChanges(oldModel.getDependencies(), newModel.getDependencies());
+        if (depChangeKind == DependencyChangeKind.NON_TEST) {
+            logger.debug("Direct dependencies changed (non-test) in {}", key(parentProject));
             parentSelfAffected = true;
+        } else if (depChangeKind == DependencyChangeKind.TEST_ONLY) {
+            logger.debug("Direct dependencies changed (test-only) in {}", key(parentProject));
+            parentTestOnlyDepsChanged = true;
         }
 
         // Check direct plugins (not managed)
@@ -757,11 +821,23 @@ class PomChangeAnalyzer {
 
         if (parentSelfAffected) {
             ctx.affected.add(parentProject);
+            // A fully affected module overrides any earlier test-only classification
+            ctx.testOnlyAffected.remove(parentProject);
             if (ctx.explain) {
                 addEvidence(
                         ctx.evidence,
                         parentProject,
                         "pom " + parentProject.getFile().getName() + " direct content changed");
+            }
+        } else if (parentTestOnlyDepsChanged && !ctx.affected.contains(parentProject)) {
+            // Only test-scoped direct deps changed and nothing else triggered a full rebuild:
+            // the module itself needs to rerun tests but compile-time downstreams are not affected.
+            ctx.testOnlyAffected.add(parentProject);
+            if (ctx.explain) {
+                addEvidence(
+                        ctx.evidence,
+                        parentProject,
+                        "pom " + parentProject.getFile().getName() + " test-only direct deps changed");
             }
         }
 
@@ -1415,6 +1491,100 @@ class PomChangeAnalyzer {
                 && Objects.equals(a.getPhase(), b.getPhase())
                 && Objects.equals(a.getGoals(), b.getGoals())
                 && equalConfiguration(a.getConfiguration(), b.getConfiguration());
+    }
+
+    /**
+     * Classifies a change to a module's direct {@code <dependencies>} list.
+     *
+     * @return {@link DependencyChangeKind#NONE} if the lists are identical,
+     *         {@link DependencyChangeKind#TEST_ONLY} if every difference is a test-scoped
+     *         dependency, or {@link DependencyChangeKind#NON_TEST} if any non-test dependency
+     *         changed (added, removed, or modified).
+     */
+    DependencyChangeKind classifyDirectDependencyChanges(List<Dependency> oldDeps, List<Dependency> newDeps) {
+        Map<String, Dependency> oldMap = new LinkedHashMap<>();
+        for (Dependency d : oldDeps) {
+            oldMap.put(dependencyKey(d), d);
+        }
+        Map<String, Dependency> newMap = new LinkedHashMap<>();
+        for (Dependency d : newDeps) {
+            newMap.put(dependencyKey(d), d);
+        }
+
+        boolean anyTestChange = false;
+
+        // Check for modified and removed deps
+        for (Map.Entry<String, Dependency> e : oldMap.entrySet()) {
+            Dependency newDep = newMap.get(e.getKey());
+            if (newDep == null || !equalDependency(e.getValue(), newDep)) {
+                // Changed or removed
+                if (!isTestScoped(e.getValue()) || (newDep != null && !isTestScoped(newDep))) {
+                    return DependencyChangeKind.NON_TEST;
+                }
+                anyTestChange = true;
+            }
+        }
+        // Check for added deps
+        for (Map.Entry<String, Dependency> e : newMap.entrySet()) {
+            if (!oldMap.containsKey(e.getKey())) {
+                if (!isTestScoped(e.getValue())) {
+                    return DependencyChangeKind.NON_TEST;
+                }
+                anyTestChange = true;
+            }
+        }
+
+        return anyTestChange ? DependencyChangeKind.TEST_ONLY : DependencyChangeKind.NONE;
+    }
+
+    /**
+     * Returns {@code true} if the only differences between the old POM and the current project's
+     * raw model are test-scoped direct dependencies (i.e. no non-test dep changes, no plugin
+     * changes, no packaging or source directory changes, no profile changes, etc.).
+     *
+     * <p>When {@code true}, callers may treat the module as test-only affected: it still needs
+     * to run its own tests, but compile-time downstream modules need not rebuild (#220).
+     */
+    private boolean isOnlyTestScopedDirectDepChange(byte[] oldPomBytes, MavenProject project) {
+        try {
+            MavenXpp3Reader reader = new MavenXpp3Reader();
+            Model oldModel = reader.read(new ByteArrayInputStream(oldPomBytes));
+            Model newModel = project.getOriginalModel();
+
+            // Any non-dep change ⇒ not test-only
+            if (!Objects.equals(oldModel.getPackaging(), newModel.getPackaging())) {
+                return false;
+            }
+            if (!equalPluginLists(getPlugins(oldModel), getPlugins(newModel))) {
+                return false;
+            }
+            if (!equalSourceDirectories(oldModel, newModel)) {
+                return false;
+            }
+            if (!equalRepositoryLists(safeRepositories(oldModel), safeRepositories(newModel))) {
+                return false;
+            }
+            if (!equalRepositoryLists(safePluginRepositories(oldModel), safePluginRepositories(newModel))) {
+                return false;
+            }
+            // Profile changes count as non-test
+            if (analyzeProfileChanges(oldModel, newModel, getActiveProfileIds(project))) {
+                return false;
+            }
+            // All dep changes must be test-scoped
+            DependencyChangeKind kind =
+                    classifyDirectDependencyChanges(oldModel.getDependencies(), newModel.getDependencies());
+            return kind == DependencyChangeKind.TEST_ONLY;
+        } catch (Exception e) {
+            // Cannot parse: be conservative and treat as non-test
+            logger.debug("Cannot determine test-only scope for {}: {}", key(project), e.getMessage());
+            return false;
+        }
+    }
+
+    /** Returns {@code true} if the dependency has {@code test} scope (after normalization). */
+    private static boolean isTestScoped(Dependency dep) {
+        return "test".equals(normalizeScope(dep.getScope()));
     }
 
     private boolean equalDependencyLists(List<Dependency> a, List<Dependency> b) {

@@ -338,6 +338,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
 
             // Analyze POM changes
             Set<MavenProject> affectedByPom = new LinkedHashSet<>();
+            Set<MavenProject> testOnlyByPom = new LinkedHashSet<>();
             Map<String, Model> oldEffectiveModels = Map.of();
             Map<String, Model> newEffectiveModels = Map.of();
             Set<String> changedProperties = new LinkedHashSet<>();
@@ -366,6 +367,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         timings.stop(Timings.PHASE_POM_ANALYSIS);
                     }
                     affectedByPom = pomResult.getAffectedProjects();
+                    testOnlyByPom = new LinkedHashSet<>(pomResult.getTestOnlyAffectedProjects());
                     oldEffectiveModels = pomResult.getOldEffectiveModels();
                     newEffectiveModels = pomResult.getNewEffectiveModels();
                     changedProperties = pomResult.getChangedProperties();
@@ -411,9 +413,15 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<MavenProject> directlyAffected = new LinkedHashSet<>();
             directlyAffected.addAll(affectedBySource);
             directlyAffected.addAll(affectedByPom);
+            // POM test-only modules must also appear in directlyAffected so they are
+            // included in the build set (just with restricted downstream propagation).
+            directlyAffected.addAll(testOnlyByPom);
 
-            // Compute test-only modules
+            // Compute test-only modules: source test-only changes + POM test-only changes (#220).
+            // POM test-only: modules whose POM changed only in test-scoped direct dependencies —
+            // they need to rebuild their own tests but must not pull in compile-time downstreams.
             Set<MavenProject> testOnlyModules = new LinkedHashSet<>(sourceResult.getTestOnlyAffected());
+            testOnlyModules.addAll(testOnlyByPom);
             testOnlyModules.removeAll(affectedByPom);
 
             // Force-include modules matching forceBuildModules patterns
