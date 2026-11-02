@@ -630,11 +630,22 @@ class PomChangeAnalyzer {
             // downstream modules are not pulled into the build set (#220).
             byte[] oldPomBytes = ctx.oldPomContents.get(changedPomPath);
             if (oldPomBytes != null && isOnlyTestScopedDirectDepChange(oldPomBytes, project)) {
-                logger.debug("Leaf module POM changed (test-only direct dep change): {}", key(project));
-                ctx.testOnlyAffected.add(project);
+                if (ctx.affected.contains(project)) {
+                    // Already promoted to fully-affected (e.g. by a parent POM that was
+                    // processed first and detected effective-model changes in this child).
+                    // Honour the stricter classification; do NOT downgrade to test-only.
+                    logger.debug(
+                            "Leaf module POM changed (test-only direct dep change), but already in affected — keeping: {}",
+                            key(project));
+                } else {
+                    logger.debug("Leaf module POM changed (test-only direct dep change): {}", key(project));
+                    ctx.testOnlyAffected.add(project);
+                }
             } else {
                 logger.debug("Leaf module POM changed: {}", key(project));
                 ctx.affected.add(project);
+                // Enforce invariant: a module cannot be in both affected and testOnlyAffected.
+                ctx.testOnlyAffected.remove(project);
             }
             if (ctx.explain) {
                 addEvidence(ctx.evidence, project, "own pom " + changedPomPath + " changed");
