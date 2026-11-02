@@ -926,16 +926,13 @@ class PomChangeAnalyzer {
             }
         }
 
-        // Compare effective plugin VERSIONS only (not configuration/executions).
-        // Configuration may differ due to inherited property interpolation changes, but
-        // plugin configuration changes are already covered by the POM diff (the parent
-        // POM is in the changeset).  Only version changes from managed plugin updates
-        // indicate a real build-input change for the child.
-        // However, for plugins that are ONLY in <pluginManagement> (not yet bound to the
-        // child's lifecycle), a version change does not appear in getEffectivePlugins() —
-        // those are caught separately via diffEffectiveManagedPluginConfigs() below.
-        Set<String> changedPlugins = diffManagedPluginVersions(
-                getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
+        // Compare effective bound plugins (those actually bound to the child's lifecycle):
+        // version, configuration, and execution changes all indicate a real build-input change.
+        // Plugins that are ONLY in <pluginManagement> (not yet bound to the child's lifecycle)
+        // do not appear in getEffectivePlugins() — those are caught separately via
+        // diffEffectiveManagedPluginConfigs() below.
+        Set<String> changedPlugins =
+                diffEffectivePlugins(getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
         Set<String> changedManagedPluginConfigs = diffEffectiveManagedPluginConfigs(
                 getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective), parentRawManagedPluginGAs);
         Set<String> allChangedPlugins = new LinkedHashSet<>(changedPlugins);
@@ -1371,7 +1368,7 @@ class PomChangeAnalyzer {
         // parent's raw <pluginManagement>.  This avoids false positives from lifecycle-default
         // plugins that may differ between old (temp-dir build) and new (real-path build) models.
         // Skip plugins where the version changed — those are caught by diffEffectivePlugins()
-        // on the child's effective <plugins> list (which only includes actually-used plugins,
+        // on the child's effective <plugins> list (which covers only bound, actually-used plugins,
         // preserving the precision guarantee from issue #131).  This path only needs to catch
         // configuration/execution changes to plugins whose version is unchanged.
         for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
@@ -1384,7 +1381,7 @@ class PomChangeAnalyzer {
                 continue; // removal — not handled here
             }
             if (!Objects.equals(e.getValue().getVersion(), newPlugin.getVersion())) {
-                continue; // version changed — handled by diffEffectivePlugins() on effective <plugins>
+                continue; // version changed — handled by diffEffectivePlugins() on child's effective <plugins>
             }
             if (!equalPlugin(e.getValue(), newPlugin)) {
                 changed.add(ga);
