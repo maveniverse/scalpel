@@ -29,11 +29,14 @@ exec('git', 'add', '.')
 exec('git', 'commit', '-m', 'initial')
 exec('git', 'branch', 'base')
 
-// A repo-ROOT file maps to no module at all: the root aggregator stopped catching
-// repo-root files in #66, so the analysis completes with nothing affected.
-new File(dir, 'notes.md').text = 'root-level note owned by no module'
+// A file under docs/ has a directory separator so it is NOT treated as a bare
+// root-level file — it maps to no module and the analysis completes with nothing affected.
+// Using a path-containing file here ensures we exercise the "No modules affected" exit,
+// not the "Full build triggered by unattributable root-level file" exit (#229).
+new File(dir, 'docs').mkdirs()
+new File(dir, 'docs/notes.md').text = 'documentation note owned by no module'
 exec('git', 'add', '.')
-exec('git', 'commit', '-m', 'root-level file change')
+exec('git', 'commit', '-m', 'add docs/notes.md — no module affected')
 
 new File(dir, 'target').mkdirs()
 new File(dir, 'target/scalpel-shadow.json').text = '{"stale": "previous-run-measurement"}'

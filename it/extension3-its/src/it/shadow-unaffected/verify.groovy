@@ -10,9 +10,9 @@ assert buildLog.exists()
 String log = buildLog.text
 
 assert log.contains('mode=shadow')
-// Since notes.md is a bare root-level file not owned by any module (#229), Scalpel triggers
-// a full build.  The shadow document is still overwritten with a skipped/non-measurement status.
-assert log.contains('Full build triggered by unattributable root-level file') || log.contains('No modules affected by changes')
+// docs/notes.md has a directory separator so it is NOT treated as a bare root-level file (#229).
+// The analysis completes with no modules affected; the passive branch writes a skipped report.
+assert log.contains('No modules affected by changes')
 assert log.contains('BUILD SUCCESS')
 
 // The analysis completed but nothing was measured; the stale document from a previous run
