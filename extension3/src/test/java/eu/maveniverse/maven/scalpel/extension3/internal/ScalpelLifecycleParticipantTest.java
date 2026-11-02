@@ -4420,6 +4420,53 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void unmappedRootFile_reportMode_writesFullBuildReport() throws Exception {
+        // Regression test for #229: in report/shadow mode (passiveRun=true), a bare root-level
+        // unmapped file must cause writeFullBuildReport to be called, producing a report JSON
+        // with fullBuildTriggered=true and the triggering file(s) recorded.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // A bare root-level file (no directory component) that does not belong to any module
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("settings.properties");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "report");
+        // Override default fullBuildTriggers (.mvn/**) so the unmapped-file path is exercised
+        session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", "");
+
+        participant.afterProjectsRead(session);
+
+        // In report mode (passiveRun=true), writeFullBuildReport must have produced a report JSON
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "report mode must write a full-build report for unmapped root file");
+        String json = Files.readString(reportFile);
+        assertTrue(
+                json.contains("\"fullBuildTriggered\": true"),
+                "report must record fullBuildTriggered=true for unmapped root file: " + json);
+        assertTrue(json.contains("settings.properties"), "report must record the triggering file name: " + json);
+    }
+
+    @Test
     void impactedLog_writesAffectedModulePaths() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
