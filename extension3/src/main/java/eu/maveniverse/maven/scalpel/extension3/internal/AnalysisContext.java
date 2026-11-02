@@ -26,6 +26,7 @@ final class AnalysisContext {
     final Set<MavenProject> affectedBySource;
     final Set<MavenProject> testOnlyBySource;
     final Set<MavenProject> affectedByPom;
+    final Set<MavenProject> testOnlyByPom;
     final Set<MavenProject> forceIncluded;
     final Map<MavenProject, List<String>> transitivelyAffected;
     final Map<MavenProject, List<String>> evidence;
@@ -53,6 +54,7 @@ final class AnalysisContext {
         this.affectedBySource = builder.affectedBySource;
         this.testOnlyBySource = builder.testOnlyBySource;
         this.affectedByPom = builder.affectedByPom;
+        this.testOnlyByPom = builder.testOnlyByPom;
         this.forceIncluded = builder.forceIncluded;
         this.transitivelyAffected = builder.transitivelyAffected;
         this.evidence = builder.evidence;
@@ -105,6 +107,7 @@ final class AnalysisContext {
         private Set<MavenProject> affectedBySource = Set.of();
         private Set<MavenProject> testOnlyBySource = Set.of();
         private Set<MavenProject> affectedByPom = Set.of();
+        private Set<MavenProject> testOnlyByPom = Set.of();
         private Set<MavenProject> forceIncluded = Set.of();
         private Map<MavenProject, List<String>> transitivelyAffected = Map.of();
         private Map<MavenProject, List<String>> evidence = Map.of();
@@ -140,6 +143,11 @@ final class AnalysisContext {
 
         Builder affectedByPom(Set<MavenProject> affectedByPom) {
             this.affectedByPom = affectedByPom;
+            return this;
+        }
+
+        Builder testOnlyByPom(Set<MavenProject> testOnlyByPom) {
+            this.testOnlyByPom = testOnlyByPom;
             return this;
         }
 

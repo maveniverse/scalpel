@@ -231,7 +231,7 @@ class ReportAssembler {
                     sourceSet = "main";
                 }
             }
-            if (ctx.affectedByPom.contains(project)) {
+            if (ctx.affectedByPom.contains(project) || ctx.testOnlyByPom.contains(project)) {
                 reasons.add(ScalpelReport.REASON_POM_CHANGE);
             }
             if (ctx.forceIncluded.contains(project)) {
