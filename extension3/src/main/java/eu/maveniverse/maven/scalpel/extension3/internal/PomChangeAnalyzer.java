@@ -1374,6 +1374,7 @@ class PomChangeAnalyzer {
      * <p>
      * Only report modifications and removals — not brand-new entries (issue #131).
      */
+    /* package-private for testing */
     Set<String> diffEffectivePlugins(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
         Set<String> changed = new LinkedHashSet<>();
         Map<String, Plugin> oldMap = new LinkedHashMap<>();
