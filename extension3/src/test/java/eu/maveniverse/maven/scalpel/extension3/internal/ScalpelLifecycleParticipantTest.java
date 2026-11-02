@@ -4207,7 +4207,7 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
-    void noModulesAffected_skipTestsMode_skipsAllTests() throws Exception {
+    void testOnlyChange_skipTestsMode_unaffectedModuleSkipsTests() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
 
@@ -4245,6 +4245,51 @@ class ScalpelLifecycleParticipantTest {
                 "true",
                 moduleB.getProperties().getProperty("maven.test.skip"),
                 "module-b is unaffected — tests should be skipped");
+    }
+
+    @Test
+    void noModulesAffected_skipTestsMode_skipsAllTests() throws Exception {
+        // Regression: when no module is affected (no source/pom change in any reactor module),
+        // skip-tests mode must call skipTestsOnAll — setting maven.test.skip on every module.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // Only a POM that matches no reactor project (profile-gated module): no modules affected
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("gated-module/pom.xml");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "skip-tests");
+
+        participant.afterProjectsRead(session);
+
+        // No modules affected → skipTestsOnAll: every module must have tests skipped
+        assertEquals(
+                "true",
+                moduleA.getProperties().getProperty("maven.test.skip"),
+                "module-a: no modules affected — tests must be skipped");
+        assertEquals(
+                "true",
+                moduleB.getProperties().getProperty("maven.test.skip"),
+                "module-b: no modules affected — tests must be skipped");
     }
 
     @Test

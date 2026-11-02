@@ -140,7 +140,18 @@ class ModuleMapper {
                             .add(changedFile);
                 }
             } else {
-                unmappedFiles.add(changedFile);
+                // Only genuinely unowned files (bare root-level files with no directory
+                // component, e.g. "settings.properties", "lombok.config") are added to
+                // unmappedFiles and trigger a full build (#229).
+                //
+                // Files in inactive modules (profile-gated, not part of this reactor build)
+                // or in deleted modules are also returned as null by findOwningModule, but
+                // they are intentionally ignored — attributing them to unmappedFiles would
+                // undo the existing exclusion semantics (see ModuleMapperOutsideReactorTest).
+                if (changedFile.indexOf('/') < 0) {
+                    unmappedFiles.add(changedFile);
+                }
+                // else: inactive or deleted module file — silently ignored (no module owns it)
             }
         }
 
