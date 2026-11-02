@@ -798,13 +798,19 @@ class PomChangeAnalyzer {
         // consulted, those GAs are missing and the config change goes undetected.
         Set<String> parentRawManagedPluginGAs = new LinkedHashSet<>();
         if (oldModel.getBuild() != null && oldModel.getBuild().getPluginManagement() != null) {
-            for (Plugin p : oldModel.getBuild().getPluginManagement().getPlugins()) {
-                parentRawManagedPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+            List<Plugin> oldManagedPlugins = oldModel.getBuild().getPluginManagement().getPlugins();
+            if (oldManagedPlugins != null) {
+                for (Plugin p : oldManagedPlugins) {
+                    parentRawManagedPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+                }
             }
         }
         if (newModel.getBuild() != null && newModel.getBuild().getPluginManagement() != null) {
-            for (Plugin p : newModel.getBuild().getPluginManagement().getPlugins()) {
-                parentRawManagedPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+            List<Plugin> newManagedPlugins = newModel.getBuild().getPluginManagement().getPlugins();
+            if (newManagedPlugins != null) {
+                for (Plugin p : newManagedPlugins) {
+                    parentRawManagedPluginGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+                }
             }
         }
         for (MavenProject dep : dependentProjects) {
@@ -1620,6 +1626,10 @@ class PomChangeAnalyzer {
     }
 
     private boolean equalExecutions(List<PluginExecution> a, List<PluginExecution> b) {
+        return equalExecutions(a, b, null, null);
+    }
+
+    private boolean equalExecutions(List<PluginExecution> a, List<PluginExecution> b, Path oldBase, Path newBase) {
         if (a.size() != b.size()) {
             return false;
         }
@@ -1629,7 +1639,7 @@ class PomChangeAnalyzer {
         }
         for (PluginExecution e : b) {
             PluginExecution other = mapA.remove(e.getId());
-            if (other == null || !equalExecution(other, e)) {
+            if (other == null || !equalExecution(other, e, oldBase, newBase)) {
                 return false;
             }
         }
@@ -1637,10 +1647,14 @@ class PomChangeAnalyzer {
     }
 
     private boolean equalExecution(PluginExecution a, PluginExecution b) {
+        return equalExecution(a, b, null, null);
+    }
+
+    private boolean equalExecution(PluginExecution a, PluginExecution b, Path oldBase, Path newBase) {
         return Objects.equals(a.getId(), b.getId())
                 && Objects.equals(a.getPhase(), b.getPhase())
                 && Objects.equals(a.getGoals(), b.getGoals())
-                && equalConfiguration(a.getConfiguration(), b.getConfiguration());
+                && equalConfiguration(a.getConfiguration(), b.getConfiguration(), oldBase, newBase);
     }
 
     private boolean equalDependencyLists(List<Dependency> a, List<Dependency> b) {
