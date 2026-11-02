@@ -397,6 +397,83 @@ class PomChangeAnalyzerTest {
         assertTrue(changed.isEmpty(), "Removed plugins must not be reported by this method");
     }
 
+    @Test
+    void diffEffectiveManagedPluginConfigs_pathAnchoredConfigValues_notReported() {
+        // When old and new plugin config values differ only because of a different base-directory
+        // prefix (old model built in temp dir, new model using real path), the plugin must NOT
+        // be reported as changed.  This guards against false positives from expressions such as
+        // ${project.build.directory} in managed plugin configuration (CodeRabbit finding).
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom outputDirOld = new org.codehaus.plexus.util.xml.Xpp3Dom("outputDirectory");
+        outputDirOld.setValue("/tmp/scalpel-old-poms-test/child/target/classes");
+        configOld.addChild(outputDirOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom outputDirNew = new org.codehaus.plexus.util.xml.Xpp3Dom("outputDirectory");
+        outputDirNew.setValue("/real/project/child/target/classes");
+        configNew.addChild(outputDirNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-compiler-plugin");
+        newer.setVersion("3.13.0");
+        newer.setConfiguration(configNew);
+
+        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs, oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Path-anchored config values that differ only by base-dir prefix must not be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_genuineConfigChange_reportedWithBaseDirs() {
+        // Even with base-dir normalization active, a genuine configuration change (not
+        // path-prefix-only) must still be detected and reported.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom releaseOld = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
+        releaseOld.setValue("11");
+        configOld.addChild(releaseOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom releaseNew = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
+        releaseNew.setValue("17");
+        configNew.addChild(releaseNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-compiler-plugin");
+        newer.setVersion("3.13.0");
+        newer.setConfiguration(configNew);
+
+        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs, oldBase, newBase);
+        assertEquals(
+                Set.of("org.apache.maven.plugins:maven-compiler-plugin"),
+                changed,
+                "Genuine config changes must still be reported even with base-dir normalization active");
+    }
+
     // --- analyzeChanges integration tests (issue #228) ---
 
     @Test

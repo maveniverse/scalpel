@@ -811,8 +811,12 @@ class PomChangeAnalyzer {
             for (MavenProject ancestor = dep; ancestor != null; ancestor = ancestor.getParent()) {
                 Model raw = ancestor.getOriginalModel();
                 if (raw != null && raw.getBuild() != null && raw.getBuild().getPluginManagement() != null) {
-                    for (Plugin mp : raw.getBuild().getPluginManagement().getPlugins()) {
-                        parentRawManagedPluginGAs.add(mp.getGroupId() + ":" + mp.getArtifactId());
+                    List<Plugin> ancestorPlugins =
+                            raw.getBuild().getPluginManagement().getPlugins();
+                    if (ancestorPlugins != null) {
+                        for (Plugin mp : ancestorPlugins) {
+                            parentRawManagedPluginGAs.add(mp.getGroupId() + ":" + mp.getArtifactId());
+                        }
                     }
                 }
             }
