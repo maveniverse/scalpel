@@ -4467,6 +4467,64 @@ class ScalpelLifecycleParticipantTest {
     }
 
     @Test
+    void unmappedRootFile_shadowMode_writesFullBuildReportAndShadowStatus() throws Exception {
+        // Regression test for #229: in shadow mode (passiveRun=true, isModeShadow=true),
+        // a bare root-level unmapped file must trigger writeFullBuildReport (report JSON)
+        // AND writeShadowStatus (shadow JSON) — the shadow-specific branch not covered by
+        // the report-mode variant above.
+        Path root = tempDir.resolve("project");
+        Files.createDirectories(root);
+
+        String parentPom = simpleParentPom("module-a", "module-b");
+        writePom(root, "pom.xml", parentPom);
+        String moduleAPom = simpleChildPom("module-a");
+        writePom(root, "module-a/pom.xml", moduleAPom);
+        String moduleBPom = simpleChildPom("module-b");
+        writePom(root, "module-b/pom.xml", moduleBPom);
+
+        MavenProject parentProject = createProject("com.example", "parent", "1.0", root, "pom.xml", parentPom);
+        parentProject.getModel().setPackaging("pom");
+        MavenProject moduleA = createProject("com.example", "module-a", "1.0", root, "module-a/pom.xml", moduleAPom);
+        moduleA.setParent(parentProject);
+        MavenProject moduleB = createProject("com.example", "module-b", "1.0", root, "module-b/pom.xml", moduleBPom);
+        moduleB.setParent(parentProject);
+
+        List<MavenProject> allProjects = List.of(parentProject, moduleA, moduleB);
+
+        // A bare root-level file (no directory component) that does not belong to any module
+        Set<String> changedFiles = new LinkedHashSet<>();
+        changedFiles.add("settings.properties");
+        when(scalpelCore.detectChanges(any(), any(), any(), any()))
+                .thenReturn(new ChangeDetectionResult(changedFiles, new HashMap<String, byte[]>()));
+        setupEmptyDependencyResolution();
+
+        MavenSession session = createSimpleSession(root, allProjects, "shadow");
+        // Override default fullBuildTriggers (.mvn/**) so the unmapped-file path is exercised
+        session.getSystemProperties().setProperty("scalpel.fullBuildTriggers", "");
+
+        participant.afterProjectsRead(session);
+
+        // Shadow mode must write the report JSON (fullBuildTriggered=true + trigger file)
+        Path reportFile = root.resolve("target/scalpel-report.json");
+        assertTrue(Files.exists(reportFile), "shadow mode must write a full-build report for unmapped root file");
+        String reportJson = Files.readString(reportFile);
+        assertTrue(
+                reportJson.contains("\"fullBuildTriggered\": true"),
+                "report must record fullBuildTriggered=true for unmapped root file: " + reportJson);
+        assertTrue(
+                reportJson.contains("settings.properties"),
+                "report must record the triggering file name: " + reportJson);
+
+        // Shadow mode must ALSO write the shadow status document (skipped) via writeShadowStatus
+        Path shadowFile = root.resolve("target/scalpel-shadow.json");
+        assertTrue(Files.exists(shadowFile), "shadow mode must write shadow status document for unmapped root file");
+        String shadowJson = Files.readString(shadowFile);
+        assertTrue(
+                shadowJson.contains("\"skipped\"") || shadowJson.contains("skipped"),
+                "shadow status must record skipped status: " + shadowJson);
+    }
+
+    @Test
     void impactedLog_writesAffectedModulePaths() throws Exception {
         Path root = tempDir.resolve("project");
         Files.createDirectories(root);
