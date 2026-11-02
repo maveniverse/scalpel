@@ -40,7 +40,7 @@ Properties defined in a project POM are deliberately not read. Scalpel is config
 | `scalpel.maxResourceFileSize` | `10 MB` | Maximum size in bytes for a resource file (resources larger than this are skipped with a warning) |
 | `scalpel.explain` | `false` | Enable explain mode. This adds per-module decision evidence to the report |
 | `scalpel.verifyFullBuild` | `false` | Run the full build under the shadow observation and fail it when a module Scalpel would have skipped fails, naming the module, its skip reason and the decisionId. Overrides reactor-modifying modes |
-| `scalpel.excludeChanges` | `properties/build.timestamp,properties/project.build.outputTimestamp` | Comma-separated glob patterns over change paths. Matching changes are excluded from effective model comparison |
+| `scalpel.excludeChanges` | `properties/build.timestamp, properties/project.build.outputTimestamp` | Comma-separated glob patterns over change paths. Matching changes are excluded from effective model comparison |
 | `scalpel.includeChanges` | none | Comma-separated glob patterns over change paths. Overrides exclude patterns — a change matching both is included |
 
 ## Local Developer Usage
