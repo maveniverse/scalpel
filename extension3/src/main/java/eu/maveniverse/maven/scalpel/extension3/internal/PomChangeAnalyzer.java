@@ -137,9 +137,16 @@ import org.slf4j.LoggerFactory;
  *             (e.g. jackson 2.17→2.18 in the BOM) shows up here only for modules that
  *             actually declare that dependency.  Modules that don't use the managed
  *             dependency see no diff and are <em>not</em> affected (issue #131).</li>
- *         <li>Old vs new <em>effective plugin versions</em> — version-only comparison
- *             (configuration/execution diffs are ignored since the parent POM is already
- *             in the changeset).</li>
+ *         <li>Old vs new <em>effective bound-plugin versions</em> — version-only comparison
+ *             (configuration and execution diffs for bound plugins are already covered by the
+ *             parent POM being in the changeset and by the child property analysis below).
+ *             Only version changes from managed plugin updates indicate a real build-input
+ *             change for the child.</li>
+ *         <li>Old vs new <em>effective pluginManagement configurations</em> — for plugins
+ *             explicitly declared in the parent's raw {@code <pluginManagement>}, a full
+ *             (version + config + executions) comparison restricted to same-version
+ *             entries catches config-only changes that are invisible to the version-only
+ *             check (issue #228: {@code <argLine>} or {@code ${jdk.release}} changes).</li>
  *       </ul></li>
  *
  *   <li><b>Effective property comparison</b> (per dependent):
@@ -901,13 +908,42 @@ class PomChangeAnalyzer {
             }
         }
 
-        // Compare effective plugin VERSIONS only (not configuration/executions).
+        // Compare effective plugin VERSIONS only (not configuration/executions) for plugins
+        // actually bound to the child's lifecycle.
         // Configuration may differ due to inherited property interpolation changes, but
         // plugin configuration changes are already covered by the POM diff (the parent
-        // POM is in the changeset).  Only version changes from managed plugin updates
-        // indicate a real build-input change for the child.
+        // POM is in the changeset) and by the child property analysis below.  Only version
+        // changes from managed plugin updates indicate a real build-input change for the child.
+        // Plugins that are ONLY in <pluginManagement> (not yet bound to the child's lifecycle)
+        // do not appear in getEffectivePlugins() — config/execution changes for same-version
+        // managed-only plugins are caught separately via diffEffectiveManagedPluginConfigs() below.
+        // Version bumps to managed-only plugins are intentionally not detected (issue #131).
         Set<String> changedPlugins = diffManagedPluginVersions(
                 getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
+        // Derive the base directories of the old and new effective models so that
+        // path-anchored configuration values (e.g. ${project.build.directory}) can be
+        // normalized before comparison.  Old models are built from a temp directory,
+        // so their base dir differs from the real project directory — without
+        // normalization, every child that inherits a managed plugin with a path-anchored
+        // configuration value would be flagged as affected by an unrelated parent change.
+        Path oldChildBase = oldChildEffective.getPomFile() != null
+                ? oldChildEffective
+                        .getPomFile()
+                        .getParentFile()
+                        .toPath()
+                        .toAbsolutePath()
+                        .normalize()
+                : null;
+        Path newChildBase = newChildEffective.getPomFile() != null
+                ? newChildEffective
+                        .getPomFile()
+                        .getParentFile()
+                        .toPath()
+                        .toAbsolutePath()
+                        .normalize()
+                : null;
+        Set<String> changedManagedPluginConfigs = diffEffectiveManagedPluginConfigs(
+                getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective), oldChildBase, newChildBase);
         if (!changedPlugins.isEmpty()) {
             Set<String> acceptedPlugins = new LinkedHashSet<>();
             for (String ga : changedPlugins) {
@@ -924,6 +960,33 @@ class PomChangeAnalyzer {
                 if (ctx.explain) {
                     for (String ga : acceptedPlugins) {
                         addEvidence(ctx.evidence, child, "effective plugin " + ga);
+                    }
+                }
+                changed = true;
+            }
+        }
+        // Managed plugin config/execution changes are filtered under the "managedPlugins/" category
+        // (not "plugins/") so that -Dscalpel.excludeChanges=managedPlugins/** correctly suppresses them.
+        if (!changedManagedPluginConfigs.isEmpty()) {
+            Set<String> acceptedManagedPluginConfigs = new LinkedHashSet<>();
+            for (String ga : changedManagedPluginConfigs) {
+                if (filter.accepts("managedPlugins/" + ga)) {
+                    acceptedManagedPluginConfigs.add(ga);
+                } else if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Child {} effective managed plugin config {} excluded by change filter", key(child), ga);
+                }
+            }
+            if (!acceptedManagedPluginConfigs.isEmpty()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Child {} has changed effective managed plugin configs: {}",
+                            key(child),
+                            acceptedManagedPluginConfigs);
+                }
+                if (ctx.explain) {
+                    for (String ga : acceptedManagedPluginConfigs) {
+                        addEvidence(ctx.evidence, child, "effective managed plugin config " + ga);
                     }
                 }
                 changed = true;
@@ -1274,13 +1337,108 @@ class PomChangeAnalyzer {
     }
 
     /**
+     * Compare effective plugins by full equality: version, configuration, and executions.
+     * <p>
+     * Both lists come from effective models produced by the same {@link ModelBuilder} instance,
+     * so property interpolation and parent inheritance are applied consistently on both sides.
+     * This means a parent-only change to {@code <pluginManagement>} configuration (e.g.
+     * {@code <argLine>}) or a property used only in plugin configuration (e.g.
+     * {@code ${jdk.release}}) is reflected in the child's effective model and detected here.
+     * <p>
+     * Only report modifications and removals — not brand-new entries (issue #131).
+     */
+    /* package-private for testing */
+    Set<String> diffEffectivePlugins(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
+        Set<String> changed = new LinkedHashSet<>();
+        Map<String, Plugin> oldMap = new LinkedHashMap<>();
+        for (Plugin p : oldPlugins) {
+            oldMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
+        }
+        Map<String, Plugin> newMap = new LinkedHashMap<>();
+        for (Plugin p : newPlugins) {
+            newMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
+        }
+        for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
+            Plugin newPlugin = newMap.get(e.getKey());
+            if (newPlugin == null) {
+                // Plugin removed in new model
+                changed.add(e.getKey());
+            } else if (!equalPlugin(e.getValue(), newPlugin)) {
+                // Version, configuration, or executions changed
+                changed.add(e.getKey());
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Compare the effective {@code <pluginManagement>} entries for configuration and execution
+     * changes — reporting only plugins that are present in <em>both</em> old and new models
+     * (modifications only, never additions or removals).
+     * <p>
+     * Maven's model builder (standalone {@link org.apache.maven.model.building.DefaultModelBuilder})
+     * does NOT inject lifecycle-default plugins into {@code <pluginManagement>} — lifecycle
+     * injection via {@code LifecycleBindingsInjector} only populates {@code build.plugins} and
+     * requires the full Plexus container.  Therefore the effective managed plugin list contains
+     * only user-declared entries, with no need for an allow-list guard.
+     * <p>
+     * This method catches the issue #228 scenario where a parent changes
+     * {@code <pluginManagement>} configuration (e.g. {@code <argLine>}) or a property
+     * consumed only in plugin configuration (e.g. {@code ${jdk.release}}).  The child
+     * inherits the managed configuration and is affected even if it does not explicitly
+     * declare the plugin in its own POM.
+     * <p>
+     * The {@code oldBase} and {@code newBase} paths are the project base directories of the
+     * old (temp-dir) and new (real) effective models respectively.  When plugin configuration
+     * values differ solely because path-anchored expressions (e.g. {@code ${project.build.directory}})
+     * resolve to different absolute prefixes in old vs new models, those differences are ignored
+     * (same relative path under their respective base dirs = no real change).
+     */
+    Set<String> diffEffectiveManagedPluginConfigs(
+            List<Plugin> oldPlugins, List<Plugin> newPlugins, Path oldBase, Path newBase) {
+        Set<String> changed = new LinkedHashSet<>();
+        Map<String, Plugin> oldMap = new LinkedHashMap<>();
+        for (Plugin p : oldPlugins) {
+            oldMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
+        }
+        Map<String, Plugin> newMap = new LinkedHashMap<>();
+        for (Plugin p : newPlugins) {
+            newMap.put(p.getGroupId() + ":" + p.getArtifactId(), p);
+        }
+        // Compare GAs present in both old and new (modifications only, never additions).
+        // Skip plugins where the version changed — those are caught by diffManagedPluginVersions()
+        // on the child's effective <plugins> list (which covers only bound, actually-used plugins,
+        // preserving the precision guarantee from issue #131).  This path only needs to catch
+        // configuration/execution changes to plugins whose version is unchanged.
+        for (Map.Entry<String, Plugin> e : oldMap.entrySet()) {
+            String ga = e.getKey();
+            Plugin newPlugin = newMap.get(ga);
+            if (newPlugin == null) {
+                continue; // removal — not handled here
+            }
+            if (!Objects.equals(e.getValue().getVersion(), newPlugin.getVersion())) {
+                continue; // version changed — handled by diffManagedPluginVersions() on child's effective <plugins>
+            }
+            if (!equalPlugin(e.getValue(), newPlugin, oldBase, newBase)) {
+                changed.add(ga);
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Backward-compatible overload used by unit tests (no base-dir normalization).
+     */
+    Set<String> diffEffectiveManagedPluginConfigs(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
+        return diffEffectiveManagedPluginConfigs(oldPlugins, newPlugins, null, null);
+    }
+
+    /**
      * Compare managed plugins by GA + version only, ignoring configuration and executions.
      * <p>
-     * Old effective models built with a standalone {@code DefaultModelBuilder} may produce
-     * subtly different Xpp3Dom configuration/execution structures compared to the live reactor
-     * model (e.g. attribute handling, default configuration merging).  These are model-building
-     * artifacts, not real POM changes.  Real plugin configuration changes are already detected
-     * by the POM file diff (the parent POM appears in the changeset).
+     * Used for the child's raw-model managed plugin check: when the child explicitly declares
+     * a plugin in its own {@code <pluginManagement>}, only version changes matter there
+     * (the child-defined configuration is handled by the POM file diff).
      * <p>
      * Only report modifications and removals — not brand-new entries (issue #131).
      */
@@ -1334,14 +1492,22 @@ class PomChangeAnalyzer {
     }
 
     private boolean equalPlugin(Plugin a, Plugin b) {
+        return equalPlugin(a, b, null, null);
+    }
+
+    private boolean equalPlugin(Plugin a, Plugin b, Path oldBase, Path newBase) {
         return Objects.equals(a.getGroupId(), b.getGroupId())
                 && Objects.equals(a.getArtifactId(), b.getArtifactId())
                 && Objects.equals(a.getVersion(), b.getVersion())
-                && equalConfiguration(a.getConfiguration(), b.getConfiguration())
-                && equalExecutions(a.getExecutions(), b.getExecutions());
+                && equalConfiguration(a.getConfiguration(), b.getConfiguration(), oldBase, newBase)
+                && equalExecutions(a.getExecutions(), b.getExecutions(), oldBase, newBase);
     }
 
     private boolean equalConfiguration(Object a, Object b) {
+        return equalConfiguration(a, b, null, null);
+    }
+
+    private boolean equalConfiguration(Object a, Object b, Path oldBase, Path newBase) {
         if (a == b) {
             return true;
         }
@@ -1349,16 +1515,114 @@ class PomChangeAnalyzer {
             return false;
         }
         if (a instanceof Xpp3Dom && b instanceof Xpp3Dom) {
-            return equalXpp3Dom((Xpp3Dom) a, (Xpp3Dom) b);
+            return equalXpp3Dom((Xpp3Dom) a, (Xpp3Dom) b, oldBase, newBase);
         }
         return Objects.equals(a.toString(), b.toString());
     }
 
+    /**
+     * Normalize an interpolated configuration value relative to a project base directory.
+     * <p>
+     * Old effective models are built in a temporary directory, so path-anchored expressions
+     * such as {@code ${project.build.directory}} resolve to paths inside that temp dir.
+     * New effective models use the real project directory.  If two values differ only
+     * because they have different base-directory prefixes, they represent the same logical
+     * path and should compare as equal.
+     * <p>
+     * Two normalization strategies are applied in order:
+     * <ol>
+     *   <li>If the value <em>is</em> an absolute path rooted at {@code base}, relativize it.</li>
+     *   <li>Otherwise, replace any occurrence of the base-directory string inside the value
+     *       with a fixed placeholder (handles embedded paths such as
+     *       {@code -Dtmp=<base>/target/tmp}).  The base string is only replaced when it
+     *       appears as a complete path component — i.e. followed by {@code /}, {@code \},
+     *       or end-of-string — so sibling directories such as {@code <base>-old} are
+     *       not affected.</li>
+     * </ol>
+     */
+    private static String normalizeBasePath(String value, Path base) {
+        if (value == null || base == null) {
+            return value;
+        }
+        // Strategy 1: value IS an absolute path rooted at base — relativize it.
+        if (value.startsWith("/") || (value.length() > 2 && value.charAt(1) == ':')) {
+            try {
+                Path valuePath = Path.of(value).normalize();
+                if (valuePath.startsWith(base)) {
+                    return base.relativize(valuePath).toString();
+                }
+            } catch (IllegalArgumentException ignored) {
+                // not a valid path — fall through to strategy 2
+            }
+        }
+        // Strategy 2: base-directory path is embedded inside a larger value (e.g.
+        // "-Dtmp=/tmp/scalpel-old/child/target/tmp").  Replace the base path string
+        // with a fixed placeholder so that old-model and new-model values that differ
+        // only in their base-directory prefix compare as equal.
+        // Only match when followed by a path separator or end-of-string to avoid
+        // matching sibling directories like "<base>-old".
+        String normalized = replaceBasePathInValue(value, base.toString());
+        // On Windows the Path.toString() uses backslashes; also try forward-slash form.
+        String slashBase = base.toString().replace('\\', '/');
+        if (!slashBase.equals(base.toString())) {
+            normalized = replaceBasePathInValue(normalized, slashBase);
+        }
+        return normalized;
+    }
+
+    /**
+     * Replace {@code baseStr} in {@code value} only when followed by a path separator
+     * ({@code /} or {@code \\}), a token delimiter ({@code "}, {@code '}, or space), or
+     * end-of-string.  This prevents matching sibling directories whose name starts with the
+     * same prefix (e.g. {@code /base-old}), while also handling JVM argument forms such as
+     * {@code -Dworkdir="${project.basedir}"} or {@code -Dworkdir=${project.basedir} -Dflag=1}
+     * where the base path is followed by a quote or space rather than a slash.
+     */
+    private static String replaceBasePathInValue(String value, String baseStr) {
+        int idx = value.indexOf(baseStr);
+        if (idx < 0) {
+            return value;
+        }
+        StringBuilder sb = new StringBuilder(value.length());
+        int start = 0;
+        while (idx >= 0) {
+            int end = idx + baseStr.length();
+            // Only replace when the match is at end-of-string or followed by a delimiter:
+            // path separators (/ \), quotes (" '), or whitespace (space, tab) — to avoid
+            // matching sibling directories like /base-old while still handling JVM-arg forms.
+            if (end >= value.length()
+                    || value.charAt(end) == '/'
+                    || value.charAt(end) == '\\'
+                    || value.charAt(end) == '"'
+                    || value.charAt(end) == '\''
+                    || value.charAt(end) == ' '
+                    || value.charAt(end) == '\t') {
+                sb.append(value, start, idx);
+                sb.append("<basedir>");
+                start = end;
+            } else {
+                sb.append(value, start, idx + 1);
+                start = idx + 1;
+            }
+            idx = value.indexOf(baseStr, start);
+        }
+        sb.append(value, start, value.length());
+        return sb.toString();
+    }
+
     private boolean equalXpp3Dom(Xpp3Dom a, Xpp3Dom b) {
+        return equalXpp3Dom(a, b, null, null);
+    }
+
+    private boolean equalXpp3Dom(Xpp3Dom a, Xpp3Dom b, Path oldBase, Path newBase) {
         if (!Objects.equals(a.getName(), b.getName())) {
             return false;
         }
-        // Compare values, treating null and empty/whitespace-only as equivalent
+        // Compare values, treating null and empty/whitespace-only as equivalent.
+        // When base dirs are provided, normalize absolute-path values relative to
+        // their respective base dir before comparing — this suppresses false positives
+        // from path-anchored expressions (e.g. ${project.build.directory}) that resolve
+        // to different absolute prefixes in old (temp-dir) vs new (real-dir) models.
         String aVal = a.getValue() != null ? a.getValue().trim() : null;
         String bVal = b.getValue() != null ? b.getValue().trim() : null;
         if (aVal != null && aVal.isEmpty()) {
@@ -1368,25 +1632,35 @@ class PomChangeAnalyzer {
             bVal = null;
         }
         if (!Objects.equals(aVal, bVal)) {
-            return false;
+            // Give path normalization a chance before declaring inequality
+            String aNorm = normalizeBasePath(aVal, oldBase);
+            String bNorm = normalizeBasePath(bVal, newBase);
+            if (!Objects.equals(aNorm, bNorm)) {
+                return false;
+            }
         }
-        // Compare attributes
+        // Compare attributes — apply path normalization in case attr values contain base-dir paths
         String[] aAttrs = a.getAttributeNames();
         String[] bAttrs = b.getAttributeNames();
         if (aAttrs.length != bAttrs.length) {
             return false;
         }
         for (String attr : aAttrs) {
-            if (!Objects.equals(a.getAttribute(attr), b.getAttribute(attr))) {
-                return false;
+            String aAttrVal = a.getAttribute(attr);
+            String bAttrVal = b.getAttribute(attr);
+            if (!Objects.equals(aAttrVal, bAttrVal)) {
+                // Give path normalization a chance (e.g. <mkdir dir="${project.build.directory}"/>)
+                if (!Objects.equals(normalizeBasePath(aAttrVal, oldBase), normalizeBasePath(bAttrVal, newBase))) {
+                    return false;
+                }
             }
         }
-        // Compare children recursively
+        // Compare children recursively — propagate base dirs for nested path-anchored values
         if (a.getChildCount() != b.getChildCount()) {
             return false;
         }
         for (int i = 0; i < a.getChildCount(); i++) {
-            if (!equalXpp3Dom(a.getChild(i), b.getChild(i))) {
+            if (!equalXpp3Dom(a.getChild(i), b.getChild(i), oldBase, newBase)) {
                 return false;
             }
         }
@@ -1394,6 +1668,10 @@ class PomChangeAnalyzer {
     }
 
     private boolean equalExecutions(List<PluginExecution> a, List<PluginExecution> b) {
+        return equalExecutions(a, b, null, null);
+    }
+
+    private boolean equalExecutions(List<PluginExecution> a, List<PluginExecution> b, Path oldBase, Path newBase) {
         if (a.size() != b.size()) {
             return false;
         }
@@ -1403,7 +1681,7 @@ class PomChangeAnalyzer {
         }
         for (PluginExecution e : b) {
             PluginExecution other = mapA.remove(e.getId());
-            if (other == null || !equalExecution(other, e)) {
+            if (other == null || !equalExecution(other, e, oldBase, newBase)) {
                 return false;
             }
         }
@@ -1411,10 +1689,14 @@ class PomChangeAnalyzer {
     }
 
     private boolean equalExecution(PluginExecution a, PluginExecution b) {
+        return equalExecution(a, b, null, null);
+    }
+
+    private boolean equalExecution(PluginExecution a, PluginExecution b, Path oldBase, Path newBase) {
         return Objects.equals(a.getId(), b.getId())
                 && Objects.equals(a.getPhase(), b.getPhase())
                 && Objects.equals(a.getGoals(), b.getGoals())
-                && equalConfiguration(a.getConfiguration(), b.getConfiguration());
+                && equalConfiguration(a.getConfiguration(), b.getConfiguration(), oldBase, newBase);
     }
 
     private boolean equalDependencyLists(List<Dependency> a, List<Dependency> b) {

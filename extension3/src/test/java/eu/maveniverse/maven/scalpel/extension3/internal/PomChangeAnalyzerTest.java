@@ -225,6 +225,673 @@ class PomChangeAnalyzerTest {
         assertTrue(changed.isEmpty());
     }
 
+    // --- diffEffectivePlugins unit tests ---
+
+    @Test
+    void diffEffectivePlugins_noChanges() {
+        org.apache.maven.model.Plugin p1 = new org.apache.maven.model.Plugin();
+        p1.setGroupId("org.apache.maven.plugins");
+        p1.setArtifactId("maven-compiler-plugin");
+        p1.setVersion("3.13.0");
+        org.apache.maven.model.Plugin p2 = new org.apache.maven.model.Plugin();
+        p2.setGroupId("org.apache.maven.plugins");
+        p2.setArtifactId("maven-compiler-plugin");
+        p2.setVersion("3.13.0");
+        assertTrue(analyzer.diffEffectivePlugins(List.of(p1), List.of(p2)).isEmpty());
+    }
+
+    @Test
+    void diffEffectivePlugins_versionChange() {
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.2.5");
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+
+        Set<String> changed = analyzer.diffEffectivePlugins(List.of(old), List.of(newer));
+        assertEquals(Set.of("org.apache.maven.plugins:maven-surefire-plugin"), changed);
+    }
+
+    @Test
+    void diffEffectivePlugins_configurationChange() {
+        // Same version, but configuration differs — the key case for issue #228
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineOld.setValue("-Dexample.flag=a");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineNew.setValue("-Dexample.flag=b");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed = analyzer.diffEffectivePlugins(List.of(old), List.of(newer));
+        assertEquals(Set.of("org.apache.maven.plugins:maven-surefire-plugin"), changed);
+    }
+
+    @Test
+    void diffEffectivePlugins_newPluginNotReported() {
+        // Brand-new plugin in new model: must NOT be reported (issue #131)
+        org.apache.maven.model.Plugin p = new org.apache.maven.model.Plugin();
+        p.setGroupId("org.apache.maven.plugins");
+        p.setArtifactId("maven-compiler-plugin");
+        p.setVersion("3.13.0");
+
+        Set<String> changed = analyzer.diffEffectivePlugins(List.of(), List.of(p));
+        assertTrue(changed.isEmpty(), "Brand-new plugins must not be reported (issue #131)");
+    }
+
+    @Test
+    void diffEffectivePlugins_removedPluginIsReported() {
+        org.apache.maven.model.Plugin p = new org.apache.maven.model.Plugin();
+        p.setGroupId("org.apache.maven.plugins");
+        p.setArtifactId("maven-compiler-plugin");
+        p.setVersion("3.13.0");
+
+        Set<String> changed = analyzer.diffEffectivePlugins(List.of(p), List.of());
+        assertEquals(Set.of("org.apache.maven.plugins:maven-compiler-plugin"), changed);
+    }
+
+    // --- diffEffectiveManagedPluginConfigs unit tests ---
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_configChange_reported() {
+        // Same version, different config → must be reported
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom releaseOld = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
+        releaseOld.setValue("11");
+        configOld.addChild(releaseOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom releaseNew = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
+        releaseNew.setValue("17");
+        configNew.addChild(releaseNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-compiler-plugin");
+        newer.setVersion("3.13.0");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer));
+        assertEquals(Set.of("org.apache.maven.plugins:maven-compiler-plugin"), changed);
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_versionChange_skipped() {
+        // Different version → must NOT be reported (delegated to diffManagedPluginVersions)
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-compiler-plugin");
+        newer.setVersion("3.14.0");
+
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer));
+        assertTrue(changed.isEmpty(), "Version changes must be skipped (delegated to diffManagedPluginVersions)");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_configChange_anyGAReported() {
+        // Any plugin with a config change in the effective managed list is reported —
+        // no allow-list filter needed since getManagedPlugins() only returns user-declared entries
+        // (lifecycle defaults are not injected into pluginManagement by DefaultModelBuilder).
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom child = new org.codehaus.plexus.util.xml.Xpp3Dom("option");
+        child.setValue("true");
+        configNew.addChild(child);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-resources-plugin");
+        old.setVersion("3.3.1");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-resources-plugin");
+        newer.setVersion("3.3.1");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer));
+        assertEquals(
+                Set.of("org.apache.maven.plugins:maven-resources-plugin"),
+                changed,
+                "Any user-declared managed plugin with a config change must be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_removal_ignored() {
+        // Plugin present in old but absent in new → must NOT be reported
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of());
+        assertTrue(changed.isEmpty(), "Removed plugins must not be reported by this method");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_pathAnchoredConfigValues_notReported() {
+        // When old and new plugin config values differ only because of a different base-directory
+        // prefix (old model built in temp dir, new model using real path), the plugin must NOT
+        // be reported as changed.  This guards against false positives from expressions such as
+        // ${project.build.directory} in managed plugin configuration (CodeRabbit finding).
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom outputDirOld = new org.codehaus.plexus.util.xml.Xpp3Dom("outputDirectory");
+        outputDirOld.setValue("/tmp/scalpel-old-poms-test/child/target/classes");
+        configOld.addChild(outputDirOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom outputDirNew = new org.codehaus.plexus.util.xml.Xpp3Dom("outputDirectory");
+        outputDirNew.setValue("/real/project/child/target/classes");
+        configNew.addChild(outputDirNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-compiler-plugin");
+        newer.setVersion("3.13.0");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Path-anchored config values that differ only by base-dir prefix must not be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_genuineConfigChange_reportedWithBaseDirs() {
+        // Even with base-dir normalization active, a genuine configuration change (not
+        // path-prefix-only) must still be detected and reported.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom releaseOld = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
+        releaseOld.setValue("11");
+        configOld.addChild(releaseOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom releaseNew = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
+        releaseNew.setValue("17");
+        configNew.addChild(releaseNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-compiler-plugin");
+        old.setVersion("3.13.0");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-compiler-plugin");
+        newer.setVersion("3.13.0");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertEquals(
+                Set.of("org.apache.maven.plugins:maven-compiler-plugin"),
+                changed,
+                "Genuine config changes must still be reported even with base-dir normalization active");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_embeddedPathAnchoredConfigValues_notReported() {
+        // When the base-directory path is embedded inside a larger configuration value
+        // (e.g. "-Dtmp=<oldBase>/target/tmp"), normalizeBasePath must still suppress the
+        // false positive that would otherwise be caused by the temp-dir vs real-dir difference.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineOld.setValue("-Djava.io.tmpdir=/tmp/scalpel-old-poms-test/child/target/tmp");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineNew.setValue("-Djava.io.tmpdir=/real/project/child/target/tmp");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Embedded path-anchored config values that differ only by base-dir prefix must not be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_siblingPathNotNormalized() {
+        // A value containing a directory that merely starts with the same prefix as the base
+        // (e.g. "<base>-x") must still be detected as a genuine change — the sibling path
+        // is different from the base-directory path and must not be erased by normalization.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        // Value uses a sibling directory ("<base>-x") — NOT rooted at oldBase itself; same suffix on both
+        // sides ensures the test fails if normalization incorrectly erases the sibling path
+        argLineOld.setValue("-Dtmp=/tmp/scalpel-old-poms-test/child-x/target");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        // New value uses the same sibling suffix — if normalization wrongly strips the sibling path, both
+        // values would compare equal and the test would fail (catching the regression)
+        argLineNew.setValue("-Dtmp=/real/project/child-x/target");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertEquals(
+                Set.of("org.apache.maven.plugins:maven-surefire-plugin"),
+                changed,
+                "Sibling-path changes (not rooted at the base dir) must still be reported as genuine changes");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_quotedPathAnchoredConfigValues_notReported() {
+        // Config values like -Dworkdir="${project.basedir}" have the base path followed by a quote,
+        // not a slash. replaceBasePathInValue must normalise these so they don't cause false positives.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineOld.setValue("-Dworkdir=\"/tmp/scalpel-old-poms-test/child\"");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineNew.setValue("-Dworkdir=\"/real/project/child\"");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Quoted-path-anchored config values that differ only in base dir must not be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_spaceDelimitedPathAnchoredConfigValues_notReported() {
+        // Config values like -Dworkdir=/base/child -Dflag=1 have the base path followed by a space.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineOld.setValue("-Dworkdir=/tmp/scalpel-old-poms-test/child -Dflag=1");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineNew.setValue("-Dworkdir=/real/project/child -Dflag=1");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Space-delimited path-anchored config values that differ only in base dir must not be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_xmlAttributePathAnchored_notReported() {
+        // XML attribute values containing path-anchored expressions (e.g. <mkdir dir="${project.build.directory}"/>)
+        // must be normalised — the attribute comparison must apply the same base-dir normalisation as text values.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom taskOld = new org.codehaus.plexus.util.xml.Xpp3Dom("mkdir");
+        taskOld.setAttribute("dir", "/tmp/scalpel-old-poms-test/child/target");
+        configOld.addChild(taskOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom taskNew = new org.codehaus.plexus.util.xml.Xpp3Dom("mkdir");
+        taskNew.setAttribute("dir", "/real/project/child/target");
+        configNew.addChild(taskNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-antrun-plugin");
+        old.setVersion("3.1.0");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-antrun-plugin");
+        newer.setVersion("3.1.0");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "XML attribute path-anchored values that differ only in base dir must not be reported");
+    }
+
+    @Test
+    void effectivePluginManagement_doesNotContainLifecycleDefaultPlugins() throws Exception {
+        // Verify empirically that Maven's DefaultModelBuilder does NOT inject lifecycle-default
+        // plugins into <pluginManagement>. Lifecycle injection (via LifecycleBindingsInjector)
+        // only populates build.plugins — and even that requires the full Plexus container, not
+        // available in standalone DefaultModelBuilderFactory used in tests and old-model builds.
+        //
+        // This confirms getManagedPlugins() on an effective model only returns user-declared
+        // entries — the allowedGAs guard in diffEffectiveManagedPluginConfigs is therefore
+        // redundant and can be removed.
+        Path root = setupReactorRoot();
+
+        // A project that declares maven-surefire-plugin (a lifecycle-default) in its own
+        // <pluginManagement>, plus no declaration of maven-resources-plugin (another lifecycle
+        // default). After effective model building:
+        //   - maven-surefire-plugin must appear in getManagedPlugins() (explicitly declared)
+        //   - maven-resources-plugin must NOT appear (not declared, lifecycle-default only)
+        String pomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>minimal</artifactId>
+                  <version>1.0</version>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        Path pomFile = root.resolve("pom.xml");
+        writePom(pomFile, pomXml);
+        reactorPomFiles.put("com.example:minimal:1.0", pomFile.toFile());
+
+        MavenProject project = createProject("com.example", "minimal", "1.0", pomFile.toFile());
+        project.setOriginalModel(parseModel(pomXml));
+        setEffectiveModel(project, pomXml);
+
+        List<org.apache.maven.model.Plugin> managedPlugins = analyzer.getManagedPlugins(project.getModel());
+        Set<String> managedGAs = managedPlugins.stream()
+                .map(p -> p.getGroupId() + ":" + p.getArtifactId())
+                .collect(java.util.stream.Collectors.toSet());
+
+        // Explicitly declared plugin must appear
+        assertTrue(
+                managedGAs.contains("org.apache.maven.plugins:maven-surefire-plugin"),
+                "Explicitly declared managed plugin must appear in getManagedPlugins()");
+
+        // Lifecycle-only plugin (not declared) must NOT appear — confirms no lifecycle injection into pluginManagement
+        assertFalse(
+                managedGAs.contains("org.apache.maven.plugins:maven-resources-plugin"),
+                "Lifecycle-only plugins must NOT appear in effective <pluginManagement> when not declared by the user;"
+                        + " found: " + managedGAs);
+    }
+
+    // --- analyzeChanges integration tests (issue #228) ---
+
+    @Test
+    void analyzeChanges_parentPluginManagementConfigChangeAffectsAllChildren() throws Exception {
+        // Issue #228: parent changes <argLine> in <pluginManagement> — all children must be affected
+        Path root = setupReactorRoot();
+
+        String newParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                      <configuration><argLine>-Dexample.flag=b</argLine></configuration>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String oldParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                      <configuration><argLine>-Dexample.flag=a</argLine></configuration>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPomXml, moduleAPomXml, moduleBPomXml);
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleA), "module-a should be affected: parent pluginManagement <argLine> changed");
+        assertTrue(
+                affected.contains(moduleB), "module-b should be affected: parent pluginManagement <argLine> changed");
+    }
+
+    @Test
+    void analyzeChanges_parentPropertyUsedOnlyInPluginConfigAffectsAllChildren() throws Exception {
+        // Issue #228: parent changes ${jdk.release} used only in compiler plugin config — all children affected
+        Path root = setupReactorRoot();
+
+        String newParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><jdk.release>21</jdk.release></properties>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-compiler-plugin</artifactId>
+                      <version>3.13.0</version>
+                      <configuration><release>${jdk.release}</release></configuration>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String oldParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><jdk.release>17</jdk.release></properties>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-compiler-plugin</artifactId>
+                      <version>3.13.0</version>
+                      <configuration><release>${jdk.release}</release></configuration>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPomXml, moduleAPomXml, moduleBPomXml);
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleA),
+                "module-a should be affected: parent ${jdk.release} (used only in plugin config) changed 17→21");
+        assertTrue(
+                affected.contains(moduleB),
+                "module-b should be affected: parent ${jdk.release} (used only in plugin config) changed 17→21");
+    }
+
     // --- analyzeChanges integration tests ---
 
     @Test
