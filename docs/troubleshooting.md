@@ -281,10 +281,11 @@ over-approximation, not evidence that your change was meaningful.
 ### The upstream change was test-only
 
 When a module's changes touch only `src/test/**`, its production artifact is unchanged, so
-only dependents that declare a `<type>test-jar</type>` dependency on it are rebuilt. The
-directly affected module shows `"sourceSet": "test"` in the report; your module, which depends
-on the main artifact, shows up in `skippedModules` as `NOT_AFFECTED`. If you consumed the
-test-jar you would have been included as `DOWNSTREAM_TEST`.
+only dependents of its test-jar, declared as `<type>test-jar</type>` or as
+`<classifier>tests</classifier>`, are rebuilt. The directly affected module shows
+`"sourceSet": "test"` in the report; your module, which depends on the main artifact, shows up
+in `skippedModules` as `NOT_AFFECTED`. If you consumed the test-jar you would have been
+included as `DOWNSTREAM_TEST`.
 
 ### The module was built, but its tests were skipped
 
