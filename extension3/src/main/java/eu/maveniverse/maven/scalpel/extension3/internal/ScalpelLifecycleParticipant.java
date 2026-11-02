@@ -484,7 +484,13 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             timings.start(Timings.PHASE_TRANSITIVE_RESOLVE);
             try {
                 transitivelyAffected = transitiveImpactAnalyzer.computeTransitivelyAffected(
-                        allProjects, directlyAffected, models, rctx, config.isExplain(), transitiveEvidence);
+                        allProjects,
+                        directlyAffected,
+                        testOnlyModules,
+                        models,
+                        rctx,
+                        config.isExplain(),
+                        transitiveEvidence);
             } finally {
                 timings.stop(Timings.PHASE_TRANSITIVE_RESOLVE);
             }
@@ -645,6 +651,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .affectedBySource(affectedBySource)
                                 .testOnlyBySource(sourceResult.getTestOnlyAffected())
                                 .affectedByPom(affectedByPom)
+                                .testOnlyByPom(testOnlyByPom)
                                 .forceIncluded(forceIncluded)
                                 .transitivelyAffected(transitivelyAffected)
                                 .evidence(evidence)
@@ -751,6 +758,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                 .affectedBySource(affectedBySource)
                                 .testOnlyBySource(sourceResult.getTestOnlyAffected())
                                 .affectedByPom(affectedByPom)
+                                .testOnlyByPom(testOnlyByPom)
                                 .forceIncluded(forceIncluded)
                                 .transitivelyAffected(transitivelyAffected)
                                 .trimResult(trimResult)

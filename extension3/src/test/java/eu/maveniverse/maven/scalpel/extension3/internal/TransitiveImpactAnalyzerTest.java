@@ -181,6 +181,7 @@ class TransitiveImpactAnalyzerTest {
         Map<MavenProject, List<String>> result = analyzer.computeTransitivelyAffected(
                 allProjects,
                 directlyAffected,
+                Set.of(),
                 new TransitiveImpactAnalyzer.EffectiveModels(Map.of(), Map.of()),
                 new TransitiveImpactAnalyzer.ResolutionContext(
                         tempDir, session, new LinkedHashMap<>(), new LinkedHashMap<>(), new Timings()),

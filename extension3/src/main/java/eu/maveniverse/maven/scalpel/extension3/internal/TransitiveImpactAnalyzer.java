@@ -106,6 +106,7 @@ class TransitiveImpactAnalyzer {
     Map<MavenProject, List<String>> computeTransitivelyAffected(
             List<MavenProject> allProjects,
             Set<MavenProject> directlyAffected,
+            Set<MavenProject> testOnlyProjects,
             EffectiveModels models,
             ResolutionContext rctx,
             boolean explain,
@@ -126,7 +127,13 @@ class TransitiveImpactAnalyzer {
 
         // Second pass: propagate through reactor dependencies.
         secondPassReactorPropagation(
-                allProjects, directlyAffected, rctx, explain, transitivelyAffected, transitiveEvidence);
+                allProjects,
+                directlyAffected,
+                testOnlyProjects,
+                rctx,
+                explain,
+                transitivelyAffected,
+                transitiveEvidence);
 
         if (!transitivelyAffected.isEmpty()) {
             logger.info(
@@ -163,13 +170,20 @@ class TransitiveImpactAnalyzer {
     private void secondPassReactorPropagation(
             List<MavenProject> allProjects,
             Set<MavenProject> directlyAffected,
+            Set<MavenProject> testOnlyProjects,
             ResolutionContext rctx,
             boolean explain,
             Map<MavenProject, List<String>> transitivelyAffected,
             Map<MavenProject, List<String>> transitiveEvidence) {
         Set<String> affectedGAs = new LinkedHashSet<>();
         for (MavenProject p : directlyAffected) {
-            affectedGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+            // Test-only modules (e.g. POM with only test-scoped dep changes) must not seed
+            // unrestricted reactor propagation: their compile-time outputs are unchanged, so
+            // ordinary consumers are not affected. ReactorTrimmer handles test-only downstream
+            // propagation separately (Phase 2 BFS with hasTestJarDependency checks).
+            if (!testOnlyProjects.contains(p)) {
+                affectedGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+            }
         }
         for (MavenProject p : transitivelyAffected.keySet()) {
             affectedGAs.add(p.getGroupId() + ":" + p.getArtifactId());
