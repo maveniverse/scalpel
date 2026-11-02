@@ -23,6 +23,7 @@ import java.util.function.LongSupplier;
 import org.apache.maven.execution.ExecutionEvent;
 import org.apache.maven.execution.ExecutionListener;
 import org.apache.maven.execution.MavenSession;
+import org.apache.maven.model.Plugin;
 import org.apache.maven.plugin.MojoExecution;
 import org.apache.maven.project.MavenProject;
 import org.junit.jupiter.api.Test;
@@ -71,6 +72,10 @@ class ShadowBuildMonitorTest {
     }
 
     private static ExecutionEvent event(ExecutionEvent.Type type, MavenProject project) {
+        return event(type, project, null);
+    }
+
+    private static ExecutionEvent event(ExecutionEvent.Type type, MavenProject project, MojoExecution mojoExecution) {
         return new ExecutionEvent() {
             public ExecutionEvent.Type getType() {
                 return type;
@@ -85,7 +90,7 @@ class ShadowBuildMonitorTest {
             }
 
             public MojoExecution getMojoExecution() {
-                return null;
+                return mojoExecution;
             }
 
             public Exception getException() {
@@ -110,7 +115,8 @@ class ShadowBuildMonitorTest {
                 Arrays.asList("module-b/src/Foo.java"),
                 clock,
                 MavenProject::getArtifactId,
-                ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a", "module-c"), null));
+                ShadowDecision.measuring(
+                        Arrays.asList("module-b"), Arrays.asList("module-a", "module-c"), List.of(), null));
 
         MavenProject a = project(reactorRoot, "module-a");
         MavenProject b = project(reactorRoot, "module-b");
@@ -172,7 +178,9 @@ class ShadowBuildMonitorTest {
                         "wouldHaveSkipped",
                         "moduleMillis",
                         "estimatedSecondsSaved",
-                        "wouldHaveSkippedButFailed"),
+                        "wouldHaveSkippedButFailed",
+                        "upstreamOnly",
+                        "upstreamOnlyTestFailures"),
                 emitted);
 
         Path history = reactorRoot.resolve("target/scalpel-shadow-history.jsonl");
@@ -180,6 +188,63 @@ class ShadowBuildMonitorTest {
         List<String> lines = Files.readAllLines(history);
         assertEquals(1, lines.size(), "one run must append exactly one jsonl line");
         assertTrue(lines.get(0).contains("module-a"));
+    }
+
+    @Test
+    void upstreamOnlyTestFailuresSurfaceInShadowArtifacts(@TempDir Path tmp) throws IOException {
+        Path reactorRoot = tmp.resolve("reactor");
+        Files.createDirectories(reactorRoot);
+
+        // lib-a and lib-b are upstream build prerequisites of the changed app-c: they sit
+        // inside wouldHaveBuilt and never in wouldHaveSkipped. lib-a fails during the
+        // observed full build (#222): the failure must surface in upstreamOnlyTestFailures
+        // because wouldHaveSkippedButFailed cannot see modules inside the build set, and a
+        // consumer needs this join to measure whether skipTestsForUpstream is safe.
+        ShadowBuildMonitor monitor = new ShadowBuildMonitor(
+                null,
+                reactorRoot,
+                "0.4.3",
+                "base",
+                Arrays.asList("app-c/src/App.java"),
+                () -> 0L,
+                MavenProject::getArtifactId,
+                ShadowDecision.measuring(
+                        Arrays.asList(".", "lib-a", "lib-b", "app-c"),
+                        Arrays.asList(),
+                        Arrays.asList("lib-a", "lib-b"),
+                        null));
+
+        MavenProject libA = project(reactorRoot, "lib-a");
+        MavenProject libB = project(reactorRoot, "lib-b");
+        Plugin surefire = new Plugin();
+        surefire.setGroupId("org.apache.maven.plugins");
+        surefire.setArtifactId("maven-surefire-plugin");
+        Plugin compiler = new Plugin();
+        compiler.setGroupId("org.apache.maven.plugins");
+        compiler.setArtifactId("maven-compiler-plugin");
+        monitor.sessionStarted(event(ExecutionEvent.Type.SessionStarted, null));
+        // lib-a: surefire test failure, counted
+        monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, libA));
+        monitor.mojoFailed(
+                event(ExecutionEvent.Type.MojoFailed, libA, new MojoExecution(surefire, "test", "default-test")));
+        monitor.projectFailed(event(ExecutionEvent.Type.ProjectFailed, libA));
+        // lib-b: compiler failure only, NOT counted (would surface without tests too)
+        monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, libB));
+        monitor.mojoFailed(
+                event(ExecutionEvent.Type.MojoFailed, libB, new MojoExecution(compiler, "compile", "default-compile")));
+        monitor.projectFailed(event(ExecutionEvent.Type.ProjectFailed, libB));
+        monitor.sessionEnded(event(ExecutionEvent.Type.SessionEnded, null));
+
+        assertEquals(java.util.Set.of(), monitor.getWouldHaveSkippedButFailed());
+        assertEquals(java.util.Set.of("lib-a"), monitor.getUpstreamOnlyTestFailures());
+
+        String json = Files.readString(reactorRoot.resolve("target/scalpel-shadow.json"));
+        assertTrue(json.contains("\"upstreamOnlyTestFailures\": ["));
+        assertTrue(json.contains("lib-a"));
+
+        List<String> lines = Files.readAllLines(reactorRoot.resolve("target/scalpel-shadow-history.jsonl"));
+        assertEquals(1, lines.size(), "one run must append exactly one jsonl line");
+        assertTrue(lines.get(0).contains("\"upstreamOnlyTestFailures\": [\"lib-a\"]"));
     }
 
     @Test
@@ -197,7 +262,7 @@ class ShadowBuildMonitorTest {
                     Arrays.asList("module-b/src/Foo.java"),
                     clock,
                     MavenProject::getArtifactId,
-                    ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), null));
+                    ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), List.of(), null));
             MavenProject b = project(reactorRoot, "module-b");
             monitor.projectStarted(event(ExecutionEvent.Type.ProjectStarted, b));
             monitor.projectSucceeded(event(ExecutionEvent.Type.ProjectSucceeded, b));
@@ -221,7 +286,7 @@ class ShadowBuildMonitorTest {
                 null,
                 new SteppingClock(),
                 MavenProject::getArtifactId,
-                ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), null));
+                ShadowDecision.measuring(Arrays.asList("module-b"), Arrays.asList("module-a"), List.of(), null));
 
         monitor.sessionEnded(event(ExecutionEvent.Type.SessionEnded, null));
 
@@ -229,6 +294,7 @@ class ShadowBuildMonitorTest {
         assertEquals(0.0, monitor.getEstimatedSecondsSaved(), 1e-9);
         assertTrue(monitor.getFailedModules().isEmpty());
         assertTrue(monitor.getWouldHaveSkippedButFailed().isEmpty());
+        assertEquals(Set.of(), monitor.getUpstreamOnlyTestFailures(), "empty case stays empty");
 
         Path shadowJson = reactorRoot.resolve("target/scalpel-shadow.json");
         assertTrue(Files.exists(shadowJson), "shadow json is still written with nothing measured");
@@ -255,6 +321,7 @@ class ShadowBuildMonitorTest {
                         Arrays.asList("module-b"),
                         Arrays.asList("module-a"),
                         java.util.Map.of("module-a", "NOT_AFFECTED"),
+                        List.of(),
                         "decision-id-1"));
 
         MavenProject a = project(reactorRoot, "module-a");
@@ -294,6 +361,7 @@ class ShadowBuildMonitorTest {
                         Arrays.asList("module-b"),
                         Arrays.asList("module-a"),
                         java.util.Map.of("module-a", "NOT_AFFECTED"),
+                        List.of(),
                         "decision-id-2"));
 
         MavenProject b = project(reactorRoot, "module-b");

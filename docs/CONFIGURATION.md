@@ -87,13 +87,14 @@ Shadow behaves exactly like `report` (full build, reactor untouched, all tests r
 2. Records per-module wall-clock for the full build that actually runs
 3. Joins the two into `estimatedSecondsSaved` (summed duration of the modules it would have skipped), written to `target/scalpel-shadow.json`
 4. Records `wouldHaveSkippedButFailed`: modules it would have skipped that failed in the full build, the false-negative counter, computed for free on every run
-5. Appends one JSONL line per run to `target/scalpel-shadow-history.jsonl`, so a trend accumulates across runs
+5. Records `upstreamOnlyTestFailures`: upstream build prerequisites (kept in the build only to produce dependents' inputs) whose tests failed, the counter that tells you whether `skipTestsForUpstream` would have hidden a failure
+6. Appends one JSONL line per run to `target/scalpel-shadow-history.jsonl`, so a trend accumulates across runs
 
 ```bash
 mvn verify -Dscalpel.mode=shadow -Dscalpel.baseBranch=origin/main
 ```
 
-Run it on a few representative pull requests, then read `estimatedSecondsSaved` and `wouldHaveSkippedButFailed`: the first tells you whether your topology benefits from trimming, the second whether Scalpel's analysis is safe for it. A shadow run never modifies the reactor and never skips a test.
+Run it on a few representative pull requests, then read `estimatedSecondsSaved`, `wouldHaveSkippedButFailed`, and `upstreamOnlyTestFailures`: the first tells you whether your topology benefits from trimming, the second whether Scalpel's analysis is safe for it, the third whether skipping upstream tests (`skipTestsForUpstream`) would have hidden a failure. A shadow run never modifies the reactor and never skips a test.
 
 ### `target/scalpel-shadow.json`
 
@@ -111,6 +112,8 @@ Run it on a few representative pull requests, then read `estimatedSecondsSaved` 
 | `moduleMillis` | object | Measured wall-clock per module path, in millis, for the full build that ran |
 | `estimatedSecondsSaved` | number | Summed duration of the would-have-skipped modules, in seconds |
 | `wouldHaveSkippedButFailed` | string[] | Modules it would have skipped that failed: the false-negative counter |
+| `upstreamOnly` | string[] | Upstream-only module paths, the denominator of the safety counter |
+| `upstreamOnlyTestFailures` | string[] | Upstream-only modules whose test execution failed; empty with a non-empty `upstreamOnly` across runs is the evidence that `skipTestsForUpstream` is safe for your topology |
 
 When a shadow run bails out before any measurement (no base branch, not a git repository, disable triggers, a full-build trigger, or a fail-safe error), the document is overwritten with a minimal status document (`status` and `reason`) so a previous run's measurement can never be mistaken for current results, mirroring the JSON report's semantics. The history file is appended only by measured runs, so a gap there means "not measured", never "measured zero".
 
