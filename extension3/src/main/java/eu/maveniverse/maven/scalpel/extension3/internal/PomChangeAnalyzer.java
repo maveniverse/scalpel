@@ -1575,9 +1575,9 @@ class PomChangeAnalyzer {
             DependencyChangeKind kind =
                     classifyDirectDependencyChanges(oldModel.getDependencies(), newModel.getDependencies());
             return kind == DependencyChangeKind.TEST_ONLY;
-        } catch (Exception e) {
+        } catch (XmlPullParserException | IOException e) {
             // Cannot parse: be conservative and treat as non-test
-            logger.debug("Cannot determine test-only scope for {}: {}", key(project), e.getMessage());
+            logger.debug("Cannot determine test-only scope for {}: {}", key(project), e.getMessage(), e);
             return false;
         }
     }

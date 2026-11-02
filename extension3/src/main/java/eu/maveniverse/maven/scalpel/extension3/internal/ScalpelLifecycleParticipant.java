@@ -423,6 +423,7 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             Set<MavenProject> testOnlyModules = new LinkedHashSet<>(sourceResult.getTestOnlyAffected());
             testOnlyModules.addAll(testOnlyByPom);
             testOnlyModules.removeAll(affectedByPom);
+            testOnlyModules.removeAll(sourceResult.getMainAffected());
 
             // Force-include modules matching forceBuildModules patterns
             Set<MavenProject> forceIncluded = new LinkedHashSet<>();

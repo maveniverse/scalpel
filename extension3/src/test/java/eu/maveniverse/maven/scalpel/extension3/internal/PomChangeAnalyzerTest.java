@@ -2094,6 +2094,192 @@ class PomChangeAnalyzerTest {
                 "Test-only affected set should be empty for a compile-scoped dep change");
     }
 
+    @Test
+    void classifyDirectDependencyChanges_nullScope_treatedAsCompile() {
+        // A dependency with null scope is normalized to "compile" by normalizeScope().
+        // Adding a test-scoped dep alongside an unchanged null-scoped dep must return TEST_ONLY.
+        List<Dependency> oldDeps = List.of(makeDep("com.example", "lib", "1.0", null));
+        List<Dependency> newDeps = List.of(
+                makeDep("com.example", "lib", "1.0", null), makeDep("com.example", "test-helper", "2.0", "test"));
+        assertEquals(
+                PomChangeAnalyzer.DependencyChangeKind.TEST_ONLY,
+                analyzer.classifyDirectDependencyChanges(oldDeps, newDeps));
+    }
+
+    @Test
+    void analyzeChanges_leafAndParentPomBothChange_leafPromotedToAffected() throws Exception {
+        // When both a leaf module's POM and its parent's POM change at the same time,
+        // the leaf should be promoted from testOnlyAffected to affected.
+        // Scenario: parent POM adds a test-scoped dep (test-only), leaf POM also adds
+        // a test-scoped dep (test-only). The parent's child-propagation loop detects
+        // that the child's effective model changed and adds it to ctx.affected —
+        // the consumer's removeAll(affectedByPom) then ensures it's not in testOnlyModules.
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <dependencies>
+                    <dependency>
+                      <groupId>junit</groupId><artifactId>junit</artifactId><version>4.13</version><scope>test</scope>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>test-helper</artifactId><version>1.0</version><scope>test</scope>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+
+        String oldModuleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), parentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+        MavenProject parent = projects.get(0);
+        parent.setOriginalModel(parseModel(parentPomXml));
+        MavenProject moduleA = projects.get(1);
+        moduleA.setOriginalModel(parseModel(moduleAPomXml));
+
+        // Both parent and leaf POMs changed
+        Set<String> changedPoms = Set.of("pom.xml", "module-a/pom.xml");
+        Map<String, byte[]> oldPoms = Map.of(
+                "pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8),
+                "module-a/pom.xml", oldModuleAPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        // The parent's effective dep change (inherited test dep) means children see effective model changes.
+        // PomChangeAnalyzer.Result may have module-a in both sets — it's the consumer
+        // (ScalpelLifecycleParticipant) that enforces disjointness via removeAll(affectedByPom).
+        // At the PomChangeAnalyzer level, module-a appears in affected because the parent's
+        // child-propagation loop detects an effective model change.
+        assertTrue(
+                result.getAffectedProjects().contains(moduleA),
+                "module-a should be in affected: parent's effective model change propagates to children");
+    }
+
+    @Test
+    void analyzeChanges_parentPomTestOnlyDepChange_parentIsTestOnlyAffected() throws Exception {
+        // When a parent POM (which has child modules) changes only test-scoped direct deps,
+        // the parent itself should be in testOnlyAffected (not fully affected).
+        // Children should NOT be pulled into affected unless their effective models changed.
+        Path root = setupReactorRoot();
+
+        String parentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <dependencies>
+                    <dependency>
+                      <groupId>junit</groupId><artifactId>junit</artifactId><version>4.13</version><scope>test</scope>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), parentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, parentPomXml, moduleAPomXml, moduleBPomXml);
+        MavenProject parent = projects.get(0);
+        parent.setOriginalModel(parseModel(parentPomXml));
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8));
+
+        PomChangeAnalyzer.Result result = analyzeChanges(changedPoms, oldPoms, projects, root);
+
+        assertTrue(
+                result.getTestOnlyAffectedProjects().contains(parent),
+                "Parent should be in testOnlyAffected when only test-scoped direct deps changed");
+        assertFalse(
+                result.getAffectedProjects().contains(parent),
+                "Parent should NOT be in fully affected when only test-scoped direct deps changed");
+    }
+
     /** Creates a minimal {@link Dependency} for use in unit tests. */
     private static Dependency makeDep(String groupId, String artifactId, String version, String scope) {
         Dependency dep = new Dependency();
