@@ -312,7 +312,7 @@ class PomChangeAnalyzerTest {
 
     @Test
     void diffEffectiveManagedPluginConfigs_configChange_reported() {
-        // Same version, different config in allowed GA → must be reported
+        // Same version, different config → must be reported
         org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
         org.codehaus.plexus.util.xml.Xpp3Dom releaseOld = new org.codehaus.plexus.util.xml.Xpp3Dom("release");
         releaseOld.setValue("11");
@@ -335,14 +335,13 @@ class PomChangeAnalyzerTest {
         newer.setVersion("3.13.0");
         newer.setConfiguration(configNew);
 
-        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
-        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs);
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer));
         assertEquals(Set.of("org.apache.maven.plugins:maven-compiler-plugin"), changed);
     }
 
     @Test
     void diffEffectiveManagedPluginConfigs_versionChange_skipped() {
-        // Different version in allowed GA → must NOT be reported (delegated to diffManagedPluginVersions)
+        // Different version → must NOT be reported (delegated to diffManagedPluginVersions)
         org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
         old.setGroupId("org.apache.maven.plugins");
         old.setArtifactId("maven-compiler-plugin");
@@ -353,14 +352,15 @@ class PomChangeAnalyzerTest {
         newer.setArtifactId("maven-compiler-plugin");
         newer.setVersion("3.14.0");
 
-        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
-        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs);
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer));
         assertTrue(changed.isEmpty(), "Version changes must be skipped (delegated to diffManagedPluginVersions)");
     }
 
     @Test
-    void diffEffectiveManagedPluginConfigs_notInAllowedGAs_skipped() {
-        // Config changed but GA not in allowedGAs → must NOT be reported (lifecycle-default plugin)
+    void diffEffectiveManagedPluginConfigs_configChange_anyGAReported() {
+        // Any plugin with a config change in the effective managed list is reported —
+        // no allow-list filter needed since getManagedPlugins() only returns user-declared entries
+        // (lifecycle defaults are not injected into pluginManagement by DefaultModelBuilder).
         org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
         org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
         org.codehaus.plexus.util.xml.Xpp3Dom child = new org.codehaus.plexus.util.xml.Xpp3Dom("option");
@@ -379,9 +379,11 @@ class PomChangeAnalyzerTest {
         newer.setVersion("3.3.1");
         newer.setConfiguration(configNew);
 
-        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin"); // resources NOT included
-        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs);
-        assertTrue(changed.isEmpty(), "Plugins not in allowedGAs must be skipped");
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer));
+        assertEquals(
+                Set.of("org.apache.maven.plugins:maven-resources-plugin"),
+                changed,
+                "Any user-declared managed plugin with a config change must be reported");
     }
 
     @Test
@@ -392,8 +394,7 @@ class PomChangeAnalyzerTest {
         old.setArtifactId("maven-compiler-plugin");
         old.setVersion("3.13.0");
 
-        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
-        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(), allowedGAs);
+        Set<String> changed = analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of());
         assertTrue(changed.isEmpty(), "Removed plugins must not be reported by this method");
     }
 
@@ -428,9 +429,8 @@ class PomChangeAnalyzerTest {
         newer.setVersion("3.13.0");
         newer.setConfiguration(configNew);
 
-        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
         Set<String> changed =
-                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs, oldBase, newBase);
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
         assertTrue(
                 changed.isEmpty(),
                 "Path-anchored config values that differ only by base-dir prefix must not be reported");
@@ -465,13 +465,71 @@ class PomChangeAnalyzerTest {
         newer.setVersion("3.13.0");
         newer.setConfiguration(configNew);
 
-        Set<String> allowedGAs = Set.of("org.apache.maven.plugins:maven-compiler-plugin");
         Set<String> changed =
-                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), allowedGAs, oldBase, newBase);
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
         assertEquals(
                 Set.of("org.apache.maven.plugins:maven-compiler-plugin"),
                 changed,
                 "Genuine config changes must still be reported even with base-dir normalization active");
+    }
+
+    @Test
+    void effectivePluginManagement_doesNotContainLifecycleDefaultPlugins() throws Exception {
+        // Verify empirically that Maven's DefaultModelBuilder does NOT inject lifecycle-default
+        // plugins into <pluginManagement>. Lifecycle injection (via LifecycleBindingsInjector)
+        // only populates build.plugins — and even that requires the full Plexus container, not
+        // available in standalone DefaultModelBuilderFactory used in tests and old-model builds.
+        //
+        // This confirms getManagedPlugins() on an effective model only returns user-declared
+        // entries — the allowedGAs guard in diffEffectiveManagedPluginConfigs is therefore
+        // redundant and can be removed.
+        Path root = setupReactorRoot();
+
+        // A project that declares maven-surefire-plugin (a lifecycle-default) in its own
+        // <pluginManagement>, plus no declaration of maven-resources-plugin (another lifecycle
+        // default). After effective model building:
+        //   - maven-surefire-plugin must appear in getManagedPlugins() (explicitly declared)
+        //   - maven-resources-plugin must NOT appear (not declared, lifecycle-default only)
+        String pomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>minimal</artifactId>
+                  <version>1.0</version>
+                  <build><pluginManagement><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                    </plugin>
+                  </plugins></pluginManagement></build>
+                </project>
+                """;
+
+        Path pomFile = root.resolve("pom.xml");
+        writePom(pomFile, pomXml);
+        reactorPomFiles.put("com.example:minimal:1.0", pomFile.toFile());
+
+        MavenProject project = createProject("com.example", "minimal", "1.0", pomFile.toFile());
+        project.setOriginalModel(parseModel(pomXml));
+        setEffectiveModel(project, pomXml);
+
+        List<org.apache.maven.model.Plugin> managedPlugins = analyzer.getManagedPlugins(project.getModel());
+        Set<String> managedGAs = managedPlugins.stream()
+                .map(p -> p.getGroupId() + ":" + p.getArtifactId())
+                .collect(java.util.stream.Collectors.toSet());
+
+        // Explicitly declared plugin must appear
+        assertTrue(
+                managedGAs.contains("org.apache.maven.plugins:maven-surefire-plugin"),
+                "Explicitly declared managed plugin must appear in getManagedPlugins()");
+
+        // Lifecycle-only plugin (not declared) must NOT appear — confirms no lifecycle injection into pluginManagement
+        assertFalse(
+                managedGAs.contains("org.apache.maven.plugins:maven-resources-plugin"),
+                "Lifecycle-only plugins must NOT appear in effective <pluginManagement> when not declared by the user;"
+                        + " found: " + managedGAs);
     }
 
     // --- analyzeChanges integration tests (issue #228) ---
