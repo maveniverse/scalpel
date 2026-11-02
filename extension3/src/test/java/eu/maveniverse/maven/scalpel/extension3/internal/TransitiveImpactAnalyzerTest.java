@@ -313,15 +313,23 @@ class TransitiveImpactAnalyzerTest {
 
     @Test
     void computeTransitivelyAffected_testOnlyProjectDoesNotPropagateToCompileConsumer()
-            throws DependencyResolutionException {
+            throws DependencyResolutionException, java.io.IOException {
         // Module A is directly affected but test-only (e.g. POM-only test-dep change).
         // Module B depends on A at compile scope.
         // Expected: B must NOT appear in transitivelyAffected because A is test-only.
+        // The EffectiveModels map must be non-empty so computeTransitivelyAffected does NOT
+        // early-return at the "if (models.oldModels().isEmpty())" guard — otherwise the
+        // testOnlyProjects filter logic is never exercised and the assertion passes vacuously.
         MavenSession session = mock(MavenSession.class);
         RepositorySystemSession repoSession = mock(RepositorySystemSession.class);
         when(session.getRepositorySession()).thenReturn(repoSession);
 
-        // Create module A and B projects
+        // Create module A and B projects. Module B's pom.xml must exist on disk so that
+        // TransitiveImpactAnalyzer can derive its relative path for the effective-models lookup.
+        java.nio.file.Path moduleBPom = tempDir.resolve("module-b/pom.xml");
+        java.nio.file.Files.createDirectories(moduleBPom.getParent());
+        java.nio.file.Files.createFile(moduleBPom);
+
         MavenProject projectA = mock(MavenProject.class);
         when(projectA.getGroupId()).thenReturn("com.example");
         when(projectA.getArtifactId()).thenReturn("module-a");
@@ -332,18 +340,40 @@ class TransitiveImpactAnalyzerTest {
         when(projectB.getGroupId()).thenReturn("com.example");
         when(projectB.getArtifactId()).thenReturn("module-b");
         when(projectB.getVersion()).thenReturn("1.0");
-        when(projectB.getFile()).thenReturn(tempDir.resolve("module-b/pom.xml").toFile());
+        when(projectB.getFile()).thenReturn(moduleBPom.toFile());
 
-        // Module B's resolved dependency tree includes A at compile scope
+        // Module B's resolved dependency tree includes A at compile scope.
+        // Pre-populate the resolution cache so resolver.resolve() is never called.
         DependencyNode moduleANode = createDependencyNode("com.example", "module-a", "1.0", "compile");
         DependencyNode rootBNode = new DefaultDependencyNode((org.eclipse.aether.graph.Dependency) null);
         rootBNode.setChildren(List.of(moduleANode));
 
         DependencyResolutionResult resolutionResultB = mock(DependencyResolutionResult.class);
         when(resolutionResultB.getUnresolvedDependencies()).thenReturn(List.of());
-        org.eclipse.aether.graph.DependencyNode depGraphB = rootBNode;
-        when(resolutionResultB.getDependencyGraph()).thenReturn(depGraphB);
-        when(resolver.resolve(any())).thenReturn(resolutionResultB);
+        when(resolutionResultB.getDependencyGraph()).thenReturn(rootBNode);
+
+        // Old dep tree for B is identical (module-a's test-only POM change doesn't alter compile output).
+        DependencyNode moduleANodeOld = createDependencyNode("com.example", "module-a", "1.0", "compile");
+        DependencyNode bRootOld = new DefaultDependencyNode((org.eclipse.aether.graph.Dependency) null);
+        bRootOld.setChildren(List.of(moduleANodeOld));
+        DependencyResolutionResult bOldResult = mock(DependencyResolutionResult.class);
+        when(bOldResult.getDependencyGraph()).thenReturn(bRootOld);
+
+        Map<MavenProject, DependencyResolutionResult> collectCache = new LinkedHashMap<>();
+        collectCache.put(projectB, resolutionResultB);
+        Map<MavenProject, DependencyResolutionResult> oldCollectCache = new LinkedHashMap<>();
+        oldCollectCache.put(projectB, bOldResult);
+
+        // Non-empty EffectiveModels so the analyzer enters both passes (not early-return).
+        // Module B's old and new models are identical — first pass finds no dependency change.
+        Model emptyModel = new Model();
+        Map<String, Model> oldModels = Map.of("module-b/pom.xml", emptyModel);
+        Map<String, Model> newModels = Map.of("module-b/pom.xml", emptyModel);
+        when(pomChangeAnalyzer.getManagedDependencies(any())).thenReturn(List.of());
+        when(pomChangeAnalyzer.getManagedPlugins(any())).thenReturn(List.of());
+        when(pomChangeAnalyzer.diffDependencies(any(), any())).thenReturn(Set.of());
+        when(pomChangeAnalyzer.diffManagedPluginVersions(any(), any())).thenReturn(Set.of());
+        when(pomChangeAnalyzer.getEffectivePlugins(any())).thenReturn(List.of());
 
         List<MavenProject> allProjects = List.of(projectA, projectB);
         Set<MavenProject> directlyAffected = Set.of(projectA);
@@ -355,9 +385,9 @@ class TransitiveImpactAnalyzerTest {
                 allProjects,
                 directlyAffected,
                 testOnlyProjects,
-                new TransitiveImpactAnalyzer.EffectiveModels(Map.of(), Map.of()),
+                new TransitiveImpactAnalyzer.EffectiveModels(oldModels, newModels),
                 new TransitiveImpactAnalyzer.ResolutionContext(
-                        tempDir, session, new LinkedHashMap<>(), new LinkedHashMap<>(), new Timings()),
+                        tempDir, session, collectCache, oldCollectCache, new Timings()),
                 false,
                 returnEvidence);
 

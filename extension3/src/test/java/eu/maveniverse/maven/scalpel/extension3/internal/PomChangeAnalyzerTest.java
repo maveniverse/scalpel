@@ -2545,7 +2545,11 @@ class PomChangeAnalyzerTest {
         List<MavenProject> projects = createSimpleReactor(root);
         MavenProject moduleA = projects.get(1);
 
-        // Old module-a POM: test dep, no pluginManagement
+        // Old module-a POM: test dep (4.12), no pluginManagement.
+        // Using a different version (4.12 vs 4.13 below) so classifyDirectDependencyChanges returns
+        // TEST_ONLY — the dep change alone would qualify as test-only. Only the pluginManagement
+        // guard can disqualify it. Without this version difference the dep classification returns NONE
+        // (no dep change at all), so the pluginManagement guard is never the deciding factor.
         String oldModuleAPom = """
                 <?xml version="1.0"?>
                 <project>
@@ -2554,13 +2558,15 @@ class PomChangeAnalyzerTest {
                   <artifactId>module-a</artifactId>
                   <dependencies>
                     <dependency>
-                      <groupId>junit</groupId><artifactId>junit</artifactId><version>4.13</version><scope>test</scope>
+                      <groupId>junit</groupId><artifactId>junit</artifactId><version>4.12</version><scope>test</scope>
                     </dependency>
                   </dependencies>
                 </project>
                 """;
 
-        // New module-a POM: same test dep, plus a pluginManagement entry added
+        // New module-a POM: test dep bumped to 4.13 (TEST_ONLY change), plus a pluginManagement entry added.
+        // The pluginManagement guard must fire and disqualify the test-only path even though the dep
+        // change alone would have been classified as TEST_ONLY.
         String newModuleAPom = """
                 <?xml version="1.0"?>
                 <project>
