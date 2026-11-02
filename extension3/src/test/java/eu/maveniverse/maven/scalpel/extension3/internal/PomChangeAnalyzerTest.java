@@ -551,6 +551,113 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void diffEffectiveManagedPluginConfigs_quotedPathAnchoredConfigValues_notReported() {
+        // Config values like -Dworkdir="${project.basedir}" have the base path followed by a quote,
+        // not a slash. replaceBasePathInValue must normalise these so they don't cause false positives.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineOld.setValue("-Dworkdir=\"/tmp/scalpel-old-poms-test/child\"");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineNew.setValue("-Dworkdir=\"/real/project/child\"");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Quoted-path-anchored config values that differ only in base dir must not be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_spaceDelimitedPathAnchoredConfigValues_notReported() {
+        // Config values like -Dworkdir=/base/child -Dflag=1 have the base path followed by a space.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineOld = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineOld.setValue("-Dworkdir=/tmp/scalpel-old-poms-test/child -Dflag=1");
+        configOld.addChild(argLineOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom argLineNew = new org.codehaus.plexus.util.xml.Xpp3Dom("argLine");
+        argLineNew.setValue("-Dworkdir=/real/project/child -Dflag=1");
+        configNew.addChild(argLineNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Space-delimited path-anchored config values that differ only in base dir must not be reported");
+    }
+
+    @Test
+    void diffEffectiveManagedPluginConfigs_xmlAttributePathAnchored_notReported() {
+        // XML attribute values containing path-anchored expressions (e.g. <mkdir dir="${project.build.directory}"/>)
+        // must be normalised — the attribute comparison must apply the same base-dir normalisation as text values.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/child");
+        Path newBase = Path.of("/real/project/child");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom taskOld = new org.codehaus.plexus.util.xml.Xpp3Dom("mkdir");
+        taskOld.setAttribute("dir", "/tmp/scalpel-old-poms-test/child/target");
+        configOld.addChild(taskOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom taskNew = new org.codehaus.plexus.util.xml.Xpp3Dom("mkdir");
+        taskNew.setAttribute("dir", "/real/project/child/target");
+        configNew.addChild(taskNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-antrun-plugin");
+        old.setVersion("3.1.0");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-antrun-plugin");
+        newer.setVersion("3.1.0");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "XML attribute path-anchored values that differ only in base dir must not be reported");
+    }
+
+    @Test
     void effectivePluginManagement_doesNotContainLifecycleDefaultPlugins() throws Exception {
         // Verify empirically that Maven's DefaultModelBuilder does NOT inject lifecycle-default
         // plugins into <pluginManagement>. Lifecycle injection (via LifecycleBindingsInjector)

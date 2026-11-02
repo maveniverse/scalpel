@@ -944,11 +944,9 @@ class PomChangeAnalyzer {
                 : null;
         Set<String> changedManagedPluginConfigs = diffEffectiveManagedPluginConfigs(
                 getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective), oldChildBase, newChildBase);
-        Set<String> allChangedPlugins = new LinkedHashSet<>(changedPlugins);
-        allChangedPlugins.addAll(changedManagedPluginConfigs);
-        if (!allChangedPlugins.isEmpty()) {
+        if (!changedPlugins.isEmpty()) {
             Set<String> acceptedPlugins = new LinkedHashSet<>();
-            for (String ga : allChangedPlugins) {
+            for (String ga : changedPlugins) {
                 if (filter.accepts("plugins/" + ga)) {
                     acceptedPlugins.add(ga);
                 } else if (logger.isDebugEnabled()) {
@@ -962,6 +960,33 @@ class PomChangeAnalyzer {
                 if (ctx.explain) {
                     for (String ga : acceptedPlugins) {
                         addEvidence(ctx.evidence, child, "effective plugin " + ga);
+                    }
+                }
+                changed = true;
+            }
+        }
+        // Managed plugin config/execution changes are filtered under the "managedPlugins/" category
+        // (not "plugins/") so that -Dscalpel.excludeChanges=managedPlugins/** correctly suppresses them.
+        if (!changedManagedPluginConfigs.isEmpty()) {
+            Set<String> acceptedManagedPluginConfigs = new LinkedHashSet<>();
+            for (String ga : changedManagedPluginConfigs) {
+                if (filter.accepts("managedPlugins/" + ga)) {
+                    acceptedManagedPluginConfigs.add(ga);
+                } else if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Child {} effective managed plugin config {} excluded by change filter", key(child), ga);
+                }
+            }
+            if (!acceptedManagedPluginConfigs.isEmpty()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Child {} has changed effective managed plugin configs: {}",
+                            key(child),
+                            acceptedManagedPluginConfigs);
+                }
+                if (ctx.explain) {
+                    for (String ga : acceptedManagedPluginConfigs) {
+                        addEvidence(ctx.evidence, child, "effective managed plugin config " + ga);
                     }
                 }
                 changed = true;
@@ -1547,8 +1572,11 @@ class PomChangeAnalyzer {
 
     /**
      * Replace {@code baseStr} in {@code value} only when followed by a path separator
-     * ({@code /} or {@code \}) or end-of-string.  This prevents matching sibling directories
-     * whose name starts with the same prefix (e.g. {@code /base-old}).
+     * ({@code /} or {@code \\}), a token delimiter ({@code "}, {@code '}, or space), or
+     * end-of-string.  This prevents matching sibling directories whose name starts with the
+     * same prefix (e.g. {@code /base-old}), while also handling JVM argument forms such as
+     * {@code -Dworkdir="${project.basedir}"} or {@code -Dworkdir=${project.basedir} -Dflag=1}
+     * where the base path is followed by a quote or space rather than a slash.
      */
     private static String replaceBasePathInValue(String value, String baseStr) {
         int idx = value.indexOf(baseStr);
@@ -1559,8 +1587,16 @@ class PomChangeAnalyzer {
         int start = 0;
         while (idx >= 0) {
             int end = idx + baseStr.length();
-            // Only replace when the match is followed by a path separator or end-of-string
-            if (end >= value.length() || value.charAt(end) == '/' || value.charAt(end) == '\\') {
+            // Only replace when the match is at end-of-string or followed by a delimiter:
+            // path separators (/ \), quotes (" '), or whitespace (space, tab) — to avoid
+            // matching sibling directories like /base-old while still handling JVM-arg forms.
+            if (end >= value.length()
+                    || value.charAt(end) == '/'
+                    || value.charAt(end) == '\\'
+                    || value.charAt(end) == '"'
+                    || value.charAt(end) == '\''
+                    || value.charAt(end) == ' '
+                    || value.charAt(end) == '\t') {
                 sb.append(value, start, idx);
                 sb.append("<basedir>");
                 start = end;
@@ -1603,15 +1639,20 @@ class PomChangeAnalyzer {
                 return false;
             }
         }
-        // Compare attributes
+        // Compare attributes — apply path normalization in case attr values contain base-dir paths
         String[] aAttrs = a.getAttributeNames();
         String[] bAttrs = b.getAttributeNames();
         if (aAttrs.length != bAttrs.length) {
             return false;
         }
         for (String attr : aAttrs) {
-            if (!Objects.equals(a.getAttribute(attr), b.getAttribute(attr))) {
-                return false;
+            String aAttrVal = a.getAttribute(attr);
+            String bAttrVal = b.getAttribute(attr);
+            if (!Objects.equals(aAttrVal, bAttrVal)) {
+                // Give path normalization a chance (e.g. <mkdir dir="${project.build.directory}"/>)
+                if (!Objects.equals(normalizeBasePath(aAttrVal, oldBase), normalizeBasePath(bAttrVal, newBase))) {
+                    return false;
+                }
             }
         }
         // Compare children recursively — propagate base dirs for nested path-anchored values
