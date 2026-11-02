@@ -343,15 +343,16 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
             // unmapped files would otherwise be silently dropped, causing a wrong incremental build.
             Set<String> unmappedSourceFiles = sourceResult.getUnmappedFiles();
             if (!unmappedSourceFiles.isEmpty()) {
-                String unmappedFile = unmappedSourceFiles.iterator().next();
                 logger.info(
-                        "Scalpel: Full build triggered by unattributable root-level file {} (not owned by any module)",
-                        unmappedFile);
+                        "Scalpel: Full build triggered by {} unattributable root-level file(s) {} (not owned by any module)",
+                        unmappedSourceFiles.size(),
+                        unmappedSourceFiles);
                 if (passiveRun(config)) {
+                    String unmappedTrigger = String.join(", ", unmappedSourceFiles);
                     reportAssembler.writeFullBuildReport(
                             config,
                             reactorRoot,
-                            unmappedFile,
+                            unmappedTrigger,
                             changedFiles,
                             decisionIdFor(result, config, reactorRoot, allProjects),
                             result.getMergeBaseId(),

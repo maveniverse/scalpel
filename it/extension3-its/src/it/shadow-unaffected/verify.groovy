@@ -10,8 +10,10 @@ assert buildLog.exists()
 String log = buildLog.text
 
 assert log.contains('mode=shadow')
-// docs/notes.md has a directory separator so it is NOT treated as a bare root-level file (#229).
-// The analysis completes with no modules affected; the passive branch writes a skipped report.
+// gated-module/pom.xml has a directory separator; ModuleMapper's pom.xml-boundary guard
+// returns null for it (not part of the reactor). POM analysis treats it as an unmatched
+// POM path (#229 scope fix). The analysis completes with no modules affected; the passive
+// branch writes a skipped report.
 assert log.contains('No modules affected by changes')
 assert log.contains('BUILD SUCCESS')
 

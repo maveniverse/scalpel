@@ -11,5 +11,7 @@ String log = buildLog.text
 
 // The bare root-level file (settings.properties) is not owned by any module.
 // Scalpel must trigger a full build rather than building only module-a (#229).
-assert log.contains('Full build triggered by unattributable root-level file'), \
+assert log.contains('Full build triggered by'), \
     "Expected full-build log line for unmapped root file, got:\n" + log
+assert log.contains('unattributable root-level file'), \
+    "Expected 'unattributable root-level file' in log, got:\n" + log
