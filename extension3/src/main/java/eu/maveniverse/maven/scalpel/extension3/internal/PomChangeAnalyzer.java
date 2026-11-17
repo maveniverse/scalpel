@@ -139,10 +139,12 @@ import org.slf4j.LoggerFactory;
  *             actually declare that dependency.  Modules that don't use the managed
  *             dependency see no diff and are <em>not</em> affected (issue #131).</li>
  *         <li>Old vs new <em>effective bound-plugin versions</em> — version-only comparison
- *             (configuration and execution diffs for bound plugins are already covered by the
- *             parent POM being in the changeset and by the child property analysis below).
- *             Only version changes from managed plugin updates indicate a real build-input
- *             change for the child.</li>
+ *             catching version changes from managed plugin updates.</li>
+ *         <li>Old vs new <em>effective bound-plugin configurations</em> — full (config +
+ *             executions) comparison restricted to same-version entries, catching the case
+ *             where a parent property used only in a directly-declared {@code <build><plugins>}
+ *             entry changes: the raw XML is unchanged but the effective config differs after
+ *             interpolation (issue #241).</li>
  *         <li>Old vs new <em>effective pluginManagement configurations</em> — for plugins
  *             explicitly declared in the parent's raw {@code <pluginManagement>}, a full
  *             (version + config + executions) comparison restricted to same-version
@@ -1003,14 +1005,7 @@ class PomChangeAnalyzer {
         }
 
         // Compare effective plugin VERSIONS only (not configuration/executions) for plugins
-        // actually bound to the child's lifecycle.
-        // Configuration may differ due to inherited property interpolation changes, but
-        // plugin configuration changes are already covered by the POM diff (the parent
-        // POM is in the changeset) and by the child property analysis below.  Only version
-        // changes from managed plugin updates indicate a real build-input change for the child.
-        // Plugins that are ONLY in <pluginManagement> (not yet bound to the child's lifecycle)
-        // do not appear in getEffectivePlugins() — config/execution changes for same-version
-        // managed-only plugins are caught separately via diffEffectiveManagedPluginConfigs() below.
+        // actually bound to the child's lifecycle (version changes from managed plugin updates).
         // Version bumps to managed-only plugins are intentionally not detected (issue #131).
         Set<String> changedPlugins = diffManagedPluginVersions(
                 getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
@@ -1036,6 +1031,17 @@ class PomChangeAnalyzer {
                         .toAbsolutePath()
                         .normalize()
                 : null;
+        // Compare effective configuration/executions of bound plugins (same-version only).
+        // This catches the case where a parent property is used only in a directly-declared
+        // <build><plugins> entry: the raw plugin XML is unchanged, but the effective
+        // configuration differs after property interpolation (issue #241).  Version changes
+        // are already captured by diffManagedPluginVersions() above and are skipped here.
+        // Plugins that are ONLY in <pluginManagement> are handled separately below.
+        Set<String> changedBoundPluginConfigs = diffEffectiveManagedPluginConfigs(
+                getEffectivePlugins(oldChildEffective),
+                getEffectivePlugins(newChildEffective),
+                oldChildBase,
+                newChildBase);
         Set<String> changedManagedPluginConfigs = diffEffectiveManagedPluginConfigs(
                 getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective), oldChildBase, newChildBase);
         if (!changedPlugins.isEmpty()) {
@@ -1054,6 +1060,32 @@ class PomChangeAnalyzer {
                 if (ctx.explain) {
                     for (String ga : acceptedPlugins) {
                         addEvidence(ctx.evidence, child, "effective plugin " + ga);
+                    }
+                }
+                changed = true;
+            }
+        }
+        // Bound plugin config/execution changes (same-version, property-driven) are reported
+        // under "plugins/" so they can be suppressed with -Dscalpel.excludeChanges=plugins/**.
+        if (!changedBoundPluginConfigs.isEmpty()) {
+            Set<String> acceptedBoundPluginConfigs = new LinkedHashSet<>();
+            for (String ga : changedBoundPluginConfigs) {
+                if (filter.accepts("plugins/" + ga)) {
+                    acceptedBoundPluginConfigs.add(ga);
+                } else if (logger.isDebugEnabled()) {
+                    logger.debug("Child {} effective bound plugin config {} excluded by change filter", key(child), ga);
+                }
+            }
+            if (!acceptedBoundPluginConfigs.isEmpty()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Child {} has changed effective bound plugin configs: {}",
+                            key(child),
+                            acceptedBoundPluginConfigs);
+                }
+                if (ctx.explain) {
+                    for (String ga : acceptedBoundPluginConfigs) {
+                        addEvidence(ctx.evidence, child, "effective bound plugin config " + ga);
                     }
                 }
                 changed = true;
