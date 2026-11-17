@@ -892,6 +892,95 @@ class PomChangeAnalyzerTest {
                 "module-b should be affected: parent ${jdk.release} (used only in plugin config) changed 17→21");
     }
 
+    @Test
+    void analyzeChanges_parentPropertyUsedOnlyInDirectPluginConfigAffectsAllChildren() throws Exception {
+        // Issue #241: parent changes ${lab.forks} used only in <build><plugins> (not pluginManagement)
+        // — all children must be affected even though the raw plugin XML is unchanged.
+        Path root = setupReactorRoot();
+
+        String newParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><lab.forks>2</lab.forks></properties>
+                  <build><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                      <configuration><forkCount>${lab.forks}</forkCount></configuration>
+                    </plugin>
+                  </plugins></build>
+                </project>
+                """;
+
+        String oldParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><lab.forks>1</lab.forks></properties>
+                  <build><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                      <configuration><forkCount>${lab.forks}</forkCount></configuration>
+                    </plugin>
+                  </plugins></build>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPomXml, moduleAPomXml, moduleBPomXml);
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleA),
+                "module-a should be affected: parent ${lab.forks} (used only in bound plugin config) changed 1→2");
+        assertTrue(
+                affected.contains(moduleB),
+                "module-b should be affected: parent ${lab.forks} (used only in bound plugin config) changed 1→2");
+    }
+
     // --- analyzeChanges integration tests ---
 
     @Test
