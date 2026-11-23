@@ -23,6 +23,9 @@ import javax.inject.Named;
 import javax.inject.Singleton;
 import org.apache.maven.execution.ProjectDependencyGraph;
 import org.apache.maven.model.Dependency;
+import org.apache.maven.model.Exclusion;
+import org.apache.maven.model.Extension;
+import org.apache.maven.model.Plugin;
 import org.apache.maven.project.MavenProject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -52,7 +55,23 @@ class ReactorTrimmer {
         Map<MavenProject, List<MavenProject>> directDownstream = new HashMap<>(sortedProjects.size());
         Map<MavenProject, List<MavenProject>> directUpstream = new HashMap<>(sortedProjects.size());
         for (MavenProject project : sortedProjects) {
-            directDownstream.put(project, graph.getDownstreamProjects(project, false));
+            // Edges only due to dependencies bringing no content are not followed downstream: a change
+            // of the upstream module cannot reach the downstream module through them. They are kept
+            // upstream (alsoMake), as building more upstream modules is harmless.
+            List<MavenProject> downstreams = new ArrayList<>();
+            for (MavenProject ds : graph.getDownstreamProjects(project, false)) {
+                if (dependsOnlyThroughNoContentDependencies(ds, project)) {
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(
+                                "Not following edge {} -> {}: only due to dependencies bringing no content",
+                                key(project),
+                                key(ds));
+                    }
+                } else {
+                    downstreams.add(ds);
+                }
+            }
+            directDownstream.put(project, downstreams);
             directUpstream.put(project, graph.getUpstreamProjects(project, false));
         }
 
@@ -269,6 +288,76 @@ class ReactorTrimmer {
         String artifactId = upstream.getArtifactId();
         for (Dependency dep : downstream.getDependencies()) {
             if (groupId.equals(dep.getGroupId()) && artifactId.equals(dep.getArtifactId()) && isTestJar(dep)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Returns true if the reactor edge from {@code upstream} to {@code downstream} only exists because of
+     * dependencies bringing no content to {@code downstream}: dependencies on the {@code pom} artifact of
+     * {@code upstream} with a wildcard exclusion ({@code *:*}). A POM artifact has no content of its own,
+     * and the wildcard exclusion removes all its dependencies: such dependencies are typically used to make
+     * sure a BOM is built before the modules importing it, without affecting their classpath.
+     * <p>
+     * Only an {@code upstream} module with the {@code pom} packaging is considered: for another packaging
+     * (e.g. {@code jar}), such a dependency is typically used to make sure the module is built first because
+     * {@code downstream} uses it in a way Maven does not see when ordering the reactor, e.g. as an annotation
+     * processor ({@code annotationProcessorPaths}) or as an artifact resolved by a plugin: a change of
+     * {@code upstream} does reach {@code downstream} through it.
+     * <p>
+     * To stay conservative, the edge is only considered as bringing no content if {@code upstream} is not
+     * the parent of {@code downstream} and is not used as a build plugin, a dependency of a build plugin, or an
+     * extension by {@code downstream}, as these relationships also create reactor edges.
+     */
+    static boolean dependsOnlyThroughNoContentDependencies(MavenProject downstream, MavenProject upstream) {
+        if (!"pom".equals(upstream.getPackaging())) {
+            return false;
+        }
+        String groupId = upstream.getGroupId();
+        String artifactId = upstream.getArtifactId();
+        if (downstream.getParent() != null
+                && groupId.equals(downstream.getParent().getGroupId())
+                && artifactId.equals(downstream.getParent().getArtifactId())) {
+            return false;
+        }
+        if (downstream.getBuild() != null) {
+            for (Plugin plugin : downstream.getBuild().getPlugins()) {
+                if (groupId.equals(plugin.getGroupId()) && artifactId.equals(plugin.getArtifactId())) {
+                    return false;
+                }
+                // The dependencies of the build plugins also create reactor edges (see ProjectSorter)
+                for (Dependency dep : plugin.getDependencies()) {
+                    if (groupId.equals(dep.getGroupId()) && artifactId.equals(dep.getArtifactId())) {
+                        return false;
+                    }
+                }
+            }
+            for (Extension extension : downstream.getBuild().getExtensions()) {
+                if (groupId.equals(extension.getGroupId()) && artifactId.equals(extension.getArtifactId())) {
+                    return false;
+                }
+            }
+        }
+        boolean found = false;
+        for (Dependency dep : downstream.getDependencies()) {
+            if (groupId.equals(dep.getGroupId()) && artifactId.equals(dep.getArtifactId())) {
+                if (!bringsNoContent(dep)) {
+                    return false;
+                }
+                found = true;
+            }
+        }
+        return found;
+    }
+
+    private static boolean bringsNoContent(Dependency dep) {
+        if (!"pom".equals(dep.getType())) {
+            return false;
+        }
+        for (Exclusion exclusion : dep.getExclusions()) {
+            if ("*".equals(exclusion.getGroupId()) && "*".equals(exclusion.getArtifactId())) {
                 return true;
             }
         }

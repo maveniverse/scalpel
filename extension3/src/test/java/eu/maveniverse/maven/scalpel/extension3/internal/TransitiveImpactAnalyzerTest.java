@@ -33,6 +33,7 @@ import org.eclipse.aether.artifact.DefaultArtifact;
 import org.eclipse.aether.graph.DefaultDependencyNode;
 import org.eclipse.aether.graph.Dependency;
 import org.eclipse.aether.graph.DependencyNode;
+import org.eclipse.aether.graph.Exclusion;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -395,6 +396,176 @@ class TransitiveImpactAnalyzerTest {
 
         assertFalse(
                 result.containsKey(projectB), "module-b must NOT be transitively affected when module-a is test-only");
+    }
+
+    @Test
+    void bringsNoContent_onlyPomWithWildcardExclusion() {
+        Exclusion wildcard = new Exclusion("*", "*", "*", "*");
+        Exclusion regular = new Exclusion("com.example", "other", "*", "*");
+
+        assertTrue(TransitiveImpactAnalyzer.bringsNoContent(
+                createDependency("com.example", "bom", "pom", "test", List.of(wildcard))));
+        assertTrue(TransitiveImpactAnalyzer.bringsNoContent(
+                createDependency("com.example", "bom", "pom", "compile", List.of(regular, wildcard))));
+        assertFalse(TransitiveImpactAnalyzer.bringsNoContent(
+                createDependency("com.example", "bom", "pom", "test", List.of())));
+        assertFalse(TransitiveImpactAnalyzer.bringsNoContent(
+                createDependency("com.example", "bom", "pom", "test", List.of(regular))));
+        assertFalse(TransitiveImpactAnalyzer.bringsNoContent(
+                createDependency("com.example", "lib", "jar", "compile", List.of(wildcard))));
+    }
+
+    @Test
+    void collectPropagatingDependencyScopes_skipsNodesBringingNoContent() {
+        Exclusion wildcard = new Exclusion("*", "*", "*", "*");
+        DependencyNode root = new DefaultDependencyNode((Dependency) null);
+        DependencyNode bomNoContent =
+                createDependencyNode(createDependency("com.example", "bom", "pom", "test", List.of(wildcard)));
+        DependencyNode lib = createDependencyNode("com.example", "lib", "1.0", "compile");
+        DependencyNode otherBom =
+                createDependencyNode(createDependency("com.example", "other-bom", "pom", "compile", List.of()));
+        // The POM of a module with the jar packaging (e.g. an annotation processor), excluding everything: the
+        // module is used by the build in a way Maven does not see, the node must be collected
+        DependencyNode processorNoContent =
+                createDependencyNode(createDependency("com.example", "processor", "pom", "test", List.of(wildcard)));
+        root.setChildren(List.of(bomNoContent, lib, otherBom, processorNoContent));
+
+        Map<String, String> scopes = TransitiveImpactAnalyzer.collectPropagatingDependencyScopes(
+                root, Set.of("com.example:bom", "com.example:other-bom"));
+
+        assertEquals(Set.of("com.example:lib", "com.example:other-bom", "com.example:processor"), scopes.keySet());
+        // The regular collection still sees all the nodes
+        assertEquals(
+                Set.of("com.example:bom", "com.example:lib", "com.example:other-bom", "com.example:processor"),
+                TransitiveImpactAnalyzer.collectDependencyScopes(root).keySet());
+    }
+
+    @Test
+    void collectPropagatingDependencyScopes_sameGaThroughRegularDependencyIsCollected() {
+        // The GA is reached both through a node bringing no content and through a regular node:
+        // skipping the former must not prevent collecting the latter.
+        Exclusion wildcard = new Exclusion("*", "*", "*", "*");
+        DependencyNode root = new DefaultDependencyNode((Dependency) null);
+        DependencyNode lib = createDependencyNode("com.example", "lib", "1.0", "compile");
+        DependencyNode bomThroughLib =
+                createDependencyNode(createDependency("com.example", "bom", "pom", "compile", List.of()));
+        lib.setChildren(new ArrayList<>(List.of(bomThroughLib)));
+        // Pushed last on the stack, so visited first by the depth-first walk
+        DependencyNode bomNoContent =
+                createDependencyNode(createDependency("com.example", "bom", "pom", "test", List.of(wildcard)));
+        root.setChildren(List.of(lib, bomNoContent));
+
+        Map<String, String> scopes =
+                TransitiveImpactAnalyzer.collectPropagatingDependencyScopes(root, Set.of("com.example:bom"));
+
+        assertEquals("compile", scopes.get("com.example:bom"));
+    }
+
+    @Test
+    void computeTransitivelyAffected_pomDependencyWithWildcardExclusionDoesNotPropagate() throws java.io.IOException {
+        // The BOM is directly affected (e.g. a managed dependency version changed). module-b depends on
+        // it as a pom with a *:* exclusion, only to make sure it is built first (a common pattern, e.g. in
+        // Quarkus): it brings no content and must NOT be affected. module-c depends on it as a pom without
+        // exclusion, which brings the dependencies of the BOM: it must be affected.
+        // The processor (jar packaging) is directly affected too. module-d depends on it as a pom with a *:*
+        // exclusion, to make sure it is built first as it uses it as an annotation processor (also a common
+        // pattern, e.g. in Quarkus for the extension processor and the deployment modules): it must be affected.
+        MavenSession session = mock(MavenSession.class);
+        RepositorySystemSession repoSession = mock(RepositorySystemSession.class);
+        when(session.getRepositorySession()).thenReturn(repoSession);
+
+        MavenProject bom = mockProject("bom", "pom");
+        MavenProject processor = mockProject("processor", "jar");
+        MavenProject projectB = mockProject("module-b", "jar");
+        MavenProject projectC = mockProject("module-c", "jar");
+        MavenProject projectD = mockProject("module-d", "jar");
+
+        Exclusion wildcard = new Exclusion("*", "*", "*", "*");
+        DependencyResolutionResult resultB = mockResolutionResult(
+                createDependencyNode(createDependency("com.example", "bom", "pom", "test", List.of(wildcard))));
+        DependencyResolutionResult resultC = mockResolutionResult(
+                createDependencyNode(createDependency("com.example", "bom", "pom", "compile", List.of())));
+        DependencyResolutionResult resultD = mockResolutionResult(
+                createDependencyNode(createDependency("com.example", "processor", "pom", "test", List.of(wildcard))));
+
+        Map<MavenProject, DependencyResolutionResult> collectCache = new LinkedHashMap<>();
+        collectCache.put(projectB, resultB);
+        collectCache.put(projectC, resultC);
+        collectCache.put(projectD, resultD);
+        // The old dependency trees are identical: the first pass finds no dependency change
+        Map<MavenProject, DependencyResolutionResult> oldCollectCache = new LinkedHashMap<>(collectCache);
+
+        Model emptyModel = new Model();
+        Map<String, Model> models = Map.of(
+                "module-b/pom.xml", emptyModel,
+                "module-c/pom.xml", emptyModel,
+                "module-d/pom.xml", emptyModel,
+                "bom/pom.xml", emptyModel,
+                "processor/pom.xml", emptyModel);
+        when(pomChangeAnalyzer.getManagedDependencies(any())).thenReturn(List.of());
+        when(pomChangeAnalyzer.getManagedPlugins(any())).thenReturn(List.of());
+        when(pomChangeAnalyzer.diffDependencies(any(), any())).thenReturn(Set.of());
+        when(pomChangeAnalyzer.diffManagedPluginVersions(any(), any())).thenReturn(Set.of());
+        when(pomChangeAnalyzer.getEffectivePlugins(any())).thenReturn(List.of());
+
+        Map<MavenProject, List<String>> evidence = new LinkedHashMap<>();
+        Map<MavenProject, List<String>> result = analyzer.computeTransitivelyAffected(
+                List.of(bom, processor, projectB, projectC, projectD),
+                Set.of(bom, processor),
+                Set.of(),
+                new TransitiveImpactAnalyzer.EffectiveModels(models, models),
+                new TransitiveImpactAnalyzer.ResolutionContext(
+                        tempDir, session, collectCache, oldCollectCache, new Timings()),
+                true,
+                evidence);
+
+        assertFalse(
+                result.containsKey(projectB),
+                "module-b only depends on the BOM through a pom dependency excluding everything: it must NOT be affected");
+        assertTrue(
+                result.containsKey(projectC),
+                "module-c depends on the BOM through a pom dependency bringing its dependencies: it must be affected");
+        assertEquals(List.of("depends on affected reactor module com.example:bom"), evidence.get(projectC));
+        assertTrue(
+                result.containsKey(projectD),
+                "module-d depends on the processor (jar packaging) through a pom dependency excluding everything, "
+                        + "used to order the reactor: it must be affected");
+        assertEquals(List.of("depends on affected reactor module com.example:processor"), evidence.get(projectD));
+    }
+
+    private MavenProject mockProject(String artifactId, String packaging) throws java.io.IOException {
+        Path pom = tempDir.resolve(artifactId + "/pom.xml");
+        java.nio.file.Files.createDirectories(pom.getParent());
+        if (!java.nio.file.Files.exists(pom)) {
+            java.nio.file.Files.createFile(pom);
+        }
+        MavenProject project = mock(MavenProject.class);
+        when(project.getGroupId()).thenReturn("com.example");
+        when(project.getArtifactId()).thenReturn(artifactId);
+        when(project.getVersion()).thenReturn("1.0");
+        when(project.getFile()).thenReturn(pom.toFile());
+        when(project.getPackaging()).thenReturn(packaging);
+        return project;
+    }
+
+    private DependencyResolutionResult mockResolutionResult(DependencyNode... children) {
+        DependencyNode root = new DefaultDependencyNode((Dependency) null);
+        root.setChildren(List.of(children));
+        DependencyResolutionResult result = mock(DependencyResolutionResult.class);
+        when(result.getUnresolvedDependencies()).thenReturn(List.of());
+        when(result.getDependencyGraph()).thenReturn(root);
+        return result;
+    }
+
+    private static Dependency createDependency(
+            String groupId, String artifactId, String extension, String scope, List<Exclusion> exclusions) {
+        return new Dependency(new DefaultArtifact(groupId, artifactId, extension, "1.0"), scope, false, exclusions);
+    }
+
+    private DependencyNode createDependencyNode(Dependency dep) {
+        DefaultDependencyNode node = new DefaultDependencyNode(dep);
+        node.setChildren(new ArrayList<>());
+        return node;
     }
 
     private DependencyNode createDependencyNode(String groupId, String artifactId, String version, String scope) {
