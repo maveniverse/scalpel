@@ -200,6 +200,26 @@ class ScalpelLifecycleParticipantTest {
         return List.of(parentProject, moduleA);
     }
 
+    // ─── explicitProfileIds ──────────────────────────────────────────────────
+
+    @Test
+    void explicitProfileIds_collectsActivatedAndDeactivatedProfiles() {
+        MavenExecutionRequest request = mock(MavenExecutionRequest.class);
+        when(request.getActiveProfiles()).thenReturn(List.of("extra", "from-settings"));
+        when(request.getInactiveProfiles()).thenReturn(List.of("disabled"));
+        MavenSession session = mock(MavenSession.class);
+        when(session.getRequest()).thenReturn(request);
+
+        assertEquals(
+                Set.of("extra", "from-settings", "disabled"), ScalpelLifecycleParticipant.explicitProfileIds(session));
+    }
+
+    @Test
+    void explicitProfileIds_handlesMissingRequest() {
+        assertTrue(ScalpelLifecycleParticipant.explicitProfileIds(mock(MavenSession.class))
+                .isEmpty());
+    }
+
     // ─── snapshotSystemProperties ────────────────────────────────────────────
 
     @Test

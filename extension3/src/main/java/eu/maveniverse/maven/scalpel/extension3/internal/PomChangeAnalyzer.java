@@ -38,6 +38,10 @@ import java.util.regex.Pattern;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
+import org.apache.maven.model.Activation;
+import org.apache.maven.model.ActivationFile;
+import org.apache.maven.model.ActivationOS;
+import org.apache.maven.model.ActivationProperty;
 import org.apache.maven.model.Dependency;
 import org.apache.maven.model.Exclusion;
 import org.apache.maven.model.Model;
@@ -56,6 +60,14 @@ import org.apache.maven.model.building.ModelBuildingRequest;
 import org.apache.maven.model.building.ModelBuildingResult;
 import org.apache.maven.model.building.ModelSource;
 import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
+import org.apache.maven.model.path.DefaultPathTranslator;
+import org.apache.maven.model.path.ProfileActivationFilePathInterpolator;
+import org.apache.maven.model.profile.DefaultProfileActivationContext;
+import org.apache.maven.model.profile.activation.FileProfileActivator;
+import org.apache.maven.model.profile.activation.JdkVersionProfileActivator;
+import org.apache.maven.model.profile.activation.OperatingSystemProfileActivator;
+import org.apache.maven.model.profile.activation.ProfileActivator;
+import org.apache.maven.model.profile.activation.PropertyProfileActivator;
 import org.apache.maven.model.resolution.InvalidRepositoryException;
 import org.apache.maven.model.resolution.ModelResolver;
 import org.apache.maven.model.resolution.UnresolvableModelException;
@@ -480,12 +492,30 @@ class PomChangeAnalyzer {
     /**
      * Groups Maven session state needed to resolve external parents and BOM imports
      * when building effective models from old POM content.
+     * <p>
+     * {@code explicitProfileIds} are the IDs of the profiles explicitly activated or deactivated for the build
+     * (e.g. with {@code -P} or the {@code <activeProfiles>} of the settings): their activation conditions are
+     * not relevant, they are in the same state for the old and new builds.
      */
     record ModelResolutionContext(
             Properties systemProperties,
             Properties userProperties,
             RepositorySystemSession repoSession,
-            List<RemoteRepository> remoteRepositories) {}
+            List<RemoteRepository> remoteRepositories,
+            Set<String> explicitProfileIds) {
+
+        ModelResolutionContext(
+                Properties systemProperties,
+                Properties userProperties,
+                RepositorySystemSession repoSession,
+                List<RemoteRepository> remoteRepositories) {
+            this(systemProperties, userProperties, repoSession, remoteRepositories, Set.of());
+        }
+
+        ModelResolutionContext {
+            explicitProfileIds = explicitProfileIds != null ? Set.copyOf(explicitProfileIds) : Set.of();
+        }
+    }
 
     /**
      * Analyze POM changes and return the set of affected projects plus old/new effective models.
@@ -2565,12 +2595,29 @@ class PomChangeAnalyzer {
                 // during project building, so the parent walk is redundant — but it
                 // guards against edge cases where that merge hasn't happened yet.
                 List<String> projectActiveProfileIds = getActiveProfileIdList(project);
+                // The old POMs are reconstructed in a temp directory that only contains POM files:
+                // file-based profile activation (<activation><file>) would be evaluated against it
+                // and give a different result than in the real build (e.g. a profile activated by
+                // a missing marker file would be active for the old model only). See
+                // getInactiveFileActivatedProfileIdList().
+                List<String> projectInactiveProfileIds =
+                        getInactiveFileActivatedProfileIdList(project, projectActiveProfileIds);
+                // The states above are the ones of the current build: the activation of the
+                // profiles of the changed POMs may have changed, see resolveOldProfileActivation().
+                ProfileIds oldProfileIds = resolveOldProfileActivation(
+                        project,
+                        absRoot,
+                        oldPomContents,
+                        resolutionCtx,
+                        projectActiveProfileIds,
+                        projectInactiveProfileIds);
 
                 Model model = buildSingleEffectiveModel(
                         this.modelBuilder,
                         tempPomFile,
                         relPath,
-                        projectActiveProfileIds,
+                        oldProfileIds.active(),
+                        oldProfileIds.inactive(),
                         resolutionCtx,
                         reactorPomsByGAV);
                 if (model != null) {
@@ -2622,9 +2669,18 @@ class PomChangeAnalyzer {
 
             // Use per-project profile IDs (see buildEffectiveModels for rationale).
             List<String> projectActiveProfileIds = getActiveProfileIdList(project);
+            // Deactivate the same profiles as for the old models to keep both sides symmetric.
+            List<String> projectInactiveProfileIds =
+                    getInactiveFileActivatedProfileIdList(project, projectActiveProfileIds);
 
             Model model = buildSingleEffectiveModel(
-                    this.modelBuilder, pomPath, relPath, projectActiveProfileIds, resolutionCtx, reactorPomsByGAV);
+                    this.modelBuilder,
+                    pomPath,
+                    relPath,
+                    projectActiveProfileIds,
+                    projectInactiveProfileIds,
+                    resolutionCtx,
+                    reactorPomsByGAV);
             if (model != null) {
                 result.put(relPath, model);
             }
@@ -2662,6 +2718,236 @@ class PomChangeAnalyzer {
         return new ArrayList<>(ids);
     }
 
+    /**
+     * Returns the IDs of the profiles that are activated by a file ({@code <activation><file>}) in the
+     * project or its ancestor chain, and that are not active in the current build.
+     * <p>
+     * File-based activation depends on the file system: when building the old effective models from the
+     * POMs reconstructed in a temp directory, the files checked by the activation do not exist (only the
+     * POMs are copied), so a profile activated by a missing file (e.g. {@code <missing>${basedir}/marker
+     * </missing>}) would be active for the old model even though it is not active in the real build,
+     * making the old and new effective models differ although nothing changed. The current build already
+     * evaluated these activations against the real file system: the profiles it activated are passed as
+     * active profiles (see {@link #getActiveProfileIdList(MavenProject)}), the other ones are explicitly
+     * deactivated with the IDs returned by this method.
+     * <p>
+     * A profile ID that is active anywhere in the ancestor chain is never deactivated.
+     */
+    static List<String> getInactiveFileActivatedProfileIdList(MavenProject project, List<String> activeProfileIds) {
+        Set<String> ids = new LinkedHashSet<>();
+        MavenProject current = project;
+        while (current != null) {
+            Model model = current.getOriginalModel() != null ? current.getOriginalModel() : current.getModel();
+            if (model != null && model.getProfiles() != null) {
+                for (Profile profile : model.getProfiles()) {
+                    if (profile.getActivation() != null
+                            && profile.getActivation().getFile() != null
+                            && !activeProfileIds.contains(profile.getId())) {
+                        ids.add(profile.getId());
+                    }
+                }
+            }
+            current = current.getParent();
+        }
+        return new ArrayList<>(ids);
+    }
+
+    /**
+     * The IDs of the profiles to explicitly activate and deactivate when building an effective model.
+     */
+    record ProfileIds(List<String> active, List<String> inactive) {}
+
+    /**
+     * The profile activators of the Maven 3.9 model builder (see {@code DefaultModelBuilderFactory}).
+     */
+    private static final List<ProfileActivator> PROFILE_ACTIVATORS = List.of(
+            new JdkVersionProfileActivator(),
+            new OperatingSystemProfileActivator(),
+            new PropertyProfileActivator(),
+            new FileProfileActivator()
+                    .setProfileActivationFilePathInterpolator(new ProfileActivationFilePathInterpolator()
+                            .setPathTranslator(new DefaultPathTranslator())));
+
+    /**
+     * Returns the profile IDs to explicitly activate and deactivate when building the old effective model
+     * of a project, starting from the states of the current build ({@code currentActive} and
+     * {@code currentInactive}, see {@link #getActiveProfileIdList(MavenProject)} and
+     * {@link #getInactiveFileActivatedProfileIdList(MavenProject, List)}).
+     * <p>
+     * The states of the current build are correct for the old model as long as the activation of the
+     * profiles did not change, which is the case for the unchanged POMs of the ancestor chain: the file
+     * system is the same (a file checked by a file-based activation and modified by the change is a change
+     * of the module containing it, detected as such) and so are their properties. In the POMs of the ancestor
+     * chain modified by the change, the old profiles are considered instead:
+     * <ul>
+     *   <li>a profile explicitly activated or deactivated for the build (e.g. with {@code -P}, see
+     *       {@link ModelResolutionContext#explicitProfileIds()}) keeps the state of the current build, whatever
+     *       its activation;</li>
+     *   <li>a profile removed by the change keeps the state of the current build: if it is active, it can only
+     *       have been explicitly activated, as for the old build;</li>
+     *   <li>a profile whose old activation has a file condition (alone or with other conditions) is evaluated
+     *       with its old activation and the properties of the old POM (used to interpolate the file path, so
+     *       they matter even if the activation itself did not change), against the real directory of the
+     *       project (as Maven does, also for the profiles of the parents), not against the temp directory
+     *       the old POMs are reconstructed in;</li>
+     *   <li>the state of another profile whose activation changed is not forced: the model builder evaluates
+     *       its old activation, and its conditions (property, JDK, OS...) are evaluated in the same
+     *       environment for the old and new models.</li>
+     * </ul>
+     * Otherwise, forcing the states of the current build would hide a change of the activation of a profile:
+     * a profile activated or deactivated by the change would have the same state in the old and new models.
+     */
+    ProfileIds resolveOldProfileActivation(
+            MavenProject project,
+            Path absRoot,
+            Map<String, byte[]> oldPomContents,
+            ModelResolutionContext resolutionCtx,
+            List<String> currentActive,
+            List<String> currentInactive) {
+        Set<String> active = new LinkedHashSet<>(currentActive);
+        Set<String> inactive = new LinkedHashSet<>(currentInactive);
+        File projectDirectory = project.getFile() != null ? project.getFile().getParentFile() : null;
+
+        MavenProject current = project;
+        while (current != null) {
+            Model oldModel = readOldModel(current, absRoot, oldPomContents);
+            if (oldModel != null) {
+                Map<String, Profile> currentProfiles = new LinkedHashMap<>();
+                Model currentModel =
+                        current.getOriginalModel() != null ? current.getOriginalModel() : current.getModel();
+                if (currentModel != null) {
+                    for (Profile profile : safeProfiles(currentModel)) {
+                        currentProfiles.put(profile.getId(), profile);
+                    }
+                }
+                for (Profile oldProfile : safeProfiles(oldModel)) {
+                    String id = oldProfile.getId();
+                    Profile currentProfile = currentProfiles.get(id);
+                    if (resolutionCtx.explicitProfileIds().contains(id) || currentProfile == null) {
+                        // Explicitly activated or deactivated profile: same state for the old build.
+                        // Removed profile: if active, it can only have been explicitly activated (e.g. -P),
+                        // as for the old build.
+                        continue;
+                    }
+                    Activation oldActivation = oldProfile.getActivation();
+                    if (hasFileCondition(oldActivation) && projectDirectory != null) {
+                        if (isActivationActive(oldProfile, oldModel, projectDirectory, resolutionCtx)) {
+                            active.add(id);
+                            inactive.remove(id);
+                        } else {
+                            active.remove(id);
+                            inactive.add(id);
+                        }
+                    } else if (!sameActivation(oldActivation, currentProfile.getActivation())) {
+                        active.remove(id);
+                        inactive.remove(id);
+                    }
+                    // Otherwise, same activation without file condition: the state of the current build is the
+                    // state of the old build.
+                }
+            }
+            current = current.getParent();
+        }
+        return new ProfileIds(new ArrayList<>(active), new ArrayList<>(inactive));
+    }
+
+    /**
+     * Returns the old raw model of a project if its POM was modified by the change, {@code null} otherwise.
+     */
+    private Model readOldModel(MavenProject project, Path absRoot, Map<String, byte[]> oldPomContents) {
+        if (project.getFile() == null) {
+            return null;
+        }
+        Path pomPath = project.getFile().toPath().toAbsolutePath().normalize();
+        if (!pomPath.startsWith(absRoot)) {
+            return null;
+        }
+        byte[] oldBytes =
+                oldPomContents.get(absRoot.relativize(pomPath).toString().replace('\\', '/'));
+        if (oldBytes == null) {
+            return null;
+        }
+        try {
+            return new MavenXpp3Reader().read(new ByteArrayInputStream(oldBytes), false);
+        } catch (IOException | XmlPullParserException e) {
+            logger.debug("Cannot read old POM of {}: {}", key(project), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Whether an activation has a file condition. A profile also active by default is excluded: Maven only
+     * activates it by default if no other profile of its POM is active, which cannot be decided per profile.
+     */
+    private static boolean hasFileCondition(Activation activation) {
+        return activation != null && activation.getFile() != null && !activation.isActiveByDefault();
+    }
+
+    /**
+     * Evaluates the activation of a profile as Maven does (see {@code DefaultProfileSelector}): all the conditions
+     * present must be met. The file condition is evaluated against {@code projectDirectory}, its path being
+     * interpolated with the properties of {@code model}, the POM declaring the profile.
+     */
+    private static boolean isActivationActive(
+            Profile profile, Model model, File projectDirectory, ModelResolutionContext resolutionCtx) {
+        DefaultProfileActivationContext context = new DefaultProfileActivationContext();
+        context.setProjectDirectory(projectDirectory);
+        if (resolutionCtx.systemProperties() != null) {
+            context.setSystemProperties(resolutionCtx.systemProperties());
+        }
+        if (resolutionCtx.userProperties() != null) {
+            context.setUserProperties(resolutionCtx.userProperties());
+        }
+        if (model.getProperties() != null) {
+            context.setProjectProperties(model.getProperties());
+        }
+        boolean present = false;
+        for (ProfileActivator activator : PROFILE_ACTIVATORS) {
+            if (activator.presentInConfig(profile, context, request -> {})) {
+                present = true;
+                if (!activator.isActive(profile, context, request -> {})) {
+                    return false;
+                }
+            }
+        }
+        return present;
+    }
+
+    static boolean sameActivation(Activation a, Activation b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        return a.isActiveByDefault() == b.isActiveByDefault()
+                && Objects.equals(a.getJdk(), b.getJdk())
+                && sameActivationOs(a.getOs(), b.getOs())
+                && sameActivationProperty(a.getProperty(), b.getProperty())
+                && sameActivationFile(a.getFile(), b.getFile());
+    }
+
+    private static boolean sameActivationOs(ActivationOS a, ActivationOS b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        return Objects.equals(a.getName(), b.getName())
+                && Objects.equals(a.getFamily(), b.getFamily())
+                && Objects.equals(a.getArch(), b.getArch())
+                && Objects.equals(a.getVersion(), b.getVersion());
+    }
+
+    private static boolean sameActivationProperty(ActivationProperty a, ActivationProperty b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        return Objects.equals(a.getName(), b.getName()) && Objects.equals(a.getValue(), b.getValue());
+    }
+
+    private static boolean sameActivationFile(ActivationFile a, ActivationFile b) {
+        if (a == null || b == null) {
+            return a == b;
+        }
+        return Objects.equals(a.getExists(), b.getExists()) && Objects.equals(a.getMissing(), b.getMissing());
+    }
+
     private void reconstructPomHierarchy(
             Path tempDir, Path absRoot, List<MavenProject> allProjects, Map<String, byte[]> oldPomContents)
             throws IOException {
@@ -2685,6 +2971,7 @@ class PomChangeAnalyzer {
             Path pomFile,
             String relPath,
             List<String> activeProfileIds,
+            List<String> inactiveProfileIds,
             ModelResolutionContext resolutionCtx,
             Map<String, File> reactorPomsByGAV) {
         try {
@@ -2721,6 +3008,9 @@ class PomChangeAnalyzer {
 
             if (!activeProfileIds.isEmpty()) {
                 request.setActiveProfileIds(activeProfileIds);
+            }
+            if (!inactiveProfileIds.isEmpty()) {
+                request.setInactiveProfileIds(inactiveProfileIds);
             }
 
             ModelBuildingResult buildResult = modelBuilder.build(request);
