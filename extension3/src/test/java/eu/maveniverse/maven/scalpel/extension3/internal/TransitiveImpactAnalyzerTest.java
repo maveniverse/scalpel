@@ -230,6 +230,7 @@ class TransitiveImpactAnalyzerTest {
         when(pomChangeAnalyzer.getManagedPlugins(any())).thenReturn(List.of());
         when(pomChangeAnalyzer.diffDependencies(any(), any())).thenReturn(Set.of());
         when(pomChangeAnalyzer.diffManagedPluginVersions(any(), any())).thenReturn(Set.of());
+        when(pomChangeAnalyzer.diffEffectivePluginVersions(any(), any())).thenReturn(Set.of());
         when(pomChangeAnalyzer.getEffectivePlugins(any())).thenReturn(List.of());
 
         Set<MavenProject> directlyAffected = Set.of(moduleA);
@@ -373,6 +374,7 @@ class TransitiveImpactAnalyzerTest {
         when(pomChangeAnalyzer.getManagedPlugins(any())).thenReturn(List.of());
         when(pomChangeAnalyzer.diffDependencies(any(), any())).thenReturn(Set.of());
         when(pomChangeAnalyzer.diffManagedPluginVersions(any(), any())).thenReturn(Set.of());
+        when(pomChangeAnalyzer.diffEffectivePluginVersions(any(), any())).thenReturn(Set.of());
         when(pomChangeAnalyzer.getEffectivePlugins(any())).thenReturn(List.of());
 
         List<MavenProject> allProjects = List.of(projectA, projectB);

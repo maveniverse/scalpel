@@ -990,6 +990,150 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void analyzeChanges_parentAddingBoundPluginAffectsChildren() throws Exception {
+        // The parent binds a new plugin in its <build><plugins>: it is inherited by all its children, whose build
+        // changes, so they must be affected.
+        Path root = setupReactorRoot();
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+        String newParentPom = oldParentPom.replace("""
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                """, """
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <build>
+                    <plugins>
+                      <plugin>
+                        <groupId>com.example</groupId><artifactId>extra-plugin</artifactId><version>1.0</version>
+                      </plugin>
+                    </plugins>
+                  </build>
+                """);
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        String moduleBPom = moduleAPom.replace("module-a", "module-b");
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertTrue(affected.contains(projects.get(1)), "module-a inherits the new plugin: it should be affected");
+        assertTrue(affected.contains(projects.get(2)), "module-b inherits the new plugin: it should be affected");
+    }
+
+    @Test
+    void analyzeChanges_parentAddingManagedOnlyPluginDoesNotAffectChildren() throws Exception {
+        // Counterpart of the previous test (#131): the parent adds a plugin to its <pluginManagement> only. It is
+        // bound to no child, whose build does not change: they must NOT be affected.
+        Path root = setupReactorRoot();
+
+        String oldParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                </project>
+                """;
+        String newParentPom = oldParentPom.replace("""
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                """, """
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <build>
+                    <pluginManagement>
+                      <plugins>
+                        <plugin>
+                          <groupId>com.example</groupId><artifactId>extra-plugin</artifactId><version>1.0</version>
+                        </plugin>
+                      </plugins>
+                    </pluginManagement>
+                  </build>
+                """);
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        String moduleBPom = moduleAPom.replace("module-a", "module-b");
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertFalse(affected.contains(projects.get(1)), "module-a does not bind the managed plugin");
+        assertFalse(affected.contains(projects.get(2)), "module-b does not bind the managed plugin");
+    }
+
+    @Test
+    void diffEffectivePluginVersions_reportsAdditionsUnlikeManagedDiff() {
+        org.apache.maven.model.Plugin unchanged = plugin("unchanged", "1.0");
+        org.apache.maven.model.Plugin bumpedOld = plugin("bumped", "1.0");
+        org.apache.maven.model.Plugin bumpedNew = plugin("bumped", "2.0");
+        org.apache.maven.model.Plugin removed = plugin("removed", "1.0");
+        org.apache.maven.model.Plugin added = plugin("added", "1.0");
+
+        List<org.apache.maven.model.Plugin> oldPlugins = List.of(unchanged, bumpedOld, removed);
+        List<org.apache.maven.model.Plugin> newPlugins = List.of(unchanged, bumpedNew, added);
+
+        assertEquals(
+                Set.of("com.example:bumped", "com.example:removed", "com.example:added"),
+                analyzer.diffEffectivePluginVersions(oldPlugins, newPlugins));
+        // The managed diff does not report additions (#131)
+        assertEquals(
+                Set.of("com.example:bumped", "com.example:removed"),
+                analyzer.diffManagedPluginVersions(oldPlugins, newPlugins));
+        assertTrue(analyzer.diffEffectivePluginVersions(List.of(unchanged), List.of(unchanged))
+                .isEmpty());
+    }
+
+    private static org.apache.maven.model.Plugin plugin(String artifactId, String version) {
+        org.apache.maven.model.Plugin plugin = new org.apache.maven.model.Plugin();
+        plugin.setGroupId("com.example");
+        plugin.setArtifactId(artifactId);
+        plugin.setVersion(version);
+        return plugin;
+    }
+
+    @Test
     void analyzeChanges_noEffectiveChangeInParent() throws Exception {
         // Setup: parent POM changed cosmetically (same properties, deps)
         Path root = setupReactorRoot();

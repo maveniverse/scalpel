@@ -291,7 +291,7 @@ class TransitiveImpactAnalyzer {
         }
 
         // Compare effective plugins directly from the fully-interpolated models
-        Set<String> changedPlugins = pomChangeAnalyzer.diffManagedPluginVersions(
+        Set<String> changedPlugins = pomChangeAnalyzer.diffEffectivePluginVersions(
                 pomChangeAnalyzer.getEffectivePlugins(oldModel), pomChangeAnalyzer.getEffectivePlugins(newModel));
         if (!changedPlugins.isEmpty()) {
             reasons.add(ScalpelReport.REASON_MANAGED_PLUGIN);
@@ -335,7 +335,7 @@ class TransitiveImpactAnalyzer {
         }
 
         // Check effective plugins
-        Set<String> changedPlugins = pomChangeAnalyzer.diffManagedPluginVersions(
+        Set<String> changedPlugins = pomChangeAnalyzer.diffEffectivePluginVersions(
                 pomChangeAnalyzer.getEffectivePlugins(oldModel), pomChangeAnalyzer.getEffectivePlugins(newModel));
         if (!changedPlugins.isEmpty()) {
             return true;
