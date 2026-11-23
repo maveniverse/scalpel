@@ -33,6 +33,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
+import org.apache.maven.model.Exclusion;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Parent;
 import org.apache.maven.model.Profile;
@@ -1131,6 +1132,100 @@ class PomChangeAnalyzerTest {
         plugin.setArtifactId(artifactId);
         plugin.setVersion(version);
         return plugin;
+    }
+
+    @Test
+    void analyzeChanges_duplicatedExclusionsDoNotMakeUnchangedDependencyDiffer() throws Exception {
+        // module-a declares the same exclusion twice on an unchanged dependency. The duplicate is legal
+        // and has no effect: module-a must not be affected by an unrelated managed version change in the
+        // parent, while module-b, which uses the managed dependency, must be.
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>lib-x</artifactId><version>2.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        String oldParentPom = newParentPom.replace("<version>2.0</version>", "<version>1.0</version>");
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>other-lib</artifactId><version>1.0</version>
+                      <exclusions>
+                        <exclusion><groupId>com.example</groupId><artifactId>excluded</artifactId></exclusion>
+                        <exclusion><groupId>com.example</groupId><artifactId>other-excluded</artifactId></exclusion>
+                        <exclusion><groupId>com.example</groupId><artifactId>excluded</artifactId></exclusion>
+                      </exclusions>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertTrue(affected.contains(projects.get(2)), "module-b uses the managed dependency and should be affected");
+        assertFalse(
+                affected.contains(projects.get(1)),
+                "module-a only has an unchanged dependency with a duplicated exclusion and should NOT be affected");
+    }
+
+    @Test
+    void equalExclusions_ignoresDuplicatesAndOrder() {
+        Exclusion a = exclusion("com.example", "a");
+        Exclusion b = exclusion("com.example", "b");
+        Exclusion c = exclusion("com.example", "c");
+
+        assertTrue(PomChangeAnalyzer.equalExclusions(List.of(a, b, a), List.of(b, a, b)));
+        assertTrue(PomChangeAnalyzer.equalExclusions(List.of(a, b, a), List.of(a, b)));
+        assertFalse(PomChangeAnalyzer.equalExclusions(List.of(a, b, a), List.of(a, b, c)));
+        assertFalse(PomChangeAnalyzer.equalExclusions(List.of(a, a), List.of(a, b)));
+        assertTrue(PomChangeAnalyzer.equalExclusions(List.of(), List.of()));
+    }
+
+    private static Exclusion exclusion(String groupId, String artifactId) {
+        Exclusion exclusion = new Exclusion();
+        exclusion.setGroupId(groupId);
+        exclusion.setArtifactId(artifactId);
+        return exclusion;
     }
 
     @Test

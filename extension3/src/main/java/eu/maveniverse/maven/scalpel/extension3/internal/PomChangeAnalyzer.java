@@ -1598,21 +1598,19 @@ class PomChangeAnalyzer {
                 && equalExclusions(a.getExclusions(), b.getExclusions());
     }
 
-    private boolean equalExclusions(List<Exclusion> a, List<Exclusion> b) {
-        if (a.size() != b.size()) {
-            return false;
+    static boolean equalExclusions(List<Exclusion> a, List<Exclusion> b) {
+        // Compare as unordered sets keyed by GA: declaring the same exclusion twice is legal and has
+        // no effect, so it must not make two otherwise identical lists differ (comparing the sizes
+        // of the lists and then removing from a set did, flagging unchanged dependencies as changed).
+        return exclusionKeys(a).equals(exclusionKeys(b));
+    }
+
+    private static Set<String> exclusionKeys(List<Exclusion> exclusions) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (Exclusion e : exclusions) {
+            keys.add(e.getGroupId() + ":" + e.getArtifactId());
         }
-        // Compare as unordered sets keyed by GA
-        Map<String, Boolean> setA = new LinkedHashMap<>();
-        for (Exclusion e : a) {
-            setA.put(e.getGroupId() + ":" + e.getArtifactId(), Boolean.TRUE);
-        }
-        for (Exclusion e : b) {
-            if (setA.remove(e.getGroupId() + ":" + e.getArtifactId()) == null) {
-                return false;
-            }
-        }
-        return setA.isEmpty();
+        return keys;
     }
 
     /**
