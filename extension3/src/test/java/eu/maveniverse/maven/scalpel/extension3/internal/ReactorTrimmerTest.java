@@ -21,8 +21,11 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Stream;
 import org.apache.maven.execution.ProjectDependencyGraph;
+import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
+import org.apache.maven.model.Exclusion;
 import org.apache.maven.model.Model;
+import org.apache.maven.model.Plugin;
 import org.apache.maven.project.MavenProject;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -392,7 +395,135 @@ class ReactorTrimmerTest {
                 "Y (downstream of X, reachable via non-test-only path B->C->X) must be included");
     }
 
+    @Test
+    void computeBuildSet_noContentPomDependencyEdgesAreNotFollowedDownstream() {
+        // The BOM is directly affected. module-b depends on it through a pom dependency with a *:* exclusion,
+        // only to make sure it is built first: the edge brings no content and must not be followed. module-c
+        // depends on it through a pom dependency without exclusion, bringing the dependencies of the BOM: the
+        // edge must be followed. module-d is a child of module-b: it must not be reached either.
+        // The processor (jar packaging) is directly affected too. module-e depends on it through a pom dependency
+        // with a *:* exclusion, to make sure it is built first as it uses it as an annotation processor: the edge
+        // must be followed.
+        MavenProject bom = createProject("com.example", "bom");
+        bom.getModel().setPackaging("pom");
+        MavenProject processor = createProject("com.example", "processor");
+        MavenProject projectB = createProject("com.example", "module-b");
+        MavenProject projectC = createProject("com.example", "module-c");
+        MavenProject projectD = createProject("com.example", "module-d");
+        MavenProject projectE = createProject("com.example", "module-e");
+        addNoContentPomDependency(projectB, "com.example", "bom");
+        addArtifactDependency(projectC, "com.example", "bom", "pom", null);
+        projectD.setParent(projectB);
+        addNoContentPomDependency(projectE, "com.example", "processor");
+
+        List<MavenProject> sortedProjects = List.of(bom, processor, projectB, projectC, projectD, projectE);
+        Map<MavenProject, List<MavenProject>> downstreamMap = new HashMap<>();
+        downstreamMap.put(bom, List.of(projectB, projectC));
+        downstreamMap.put(projectB, List.of(projectD));
+        downstreamMap.put(processor, List.of(projectE));
+        Map<MavenProject, List<MavenProject>> upstreamMap = new HashMap<>();
+        upstreamMap.put(projectB, List.of(bom));
+        upstreamMap.put(projectC, List.of(bom));
+        upstreamMap.put(projectD, List.of(projectB));
+        upstreamMap.put(projectE, List.of(processor));
+
+        ProjectDependencyGraph graph = new TestDependencyGraph(sortedProjects, downstreamMap, upstreamMap);
+
+        TrimResult result = trimmer.computeBuildSet(
+                new LinkedHashSet<>(List.of(bom, processor)), Set.of(), graph, configWith(false, true));
+
+        assertEquals(List.of(bom, processor, projectC, projectE), result.getBuildSet());
+        assertTrue(result.getDownstreamOnly().contains(projectC));
+        assertTrue(result.getDownstreamTestOnly().contains(projectE));
+        assertFalse(result.getDownstreamTestOnly().contains(projectB));
+        assertFalse(result.getDownstreamOnly().contains(projectD));
+    }
+
+    @Test
+    void dependsOnlyThroughNoContentDependencies() {
+        MavenProject bom = createProject("com.example", "bom");
+        bom.getModel().setPackaging("pom");
+
+        // An upstream module with another packaging is used by the downstream module in a way Maven does not see
+        // (e.g. annotation processor): the dependency is there to order the reactor and must be followed
+        MavenProject processor = createProject("com.example", "processor");
+        MavenProject processorUser = createProject("com.example", "processor-user");
+        addNoContentPomDependency(processorUser, "com.example", "processor");
+        assertFalse(ReactorTrimmer.dependsOnlyThroughNoContentDependencies(processorUser, processor));
+
+        MavenProject noContent = createProject("com.example", "no-content");
+        addNoContentPomDependency(noContent, "com.example", "bom");
+        assertTrue(ReactorTrimmer.dependsOnlyThroughNoContentDependencies(noContent, bom));
+
+        MavenProject plainPom = createProject("com.example", "plain-pom");
+        addArtifactDependency(plainPom, "com.example", "bom", "pom", null);
+        assertFalse(ReactorTrimmer.dependsOnlyThroughNoContentDependencies(plainPom, bom));
+
+        MavenProject jarWithWildcard = createProject("com.example", "jar-with-wildcard");
+        addArtifactDependency(jarWithWildcard, "com.example", "bom", "jar", null);
+        jarWithWildcard.getDependencies().get(0).addExclusion(wildcardExclusion());
+        assertFalse(ReactorTrimmer.dependsOnlyThroughNoContentDependencies(jarWithWildcard, bom));
+
+        MavenProject alsoRegular = createProject("com.example", "also-regular");
+        addNoContentPomDependency(alsoRegular, "com.example", "bom");
+        addDependency(alsoRegular, "com.example", "bom", "compile");
+        assertFalse(ReactorTrimmer.dependsOnlyThroughNoContentDependencies(alsoRegular, bom));
+
+        MavenProject child = createProject("com.example", "child");
+        addNoContentPomDependency(child, "com.example", "bom");
+        child.setParent(bom);
+        assertFalse(
+                ReactorTrimmer.dependsOnlyThroughNoContentDependencies(child, bom),
+                "The parent relationship also creates an edge");
+
+        MavenProject pluginUser = createProject("com.example", "plugin-user");
+        addNoContentPomDependency(pluginUser, "com.example", "bom");
+        Plugin bomAsPlugin = new Plugin();
+        bomAsPlugin.setGroupId("com.example");
+        bomAsPlugin.setArtifactId("bom");
+        pluginUser.getModel().setBuild(new Build());
+        pluginUser.getBuild().addPlugin(bomAsPlugin);
+        assertFalse(
+                ReactorTrimmer.dependsOnlyThroughNoContentDependencies(pluginUser, bom),
+                "The plugin relationship also creates an edge");
+
+        // A build plugin depending on the BOM (without excluding anything) also creates an edge: a change of the
+        // BOM can change the libraries of the plugin
+        MavenProject pluginDependencyUser = createProject("com.example", "plugin-dependency-user");
+        addNoContentPomDependency(pluginDependencyUser, "com.example", "bom");
+        Plugin plugin = new Plugin();
+        plugin.setGroupId("com.example");
+        plugin.setArtifactId("some-plugin");
+        Dependency pluginDependency = new Dependency();
+        pluginDependency.setGroupId("com.example");
+        pluginDependency.setArtifactId("bom");
+        pluginDependency.setType("pom");
+        plugin.addDependency(pluginDependency);
+        pluginDependencyUser.getModel().setBuild(new Build());
+        pluginDependencyUser.getBuild().addPlugin(plugin);
+        assertFalse(
+                ReactorTrimmer.dependsOnlyThroughNoContentDependencies(pluginDependencyUser, bom),
+                "The dependency of a build plugin also creates an edge");
+
+        MavenProject noDependency = createProject("com.example", "no-dependency");
+        assertFalse(ReactorTrimmer.dependsOnlyThroughNoContentDependencies(noDependency, bom));
+    }
+
     // --- Helper methods ---
+
+    private void addNoContentPomDependency(MavenProject project, String groupId, String artifactId) {
+        addArtifactDependency(project, groupId, artifactId, "pom", null);
+        Dependency dep = project.getDependencies().get(project.getDependencies().size() - 1);
+        dep.setScope("test");
+        dep.addExclusion(wildcardExclusion());
+    }
+
+    private static Exclusion wildcardExclusion() {
+        Exclusion exclusion = new Exclusion();
+        exclusion.setGroupId("*");
+        exclusion.setArtifactId("*");
+        return exclusion;
+    }
 
     private MavenProject createProject(String groupId, String artifactId) {
         Model model = new Model();

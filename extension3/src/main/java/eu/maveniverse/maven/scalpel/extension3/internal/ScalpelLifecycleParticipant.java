@@ -385,7 +385,8 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                                         snapshotSystemProperties(session.getSystemProperties()),
                                         session.getUserProperties(),
                                         session.getRepositorySession(),
-                                        allProjects.get(0).getRemoteProjectRepositories()),
+                                        allProjects.get(0).getRemoteProjectRepositories(),
+                                        explicitProfileIds(session)),
                                 config.getExcludeChanges(),
                                 config.getIncludeChanges());
                     } finally {
@@ -1051,6 +1052,19 @@ class ScalpelLifecycleParticipant extends AbstractMavenLifecycleParticipant {
                         + " would skip all {} modules (decisionId {})",
                 allProjects.size(),
                 decisionId);
+    }
+
+    /**
+     * Returns the IDs of the profiles explicitly activated or deactivated for the build, with {@code -P} or the
+     * {@code <activeProfiles>} of the settings (which Maven adds to the active profiles of the request).
+     */
+    static Set<String> explicitProfileIds(MavenSession session) {
+        Set<String> ids = new LinkedHashSet<>();
+        if (session.getRequest() != null) {
+            ids.addAll(session.getRequest().getActiveProfiles());
+            ids.addAll(session.getRequest().getInactiveProfiles());
+        }
+        return ids;
     }
 
     /**

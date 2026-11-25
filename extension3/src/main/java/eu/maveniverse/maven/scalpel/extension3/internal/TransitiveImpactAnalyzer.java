@@ -31,6 +31,7 @@ import org.apache.maven.project.ProjectDependenciesResolver;
 import org.eclipse.aether.graph.Dependency;
 import org.eclipse.aether.graph.DependencyFilter;
 import org.eclipse.aether.graph.DependencyNode;
+import org.eclipse.aether.graph.Exclusion;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -188,6 +189,14 @@ class TransitiveImpactAnalyzer {
         for (MavenProject p : transitivelyAffected.keySet()) {
             affectedGAs.add(p.getGroupId() + ":" + p.getArtifactId());
         }
+        // The reactor modules with the pom packaging: a dependency excluding everything on one of them
+        // brings no content (see collectPropagatingDependencyScopes())
+        Set<String> pomPackagedGAs = new HashSet<>();
+        for (MavenProject p : allProjects) {
+            if ("pom".equals(p.getPackaging())) {
+                pomPackagedGAs.add(p.getGroupId() + ":" + p.getArtifactId());
+            }
+        }
         boolean propagated = true;
         while (propagated) {
             propagated = false;
@@ -196,7 +205,7 @@ class TransitiveImpactAnalyzer {
                     continue;
                 }
                 propagated |= propagateToProject(
-                        project, rctx, affectedGAs, explain, transitivelyAffected, transitiveEvidence);
+                        project, rctx, affectedGAs, pomPackagedGAs, explain, transitivelyAffected, transitiveEvidence);
             }
         }
     }
@@ -210,6 +219,7 @@ class TransitiveImpactAnalyzer {
             MavenProject project,
             ResolutionContext rctx,
             Set<String> affectedGAs,
+            Set<String> pomPackagedGAs,
             boolean explain,
             Map<MavenProject, List<String>> transitivelyAffected,
             Map<MavenProject, List<String>> transitiveEvidence) {
@@ -219,7 +229,7 @@ class TransitiveImpactAnalyzer {
             return handleUnresolvableProject(project, affectedGAs, explain, transitivelyAffected, transitiveEvidence);
         }
         return matchAffectedDependency(
-                project, depResult, affectedGAs, explain, transitivelyAffected, transitiveEvidence);
+                project, depResult, affectedGAs, pomPackagedGAs, explain, transitivelyAffected, transitiveEvidence);
     }
 
     private boolean handleUnresolvableProject(
@@ -250,10 +260,12 @@ class TransitiveImpactAnalyzer {
             MavenProject project,
             DependencyResolutionResult depResult,
             Set<String> affectedGAs,
+            Set<String> pomPackagedGAs,
             boolean explain,
             Map<MavenProject, List<String>> transitivelyAffected,
             Map<MavenProject, List<String>> transitiveEvidence) {
-        Map<String, String> depScopes = collectDependencyScopes(depResult.getDependencyGraph());
+        Map<String, String> depScopes =
+                collectPropagatingDependencyScopes(depResult.getDependencyGraph(), pomPackagedGAs);
         for (Map.Entry<String, String> dep : depScopes.entrySet()) {
             if (affectedGAs.contains(dep.getKey())) {
                 List<String> reasons = new ArrayList<>();
@@ -509,7 +521,9 @@ class TransitiveImpactAnalyzer {
     static Map<String, String> collectDependencyVersions(DependencyNode root) {
         Map<String, String> versions = new LinkedHashMap<>();
         walkDependencyGraph(
-                root, (ga, dep) -> versions.put(ga, dep.getArtifact().getVersion()));
+                root,
+                dep -> false,
+                (ga, dep) -> versions.put(ga, dep.getArtifact().getVersion()));
         return versions;
     }
 
@@ -518,16 +532,74 @@ class TransitiveImpactAnalyzer {
      */
     static Map<String, String> collectDependencyScopes(DependencyNode root) {
         Map<String, String> scopes = new LinkedHashMap<>();
-        walkDependencyGraph(root, (ga, dep) -> scopes.put(ga, dep.getScope() != null ? dep.getScope() : SCOPE_COMPILE));
+        walkDependencyGraph(
+                root,
+                dep -> false,
+                (ga, dep) -> scopes.put(ga, dep.getScope() != null ? dep.getScope() : SCOPE_COMPILE));
         return scopes;
+    }
+
+    /**
+     * Walk the dependency graph and collect (GA → scope) for the nodes through which a change
+     * of a reactor module can reach the project, i.e. skipping the dependencies bringing no content
+     * (see {@link #bringsNoContent(Dependency)}) on the reactor modules with the {@code pom} packaging
+     * ({@code pomPackagedGAs}).
+     * <p>
+     * The packaging matters: a dependency excluding everything on the POM of a module with another
+     * packaging (e.g. {@code jar}) is typically used to make sure the module is built first because
+     * the downstream module uses it in a way Maven does not see when ordering the reactor, e.g. as an
+     * annotation processor ({@code annotationProcessorPaths}) or as an artifact resolved by a plugin.
+     * A change of the upstream module does reach the downstream module through such a dependency.
+     */
+    static Map<String, String> collectPropagatingDependencyScopes(DependencyNode root, Set<String> pomPackagedGAs) {
+        Map<String, String> scopes = new LinkedHashMap<>();
+        walkDependencyGraph(
+                root,
+                dep -> bringsNoContent(dep) && pomPackagedGAs.contains(ga(dep)),
+                (ga, dep) -> scopes.put(ga, dep.getScope() != null ? dep.getScope() : SCOPE_COMPILE));
+        return scopes;
+    }
+
+    /**
+     * Whether a dependency brings no content to the classpath of the project depending on it: a
+     * dependency on a {@code pom} artifact (as opposed to a {@code pom} imported with the {@code import}
+     * scope, which is not part of the dependency graph) with a wildcard exclusion ({@code *:*}).
+     * <p>
+     * A POM artifact has no content of its own: it only brings its dependencies, and the wildcard
+     * exclusion removes all of them. Such dependencies are typically used to make sure a module is
+     * built before the module declaring them, in the same reactor, without affecting its classpath.
+     * For a BOM (a module with the {@code pom} packaging), a change must thus not be propagated through
+     * them: a change of the managed dependencies of a BOM is handled by the import-scope BOM analysis,
+     * which only affects the modules actually using the changed managed dependencies. See
+     * {@link #collectPropagatingDependencyScopes(DependencyNode, Set)} for the other packagings.
+     */
+    static boolean bringsNoContent(Dependency dep) {
+        if (!"pom".equals(dep.getArtifact().getExtension())) {
+            return false;
+        }
+        for (Exclusion exclusion : dep.getExclusions()) {
+            if ("*".equals(exclusion.getGroupId()) && "*".equals(exclusion.getArtifactId())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static String ga(Dependency dep) {
+        return dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
     }
 
     /**
      * Generic depth-first walk over a dependency graph, invoking the consumer for each
      * unique GA encountered.
+     * <p>
+     * The nodes matching {@code skip} are skipped, with their children. They are not marked as visited
+     * so that the same GA is still collected if it is also reached through another dependency.
      */
     private static void walkDependencyGraph(
-            DependencyNode root, java.util.function.BiConsumer<String, Dependency> consumer) {
+            DependencyNode root,
+            java.util.function.Predicate<Dependency> skip,
+            java.util.function.BiConsumer<String, Dependency> consumer) {
         List<DependencyNode> stack = new ArrayList<>(root.getChildren());
         Set<String> visited = new HashSet<>();
         while (!stack.isEmpty()) {
@@ -536,7 +608,10 @@ class TransitiveImpactAnalyzer {
             if (dep == null) {
                 continue;
             }
-            String ga = dep.getArtifact().getGroupId() + ":" + dep.getArtifact().getArtifactId();
+            if (skip.test(dep)) {
+                continue;
+            }
+            String ga = ga(dep);
             if (visited.add(ga)) {
                 consumer.accept(ga, dep);
                 stack.addAll(node.getChildren());

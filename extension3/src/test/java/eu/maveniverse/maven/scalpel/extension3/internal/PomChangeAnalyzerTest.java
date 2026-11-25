@@ -33,6 +33,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import org.apache.maven.model.Build;
 import org.apache.maven.model.Dependency;
+import org.apache.maven.model.Exclusion;
 import org.apache.maven.model.Model;
 import org.apache.maven.model.Parent;
 import org.apache.maven.model.Profile;
@@ -1131,6 +1132,672 @@ class PomChangeAnalyzerTest {
         plugin.setArtifactId(artifactId);
         plugin.setVersion(version);
         return plugin;
+    }
+
+    @Test
+    void analyzeChanges_duplicatedExclusionsDoNotMakeUnchangedDependencyDiffer() throws Exception {
+        // module-a declares the same exclusion twice on an unchanged dependency. The duplicate is legal
+        // and has no effect: module-a must not be affected by an unrelated managed version change in the
+        // parent, while module-b, which uses the managed dependency, must be.
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <dependencyManagement><dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>lib-x</artifactId><version>2.0</version>
+                    </dependency>
+                  </dependencies></dependencyManagement>
+                </project>
+                """;
+        String oldParentPom = newParentPom.replace("<version>2.0</version>", "<version>1.0</version>");
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>other-lib</artifactId><version>1.0</version>
+                      <exclusions>
+                        <exclusion><groupId>com.example</groupId><artifactId>excluded</artifactId></exclusion>
+                        <exclusion><groupId>com.example</groupId><artifactId>other-excluded</artifactId></exclusion>
+                        <exclusion><groupId>com.example</groupId><artifactId>excluded</artifactId></exclusion>
+                      </exclusions>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency><groupId>com.example</groupId><artifactId>lib-x</artifactId></dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertTrue(affected.contains(projects.get(2)), "module-b uses the managed dependency and should be affected");
+        assertFalse(
+                affected.contains(projects.get(1)),
+                "module-a only has an unchanged dependency with a duplicated exclusion and should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_fileActivatedProfileInactiveInBuildDoesNotMakeOldModelDiffer() throws Exception {
+        // module-a has a profile activated by a missing marker file, binding an extra plugin. The marker
+        // exists, so the profile is not active in the real build. The old effective models are built from
+        // POMs reconstructed in a temp directory, where the marker does not exist: the profile must not be
+        // activated there, otherwise module-a is reported as affected by any change of its parent.
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <dep.version>2.0</dep.version>
+                  </properties>
+                </project>
+                """;
+        String oldParentPom = newParentPom.replace("<dep.version>2.0</dep.version>", "<dep.version>1.0</dep.version>");
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <profiles>
+                    <profile>
+                      <id>unless-marker</id>
+                      <activation>
+                        <file><missing>${basedir}/disable-marker</missing></file>
+                      </activation>
+                      <build>
+                        <plugins>
+                          <plugin>
+                            <groupId>com.example</groupId><artifactId>extra-plugin</artifactId><version>1.0</version>
+                          </plugin>
+                        </plugins>
+                      </build>
+                    </profile>
+                  </profiles>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        // The marker exists in the real module directory: the profile is not active in the build
+        Files.createFile(root.resolve("module-a/disable-marker"));
+
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                  <dependencies>
+                    <dependency>
+                      <groupId>com.example</groupId><artifactId>lib-x</artifactId><version>${dep.version}</version>
+                    </dependency>
+                  </dependencies>
+                </project>
+                """;
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+        assertTrue(
+                projects.get(1).getModel().getBuild() == null
+                        || projects.get(1).getModel().getBuild().getPlugins().stream()
+                                .noneMatch(p -> "extra-plugin".equals(p.getArtifactId())),
+                "Sanity check: the profile must not be active in the current model as the marker exists");
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertTrue(affected.contains(projects.get(2)), "module-b references ${dep.version} and should be affected");
+        assertFalse(
+                affected.contains(projects.get(1)),
+                "module-a is unchanged and its file-activated profile is inactive: it should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_fileActivationChangeDeactivatingInheritedProfileIsDetected() throws Exception {
+        // The parent declares a profile binding a plugin, inherited by its children. The change modifies the
+        // activation of the profile: it was active (missing marker) and is now inactive (the marker must exist,
+        // and it does not). The build of module-a changes (the plugin is not bound anymore): it must be affected.
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <profiles>
+                    <profile>
+                      <id>with-extra-plugin</id>
+                      <activation>
+                        <file><exists>${basedir}/marker</exists></file>
+                      </activation>
+                      <build>
+                        <plugins>
+                          <plugin>
+                            <groupId>com.example</groupId><artifactId>extra-plugin</artifactId><version>1.0</version>
+                          </plugin>
+                        </plugins>
+                      </build>
+                    </profile>
+                  </profiles>
+                </project>
+                """;
+        String oldParentPom =
+                newParentPom.replace("<exists>${basedir}/marker</exists>", "<missing>${basedir}/marker</missing>");
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        String moduleBPom = moduleAPom.replace("module-a", "module-b");
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        // No marker anywhere: the profile is not active in the current build
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertTrue(
+                affected.contains(projects.get(1)),
+                "module-a inherited the profile binding the plugin, which is not active anymore: it should be affected");
+    }
+
+    @Test
+    void analyzeChanges_fileActivationChangeActivatingInheritedProfileIsDetected() throws Exception {
+        // Reverse of the previous test: the profile was inactive (the marker had to exist, and it does not) and
+        // is now active (missing marker). The build of module-a changes (the dependency is now added).
+        // Note: the profile adds a dependency rather than a plugin as the effective plugins comparison only
+        // reports modified and removed plugins, not added ones (#131).
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <profiles>
+                    <profile>
+                      <id>with-extra-dependency</id>
+                      <activation>
+                        <file><missing>${basedir}/marker</missing></file>
+                      </activation>
+                      <dependencies>
+                        <dependency>
+                          <groupId>com.example</groupId><artifactId>lib-x</artifactId><version>1.0</version>
+                        </dependency>
+                      </dependencies>
+                    </profile>
+                  </profiles>
+                </project>
+                """;
+        String oldParentPom =
+                newParentPom.replace("<missing>${basedir}/marker</missing>", "<exists>${basedir}/marker</exists>");
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        String moduleBPom = moduleAPom.replace("module-a", "module-b");
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+        // As in the real build, the profile is now active for module-a (no marker)
+        MavenProject moduleA = projects.get(1);
+        moduleA.setActiveProfiles(List.of(parseModel(newParentPom).getProfiles().get(0)));
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertTrue(
+                affected.contains(moduleA),
+                "module-a inherited the profile adding the dependency, which is now active: it should be affected");
+    }
+
+    @Test
+    void analyzeChanges_propertyActivationChangeActivatingInheritedProfileIsDetected() throws Exception {
+        // Same as the previous test with a property-based activation: the profile was inactive (the property is
+        // not set) and is now active (the property must not be set). Its state in the current build must not be
+        // forced on the old model, otherwise the change of activation is invisible.
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <profiles>
+                    <profile>
+                      <id>with-extra-dependency</id>
+                      <activation>
+                        <property><name>!scalpel.test.never.set</name></property>
+                      </activation>
+                      <dependencies>
+                        <dependency>
+                          <groupId>com.example</groupId><artifactId>lib-x</artifactId><version>1.0</version>
+                        </dependency>
+                      </dependencies>
+                    </profile>
+                  </profiles>
+                </project>
+                """;
+        String oldParentPom =
+                newParentPom.replace("<name>!scalpel.test.never.set</name>", "<name>scalpel.test.never.set</name>");
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        String moduleBPom = moduleAPom.replace("module-a", "module-b");
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+        // As in the real build, the profile is now active for module-a
+        MavenProject moduleA = projects.get(1);
+        moduleA.setActiveProfiles(List.of(parseModel(newParentPom).getProfiles().get(0)));
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertTrue(
+                affected.contains(moduleA),
+                "module-a inherited the profile adding the dependency, which is now active: it should be affected");
+    }
+
+    @Test
+    void analyzeChanges_compositeFileActivationChangeIsEvaluatedAgainstRealDirectory() throws Exception {
+        // The activation of the inherited profile combines a property and a file condition, and its property
+        // condition changes. The marker exists in module-a: the profile is inactive for the old and new builds.
+        // The old activation must be evaluated against the real directory (where the marker exists), not against
+        // the temp directory of the old POMs (where it does not): module-a must NOT be affected.
+        Path root = setupReactorRoot();
+        String oldParentPom = parentPomWithProfile("""
+                <property><name>!scalpel.test.disabled</name></property>
+                <file><missing>${basedir}/marker</missing></file>
+                """, "");
+        String newParentPom = parentPomWithProfile("""
+                <property><name>!scalpel.test.other.disabled</name></property>
+                <file><missing>${basedir}/marker</missing></file>
+                """, "");
+        Files.createFile(root.resolve("module-a/marker"));
+
+        Set<MavenProject> affected = analyzeParentProfileChange(root, oldParentPom, newParentPom, false, Set.of());
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "The profile is inactive for the old and new builds of module-a: it should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_fileActivationPropertyChangeIsDetected() throws Exception {
+        // The activation of the inherited profile is unchanged, but the property it references changes: the old
+        // activation checked a file that does not exist (active profile), the new one a file that exists (inactive
+        // profile). The dependency added by the profile is removed from module-a, which must be affected.
+        Path root = setupReactorRoot();
+        String activation = """
+                <file><missing>${basedir}/${scalpel.test.gate}</missing></file>
+                """;
+        String oldParentPom = parentPomWithProfile(activation, "<scalpel.test.gate>absent</scalpel.test.gate>");
+        String newParentPom = parentPomWithProfile(activation, "<scalpel.test.gate>marker</scalpel.test.gate>");
+        Files.createFile(root.resolve("module-a/marker"));
+
+        Set<MavenProject> affected = analyzeParentProfileChange(root, oldParentPom, newParentPom, false, Set.of());
+
+        assertTrue(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "The profile was active for the old build of module-a and is not anymore: it should be affected");
+    }
+
+    @Test
+    void analyzeChanges_explicitlyActivatedProfileStaysActiveForOldModel() throws Exception {
+        // The inherited profile is explicitly activated (e.g. -Pextra) and its file activation changes. Neither
+        // marker exists: the profile is only active because it is explicitly activated, for the old and new
+        // builds. It must not be deactivated for the old model: module-a must NOT be affected.
+        Path root = setupReactorRoot();
+        String oldParentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/old-marker</exists></file>
+                """, "");
+        String newParentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/new-marker</exists></file>
+                """, "");
+
+        Set<MavenProject> affected =
+                analyzeParentProfileChange(root, oldParentPom, newParentPom, true, Set.of("with-extra-dependency"));
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "The profile is explicitly activated for the old and new builds of module-a: it should NOT be affected");
+    }
+
+    /**
+     * Returns a parent POM declaring a profile with the given activation, adding a dependency to its children.
+     */
+    private static String parentPomWithProfile(String activation, String properties) {
+        return """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>%s</properties>
+                  <profiles>
+                    <profile>
+                      <id>with-extra-dependency</id>
+                      <activation>
+                %s
+                      </activation>
+                      <dependencies>
+                        <dependency>
+                          <groupId>com.example</groupId><artifactId>lib-x</artifactId><version>1.0</version>
+                        </dependency>
+                      </dependencies>
+                    </profile>
+                  </profiles>
+                </project>
+                """.formatted(properties, activation);
+    }
+
+    /**
+     * Analyzes a change of the parent POM, with unchanged children module-a and module-b. If
+     * {@code profileActiveForModuleA} is true, the profile of {@link #parentPomWithProfile(String, String)} is an
+     * active profile of module-a in the current build. {@code explicitProfileIds} are the profiles explicitly
+     * selected for the build (e.g. with {@code -P}).
+     */
+    private Set<MavenProject> analyzeParentProfileChange(
+            Path root,
+            String oldParentPom,
+            String newParentPom,
+            boolean profileActiveForModuleA,
+            Set<String> explicitProfileIds)
+            throws Exception {
+        writePom(root.resolve("pom.xml"), newParentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        String moduleBPom = moduleAPom.replace("module-a", "module-b");
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+        if (profileActiveForModuleA) {
+            projects.get(1)
+                    .setActiveProfiles(
+                            List.of(parseModel(newParentPom).getProfiles().get(0)));
+        }
+
+        return analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                new Properties(),
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                explicitProfileIds))
+                .getAffectedProjects();
+    }
+
+    @Test
+    void sameActivation_comparesAllConditions() {
+        Model model = parseModel("""
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <profiles>
+                    <profile><id>a</id><activation><file><missing>marker</missing></file></activation></profile>
+                    <profile><id>b</id><activation><file><missing>marker</missing></file></activation></profile>
+                    <profile><id>c</id><activation><file><exists>marker</exists></file></activation></profile>
+                    <profile><id>d</id><activation><property><name>foo</name></property></activation></profile>
+                    <profile><id>e</id><activation><property><name>foo</name><value>bar</value></property></activation></profile>
+                    <profile><id>f</id><activation><jdk>21</jdk></activation></profile>
+                    <profile><id>g</id><activation><os><family>unix</family></os></activation></profile>
+                    <profile><id>h</id><activation><activeByDefault>true</activeByDefault></activation></profile>
+                    <profile><id>i</id></profile>
+                  </profiles>
+                </project>
+                """);
+        List<Profile> p = model.getProfiles();
+
+        assertTrue(PomChangeAnalyzer.sameActivation(
+                p.get(0).getActivation(), p.get(1).getActivation()));
+        assertTrue(PomChangeAnalyzer.sameActivation(null, p.get(8).getActivation()));
+        for (int i = 1; i < p.size(); i++) {
+            for (int j = i + 1; j < p.size(); j++) {
+                assertFalse(
+                        PomChangeAnalyzer.sameActivation(
+                                p.get(i).getActivation(), p.get(j).getActivation()),
+                        "Activations of " + p.get(i).getId() + " and "
+                                + p.get(j).getId() + " should differ");
+            }
+        }
+    }
+
+    @Test
+    void analyzeChanges_fileActivatedProfileActiveInBuildStaysActiveForOldModel() throws Exception {
+        // Counterpart of the previous test: the marker does NOT exist, so the profile is active in the real
+        // build (and listed in the active profiles of the project). A change of the version of the plugin it
+        // binds, through a parent property, must still be detected.
+        Path root = setupReactorRoot();
+
+        String newParentPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties>
+                    <extra-plugin.version>2.0</extra-plugin.version>
+                  </properties>
+                </project>
+                """;
+        String oldParentPom = newParentPom.replace(
+                "<extra-plugin.version>2.0</extra-plugin.version>", "<extra-plugin.version>1.0</extra-plugin.version>");
+        writePom(root.resolve("pom.xml"), newParentPom);
+
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                  <profiles>
+                    <profile>
+                      <id>unless-marker</id>
+                      <activation>
+                        <file><missing>${basedir}/disable-marker</missing></file>
+                      </activation>
+                      <build>
+                        <plugins>
+                          <plugin>
+                            <groupId>com.example</groupId><artifactId>extra-plugin</artifactId>
+                            <version>${extra-plugin.version}</version>
+                          </plugin>
+                        </plugins>
+                      </build>
+                    </profile>
+                  </profiles>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+
+        String moduleBPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPom, moduleAPom, moduleBPom);
+        MavenProject moduleA = projects.get(1);
+        // As in the real build, the profile activated by the missing marker is an active profile of module-a
+        moduleA.setActiveProfiles(
+                List.of(moduleA.getOriginalModel().getProfiles().get(0)));
+
+        Set<MavenProject> affected = analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", oldParentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root)
+                .getAffectedProjects();
+
+        assertTrue(
+                affected.contains(moduleA),
+                "module-a binds the plugin whose version changed through its active profile and should be affected");
+        assertFalse(affected.contains(projects.get(2)), "module-b is unrelated and should NOT be affected");
+    }
+
+    @Test
+    void getInactiveFileActivatedProfileIdList_onlyFileActivatedAndNotActive() {
+        Model parentModel = parseModel("""
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version>
+                  <profiles>
+                    <profile><id>parent-file</id><activation><file><exists>marker</exists></file></activation></profile>
+                    <profile><id>parent-property</id><activation><property><name>foo</name></property></activation></profile>
+                  </profiles>
+                </project>
+                """);
+        Model childModel = parseModel("""
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <artifactId>child</artifactId>
+                  <profiles>
+                    <profile><id>child-file</id><activation><file><missing>marker</missing></file></activation></profile>
+                    <profile><id>child-file-active</id><activation><file><missing>other</missing></file></activation></profile>
+                    <profile><id>child-no-activation</id></profile>
+                  </profiles>
+                </project>
+                """);
+        MavenProject parent = new MavenProject(parentModel);
+        parent.setOriginalModel(parentModel);
+        MavenProject child = new MavenProject(childModel);
+        child.setOriginalModel(childModel);
+        child.setParent(parent);
+
+        assertEquals(
+                List.of("child-file", "parent-file"),
+                PomChangeAnalyzer.getInactiveFileActivatedProfileIdList(child, List.of("child-file-active")));
+    }
+
+    @Test
+    void equalExclusions_ignoresDuplicatesAndOrder() {
+        Exclusion a = exclusion("com.example", "a");
+        Exclusion b = exclusion("com.example", "b");
+        Exclusion c = exclusion("com.example", "c");
+
+        assertTrue(PomChangeAnalyzer.equalExclusions(List.of(a, b, a), List.of(b, a, b)));
+        assertTrue(PomChangeAnalyzer.equalExclusions(List.of(a, b, a), List.of(a, b)));
+        assertFalse(PomChangeAnalyzer.equalExclusions(List.of(a, b, a), List.of(a, b, c)));
+        assertFalse(PomChangeAnalyzer.equalExclusions(List.of(a, a), List.of(a, b)));
+        assertTrue(PomChangeAnalyzer.equalExclusions(List.of(), List.of()));
+    }
+
+    private static Exclusion exclusion(String groupId, String artifactId) {
+        Exclusion exclusion = new Exclusion();
+        exclusion.setGroupId(groupId);
+        exclusion.setArtifactId(artifactId);
+        return exclusion;
     }
 
     @Test
