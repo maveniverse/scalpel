@@ -2796,6 +2796,16 @@ class PomChangeAnalyzer {
      * </ul>
      * Otherwise, forcing the states of the current build would hide a change of the activation of a profile:
      * a profile activated or deactivated by the change would have the same state in the old and new models.
+     * <p>
+     * <strong>Known limitation:</strong> the activation state is tracked using a single pair of active/inactive
+     * ID sets for the entire model-building request, mirroring Maven's own {@code ProfileIds} mechanism.
+     * When a parent and a child both declare a profile with the same ID but with different activation
+     * conditions (e.g. the parent's declaration is file-activated and changes, while the child's declaration
+     * is always active), evaluating the parent's old activation may inadvertently suppress the child's
+     * declaration via the shared inactive set. Per-declaration scoping would require threading per-model
+     * activation results through the model builder, which is a significantly larger change. In practice,
+     * sharing a profile ID across parent and child with different activation conditions is unusual in
+     * well-designed multi-module projects.
      */
     ProfileIds resolveOldProfileActivation(
             MavenProject project,
