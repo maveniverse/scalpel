@@ -151,10 +151,12 @@ import org.slf4j.LoggerFactory;
  *             actually declare that dependency.  Modules that don't use the managed
  *             dependency see no diff and are <em>not</em> affected (issue #131).</li>
  *         <li>Old vs new <em>effective bound-plugin versions</em> — version-only comparison
- *             (configuration and execution diffs for bound plugins are already covered by the
- *             parent POM being in the changeset and by the child property analysis below).
- *             Only version changes from managed plugin updates indicate a real build-input
- *             change for the child.</li>
+ *             catching version changes from managed plugin updates.</li>
+ *         <li>Old vs new <em>effective bound-plugin configurations</em> — full (config +
+ *             executions) comparison restricted to same-version entries, catching the case
+ *             where a parent property used only in a directly-declared {@code <build><plugins>}
+ *             entry changes: the raw XML is unchanged but the effective config differs after
+ *             interpolation (issue #241).</li>
  *         <li>Old vs new <em>effective pluginManagement configurations</em> — for plugins
  *             explicitly declared in the parent's raw {@code <pluginManagement>}, a full
  *             (version + config + executions) comparison restricted to same-version
@@ -1068,6 +1070,17 @@ class PomChangeAnalyzer {
                         .toAbsolutePath()
                         .normalize()
                 : null;
+        // Compare effective configuration/executions of bound plugins (same-version only).
+        // This catches the case where a parent property is used only in a directly-declared
+        // <build><plugins> entry: the raw plugin XML is unchanged, but the effective
+        // configuration differs after property interpolation (issue #241).  Version changes
+        // are already captured by diffManagedPluginVersions() above and are skipped here.
+        // Plugins that are ONLY in <pluginManagement> are handled separately below.
+        Set<String> changedBoundPluginConfigs = diffEffectiveManagedPluginConfigs(
+                getEffectivePlugins(oldChildEffective),
+                getEffectivePlugins(newChildEffective),
+                oldChildBase,
+                newChildBase);
         Set<String> changedManagedPluginConfigs = diffEffectiveManagedPluginConfigs(
                 getManagedPlugins(oldChildEffective), getManagedPlugins(newChildEffective), oldChildBase, newChildBase);
         if (!changedPlugins.isEmpty()) {
@@ -1086,6 +1099,47 @@ class PomChangeAnalyzer {
                 if (ctx.explain) {
                     for (String ga : acceptedPlugins) {
                         addEvidence(ctx.evidence, child, "effective plugin " + ga);
+                    }
+                }
+                changed = true;
+            }
+        }
+        // Bound plugin config/execution changes (same-version, property-driven) are reported
+        // under "plugins/" so they can be suppressed with -Dscalpel.excludeChanges=plugins/**.
+        // Exception: if a GA also appears in changedManagedPluginConfigs it means the plugin
+        // is simultaneously managed (pluginManagement) AND bound (build/plugins) in the parent.
+        // In that case the managed path already reports it under "managedPlugins/" with the
+        // correct category, so we skip it here to preserve excludeChanges=managedPlugins/**
+        // semantics — a user exclusion on the managed category must not be bypassed by this path.
+        if (!changedBoundPluginConfigs.isEmpty()) {
+            Set<String> acceptedBoundPluginConfigs = new LinkedHashSet<>();
+            for (String ga : changedBoundPluginConfigs) {
+                if (changedManagedPluginConfigs.contains(ga)) {
+                    // Reported under managedPlugins/ by the managed path below — skip here.
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(
+                                "Child {} bound plugin config {} also in managedPlugins — deferring to managed path",
+                                key(child),
+                                ga);
+                    }
+                    continue;
+                }
+                if (filter.accepts("plugins/" + ga)) {
+                    acceptedBoundPluginConfigs.add(ga);
+                } else if (logger.isDebugEnabled()) {
+                    logger.debug("Child {} effective bound plugin config {} excluded by change filter", key(child), ga);
+                }
+            }
+            if (!acceptedBoundPluginConfigs.isEmpty()) {
+                if (logger.isDebugEnabled()) {
+                    logger.debug(
+                            "Child {} has changed effective bound plugin configs: {}",
+                            key(child),
+                            acceptedBoundPluginConfigs);
+                }
+                if (ctx.explain) {
+                    for (String ga : acceptedBoundPluginConfigs) {
+                        addEvidence(ctx.evidence, child, "effective bound plugin config " + ga);
                     }
                 }
                 changed = true;
@@ -1713,10 +1767,27 @@ class PomChangeAnalyzer {
             return value;
         }
         // Strategy 1: value IS an absolute path rooted at base — relativize it.
+        // Also tries the parent directory (one level up = reactor root) for relocated
+        // build output paths: when a child sets <build><directory> to
+        // ../target/${project.artifactId}, Maven resolves it to an absolute path that is
+        // outside the child basedir.  Relativising against base (not parentBase) produces
+        // a ../… form that is identical for both the temp-dir and real-dir roots, so the
+        // two values compare as equal.  Paths inside the child have no leading .. and remain
+        // distinguishable from relocated paths outside it.
         if (value.startsWith("/") || (value.length() > 2 && value.charAt(1) == ':')) {
             try {
                 Path valuePath = Path.of(value).normalize();
                 if (valuePath.startsWith(base)) {
+                    return base.relativize(valuePath).toString();
+                }
+                // Relocated output directory outside child basedir — relativize against base
+                // (produces a ../… path), so both the temp-dir old path and the real-dir new
+                // path normalize to the same child-relative form (e.g. ../target/module-a).
+                // Using base rather than parentBase preserves the distinction between paths
+                // inside the child (no leading ..) and paths outside it (with ../), keeping
+                // the results distinguishable while still suppressing the false positive.
+                Path parentBase = base.getParent();
+                if (parentBase != null && valuePath.startsWith(parentBase)) {
                     return base.relativize(valuePath).toString();
                 }
             } catch (IllegalArgumentException ignored) {

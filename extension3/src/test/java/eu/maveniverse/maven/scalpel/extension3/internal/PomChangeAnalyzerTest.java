@@ -661,6 +661,47 @@ class PomChangeAnalyzerTest {
     }
 
     @Test
+    void diffEffectiveManagedPluginConfigs_relocatedBuildOutputDir_notReported() {
+        // When build.directory is set to ../target/${project.artifactId}, Maven resolves it to
+        // an absolute path that is outside the child basedir (one level up).  The old effective
+        // model is built in a temp dir, so the absolute path differs from the real one.
+        // normalizeBasePath must suppress this false positive by relativising to the parent dir.
+        Path oldBase = Path.of("/tmp/scalpel-old-poms-test/module-a");
+        Path newBase = Path.of("/real/project/module-a");
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configOld = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom outDirOld = new org.codehaus.plexus.util.xml.Xpp3Dom("outputDirectory");
+        // Resolved outside child basedir: /tmp/scalpel-old-poms-test/target/module-a/surefire-reports
+        outDirOld.setValue("/tmp/scalpel-old-poms-test/target/module-a/surefire-reports");
+        configOld.addChild(outDirOld);
+
+        org.codehaus.plexus.util.xml.Xpp3Dom configNew = new org.codehaus.plexus.util.xml.Xpp3Dom("configuration");
+        org.codehaus.plexus.util.xml.Xpp3Dom outDirNew = new org.codehaus.plexus.util.xml.Xpp3Dom("outputDirectory");
+        // Corresponding real path after relocation
+        outDirNew.setValue("/real/project/target/module-a/surefire-reports");
+        configNew.addChild(outDirNew);
+
+        org.apache.maven.model.Plugin old = new org.apache.maven.model.Plugin();
+        old.setGroupId("org.apache.maven.plugins");
+        old.setArtifactId("maven-surefire-plugin");
+        old.setVersion("3.5.2");
+        old.setConfiguration(configOld);
+
+        org.apache.maven.model.Plugin newer = new org.apache.maven.model.Plugin();
+        newer.setGroupId("org.apache.maven.plugins");
+        newer.setArtifactId("maven-surefire-plugin");
+        newer.setVersion("3.5.2");
+        newer.setConfiguration(configNew);
+
+        Set<String> changed =
+                analyzer.diffEffectiveManagedPluginConfigs(List.of(old), List.of(newer), oldBase, newBase);
+        assertTrue(
+                changed.isEmpty(),
+                "Relocated output paths outside child basedir that differ only by temp-vs-real root"
+                        + " must not be reported as changed");
+    }
+
+    @Test
     void effectivePluginManagement_doesNotContainLifecycleDefaultPlugins() throws Exception {
         // Verify empirically that Maven's DefaultModelBuilder does NOT inject lifecycle-default
         // plugins into <pluginManagement>. Lifecycle injection (via LifecycleBindingsInjector)
@@ -893,7 +934,174 @@ class PomChangeAnalyzerTest {
                 "module-b should be affected: parent ${jdk.release} (used only in plugin config) changed 17→21");
     }
 
-    // --- analyzeChanges integration tests ---
+    @Test
+    void analyzeChanges_parentPropertyUsedOnlyInDirectPluginConfigAffectsAllChildren() throws Exception {
+        // Issue #241: parent changes ${lab.forks} used only in <build><plugins> (not pluginManagement)
+        // — all children must be affected even though the raw plugin XML is unchanged.
+        Path root = setupReactorRoot();
+
+        String newParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><lab.forks>2</lab.forks></properties>
+                  <build><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                      <configuration><forkCount>${lab.forks}</forkCount></configuration>
+                    </plugin>
+                  </plugins></build>
+                </project>
+                """;
+
+        String oldParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><lab.forks>1</lab.forks></properties>
+                  <build><plugins>
+                    <plugin>
+                      <groupId>org.apache.maven.plugins</groupId>
+                      <artifactId>maven-surefire-plugin</artifactId>
+                      <version>3.5.2</version>
+                      <configuration><forkCount>${lab.forks}</forkCount></configuration>
+                    </plugin>
+                  </plugins></build>
+                </project>
+                """;
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPomXml, moduleAPomXml, moduleBPomXml);
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
+
+        Set<MavenProject> affected =
+                analyzeChanges(changedPoms, oldPoms, projects, root).getAffectedProjects();
+
+        MavenProject moduleA = projects.get(1);
+        MavenProject moduleB = projects.get(2);
+        assertTrue(
+                affected.contains(moduleA),
+                "module-a should be affected: parent ${lab.forks} (used only in bound plugin config) changed 1→2");
+        assertTrue(
+                affected.contains(moduleB),
+                "module-b should be affected: parent ${lab.forks} (used only in bound plugin config) changed 1→2");
+    }
+
+    @Test
+    void analyzeChanges_excludeChangesManagedPlugins_notBypassedByBoundPluginPath() throws Exception {
+        // Regression for CodeRabbit review on PR #248: when a plugin appears in both
+        // parent <pluginManagement> AND <build><plugins>, a property change triggers detection
+        // through BOTH paths.  With excludeChanges=managedPlugins/**, the managed path is
+        // suppressed — but the bound-plugin path must NOT report it under "plugins/" either,
+        // since the managed path's category is authoritative for such plugins.
+        Path root = setupReactorRoot();
+
+        String newParentPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <groupId>com.example</groupId>
+                  <artifactId>parent</artifactId>
+                  <version>1.0</version>
+                  <packaging>pom</packaging>
+                  <modules><module>module-a</module><module>module-b</module></modules>
+                  <properties><jdk.release>21</jdk.release></properties>
+                  <build>
+                    <pluginManagement><plugins>
+                      <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <version>3.13.0</version>
+                        <configuration><release>${jdk.release}</release></configuration>
+                      </plugin>
+                    </plugins></pluginManagement>
+                    <plugins>
+                      <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                      </plugin>
+                    </plugins>
+                  </build>
+                </project>
+                """;
+
+        String oldParentPomXml =
+                newParentPomXml.replace("<jdk.release>21</jdk.release>", "<jdk.release>17</jdk.release>");
+
+        String moduleAPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+
+        String moduleBPomXml = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-b</artifactId>
+                </project>
+                """;
+
+        writePom(root.resolve("pom.xml"), newParentPomXml);
+        writePom(root.resolve("module-a/pom.xml"), moduleAPomXml);
+        writePom(root.resolve("module-b/pom.xml"), moduleBPomXml);
+
+        List<MavenProject> projects = buildProjectList(root, newParentPomXml, moduleAPomXml, moduleBPomXml);
+
+        Set<String> changedPoms = Set.of("pom.xml");
+        Map<String, byte[]> oldPoms = new HashMap<>();
+        oldPoms.put("pom.xml", oldParentPomXml.getBytes(StandardCharsets.UTF_8));
+
+        // With excludeChanges=managedPlugins/**, the child should NOT be affected
+        // — the bound-plugin path must defer to managedPlugins/ and not bypass the exclusion.
+        PomChangeAnalyzer.Result result =
+                analyzeChanges(changedPoms, oldPoms, projects, root, List.of("managedPlugins/**"), List.of());
+        MavenProject moduleA = projects.get(1);
+        assertFalse(
+                result.getAffectedProjects().contains(moduleA),
+                "With excludeChanges=managedPlugins/**, child must not be affected "
+                        + "— bound-plugin path must not bypass the managed exclusion");
+    }
 
     @Test
     void analyzeChanges_leafModulePomChanged() throws Exception {
