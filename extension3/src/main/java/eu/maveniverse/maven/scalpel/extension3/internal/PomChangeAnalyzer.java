@@ -1007,12 +1007,14 @@ class PomChangeAnalyzer {
         // Configuration may differ due to inherited property interpolation changes, but
         // plugin configuration changes are already covered by the POM diff (the parent
         // POM is in the changeset) and by the child property analysis below.  Only version
-        // changes from managed plugin updates indicate a real build-input change for the child.
+        // changes from managed plugin updates indicate a real build-input change for the child,
+        // as well as plugins added or removed (e.g. added to the <build><plugins> of a parent,
+        // or bound by a profile activated or deactivated by the change).
         // Plugins that are ONLY in <pluginManagement> (not yet bound to the child's lifecycle)
         // do not appear in getEffectivePlugins() — config/execution changes for same-version
         // managed-only plugins are caught separately via diffEffectiveManagedPluginConfigs() below.
         // Version bumps to managed-only plugins are intentionally not detected (issue #131).
-        Set<String> changedPlugins = diffManagedPluginVersions(
+        Set<String> changedPlugins = diffEffectivePluginVersions(
                 getEffectivePlugins(oldChildEffective), getEffectivePlugins(newChildEffective));
         // Derive the base directories of the old and new effective models so that
         // path-anchored configuration values (e.g. ${project.build.directory}) can be
@@ -1554,6 +1556,32 @@ class PomChangeAnalyzer {
             } else if (!Objects.equals(e.getValue(), newVersions.get(e.getKey()))) {
                 // Version changed (including null → non-null or vice versa)
                 changed.add(e.getKey());
+            }
+        }
+        return changed;
+    }
+
+    /**
+     * Compare the plugins bound to a module (see {@link #getEffectivePlugins(Model)}) by GA + version only,
+     * ignoring configuration and executions.
+     * <p>
+     * Unlike {@link #diffManagedPluginVersions(List, List)}, additions are reported: a plugin bound in the new
+     * model only (e.g. added to the {@code <build><plugins>} of a parent, or bound by a profile activated by the
+     * change) is a change of the build of the module. The exclusion of brand-new entries (issue #131) only makes
+     * sense for managed plugins, which are not used until bound; this is consistent with the comparison of the
+     * effective dependencies, which reports additions too.
+     */
+    Set<String> diffEffectivePluginVersions(List<Plugin> oldPlugins, List<Plugin> newPlugins) {
+        Set<String> changed = diffManagedPluginVersions(oldPlugins, newPlugins);
+        Set<String> oldKeys = new LinkedHashSet<>();
+        for (Plugin p : oldPlugins) {
+            oldKeys.add(p.getGroupId() + ":" + p.getArtifactId());
+        }
+        for (Plugin p : newPlugins) {
+            String key = p.getGroupId() + ":" + p.getArtifactId();
+            if (!oldKeys.contains(key)) {
+                // Plugin added in new model
+                changed.add(key);
             }
         }
         return changed;
