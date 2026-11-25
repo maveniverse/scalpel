@@ -1742,21 +1742,25 @@ class PomChangeAnalyzer {
         // Also tries the parent directory (one level up = reactor root) for relocated
         // build output paths: when a child sets <build><directory> to
         // ../target/${project.artifactId}, Maven resolves it to an absolute path that is
-        // outside the child basedir.  Relativising to base.getParent() normalises both the
-        // temp-dir and real-dir forms to the same reactor-relative string (e.g. target/m-a).
-        // Note: this may suppress genuine changes to plugin configs that contain absolute
-        // paths pointing to reactor-sibling directories, but that pattern is extremely rare
-        // and already guarded by the strategy-2 delimiter check for embedded-string values.
+        // outside the child basedir.  Relativising against base (not parentBase) produces
+        // a ../… form that is identical for both the temp-dir and real-dir roots, so the
+        // two values compare as equal.  Paths inside the child have no leading .. and remain
+        // distinguishable from relocated paths outside it.
         if (value.startsWith("/") || (value.length() > 2 && value.charAt(1) == ':')) {
             try {
                 Path valuePath = Path.of(value).normalize();
                 if (valuePath.startsWith(base)) {
                     return base.relativize(valuePath).toString();
                 }
-                // Relocated output directory outside child basedir — try parent (reactor root).
+                // Relocated output directory outside child basedir — relativize against base
+                // (produces a ../… path), so both the temp-dir old path and the real-dir new
+                // path normalize to the same child-relative form (e.g. ../target/module-a).
+                // Using base rather than parentBase preserves the distinction between paths
+                // inside the child (no leading ..) and paths outside it (with ../), keeping
+                // the results distinguishable while still suppressing the false positive.
                 Path parentBase = base.getParent();
                 if (parentBase != null && valuePath.startsWith(parentBase)) {
-                    return parentBase.relativize(valuePath).toString();
+                    return base.relativize(valuePath).toString();
                 }
             } catch (IllegalArgumentException ignored) {
                 // not a valid path — fall through to strategy 2
