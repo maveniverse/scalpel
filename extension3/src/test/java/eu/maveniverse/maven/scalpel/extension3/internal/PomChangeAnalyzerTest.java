@@ -7,6 +7,7 @@
  */
 package eu.maveniverse.maven.scalpel.extension3.internal;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -1510,6 +1511,815 @@ class PomChangeAnalyzerTest {
         assertFalse(
                 affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
                 "The profile is inactive for the old and new builds of module-a: it should NOT be affected");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueInterpolated() throws Exception {
+        // The inherited profile has a composite activation: a file condition (the marker exists) and a property
+        // condition whose <value> contains a POM property reference (${scalpel.test.build.kind}). The model
+        // property is "ci", and so is the value of "required.kind" in the system/user properties: the profile is
+        // active for both old and new builds.
+        // Without interpolation, isActivationActive() compares the literal "${scalpel.test.build.kind}" against
+        // "ci" (the user/system property value), which fails, making the profile appear inactive for the old model
+        // — producing a spurious diff. With interpolation, the comparison is "ci" == "ci" and the profile stays
+        // consistently active: module-a must NOT be affected by an unrelated parent property change.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // Activation: file (marker exists) + property (required.kind == ${scalpel.test.build.kind})
+        // POM property scalpel.test.build.kind = "ci"; system property required.kind = "ci"
+        // The old parent POM is identical to the new one, so there is no real change — no module should be
+        // affected. Without the fix, the uninterpolated ${...} in the property <value> makes the old profile
+        // evaluation fail, wrongly marking module-a as affected.
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.build.kind}</value></property>
+                """, "<scalpel.test.build.kind>ci</scalpel.test.build.kind>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        String moduleBPom = moduleAPom.replace("module-a", "module-b");
+        writePom(root.resolve("module-b/pom.xml"), moduleBPom);
+
+        List<MavenProject> projects = buildProjectList(root, parentPom, moduleAPom, moduleBPom);
+        // The profile is active for module-a (marker exists, required.kind == ci)
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        // System properties: required.kind=ci — matches the interpolated activation value
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+
+        // The old POM is the same as the new one (no actual change): no module should be affected
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: profile is equally active for old and new builds (activation value interpolated correctly);"
+                        + " a no-op change must NOT make it appear affected");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyLiteralValueNotInterpolated() throws Exception {
+        // When the activation <value> contains no ${...} reference, interpolateActivationProperty() must return
+        // the original profile unchanged (no spurious clone). The comparison still works: literal "ci" == "ci".
+        // This exercises the Objects.equals short-circuit in interpolateActivationProperty (both name and value
+        // are already fully resolved → no clone needed).
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // Value is a plain string — no property reference, no interpolation needed
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>ci</value></property>
+                """, "");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: literal activation value needs no interpolation; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueUserProperties() throws Exception {
+        // The activation <value> contains ${scalpel.test.build.kind} and that key is supplied via USER
+        // properties (not project/system). Exercises the userProps early-return branch in resolveProperty().
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // No POM property for scalpel.test.build.kind — it comes from user properties instead
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.build.kind}</value></property>
+                """, "");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        // scalpel.test.build.kind resolves to "ci" from USER properties (the placeholder key lookup).
+        // required.kind = "ci" comes from system properties (the activation name lookup by PropertyProfileActivator).
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+        Properties userProperties = new Properties();
+        userProperties.setProperty("scalpel.test.build.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                userProperties,
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: activation value resolved via user properties; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueProjectProperties() throws Exception {
+        // The activation <value> references a POM property (scalpel.test.build.kind) whose value comes from
+        // project properties. The interpolated value "ci" is then compared against the system property
+        // "required.kind" = "ci". Exercises the projectProps lookup branch in resolveProperty().
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // scalpel.test.build.kind is a project property; "required.kind" is a system property
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.build.kind}</value></property>
+                """, "<scalpel.test.build.kind>ci</scalpel.test.build.kind>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        // "scalpel.test.build.kind" resolves from project properties → interpolated value = "ci".
+        // "required.kind" is a system property = "ci". No user properties provided.
+        // resolveProperty() must reach the projectProps branch to resolve "scalpel.test.build.kind".
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: activation value resolved via project properties; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueWithSuffix() throws Exception {
+        // Activation <value> is "${scalpel.test.suffix}-kind": a ${...} placeholder followed by a literal
+        // suffix. After resolving the placeholder, the loop iterates again and finds no more "${" in the
+        // remainder "-kind" → appended via the start<0 branch (lines 2983-2985 in interpolateExpression).
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.suffix}-kind</value></property>
+                """, "<scalpel.test.suffix>ci</scalpel.test.suffix>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        // System property "required.kind" = "ci-kind" matches the interpolated value "${scalpel.test.suffix}-kind"
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci-kind");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: activation value with suffix interpolated correctly; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueFromSystemProperties() throws Exception {
+        // The placeholder key ${scalpel.test.build.kind} in the activation <value> is resolved from SYSTEM
+        // properties (not project/user). Exercises the sysProps early-return branch in resolveProperty().
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // No POM property for scalpel.test.build.kind — it comes from system properties instead
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.build.kind}</value></property>
+                """, "");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        // scalpel.test.build.kind resolves to "ci" from SYSTEM properties (the placeholder key lookup).
+        // required.kind = "ci" also comes from system properties (the activation name lookup).
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+        systemProperties.setProperty("scalpel.test.build.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: activation value resolved via system properties; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueIndirectReference() throws Exception {
+        // The activation <value> resolves through an indirect (nested) reference:
+        //   ${scalpel.test.indirect} → "${scalpel.test.actual}" → "ci"
+        // interpolateExpression() must recursively expand the resolved value. Without recursion the
+        // activation <value> would remain "${scalpel.test.actual}" after the first pass, never equal "ci",
+        // and module-a would be spuriously affected by a no-op change.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // scalpel.test.indirect = "${scalpel.test.actual}", scalpel.test.actual = "ci"
+        // <value> = "${scalpel.test.indirect}" → recursively resolves to "ci"
+        String parentPom = parentPomWithProfile(
+                """
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.indirect}</value></property>
+                """,
+                "<scalpel.test.indirect>${scalpel.test.actual}</scalpel.test.indirect>"
+                        + "<scalpel.test.actual>ci</scalpel.test.actual>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: nested activation value must be recursively resolved; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueMutualCycle() throws Exception {
+        // Mutual cycle: a=${b}, b=${a}. When expanding ${a}, the resolver adds "a" to visiting, then
+        // tries to expand ${b}, adds "b" to visiting, then tries to expand ${a} again — but "a" is already
+        // in visiting, so the placeholder is left as-is. The final value never equals "ci", so the profile
+        // is consistently inactive for both old and new builds, and module-a must not appear as affected.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // Both project properties form a cycle; activation <value> references the cycle entry point
+        String parentPom = parentPomWithProfile(
+                """
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.a}</value></property>
+                """,
+                "<scalpel.test.a>${scalpel.test.b}</scalpel.test.a>"
+                        + "<scalpel.test.b>${scalpel.test.a}</scalpel.test.b>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        // Profile is inactive for both models (cycle → unresolved placeholder ≠ "ci")
+        // so do NOT set active profiles — module-a should not be affected
+
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: mutual cycle must leave placeholder unresolved consistently; module-a must NOT appear as affected");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueLeadingDot() throws Exception {
+        // Maven's RegexBasedInterpolator strips a single leading '.' from the captured key before lookup,
+        // so ${.build.kind} resolves from the property "build.kind". Verify that our scanner does the same;
+        // without the strip the key ".build.kind" is never found and the placeholder is left as-is, making
+        // the old profile appear inactive → spurious diff.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // <value> uses a leading-dot reference: ${.scalpel.test.build.kind}; project property provides the value
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${.scalpel.test.build.kind}</value></property>
+                """, "<scalpel.test.build.kind>ci</scalpel.test.build.kind>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: leading-dot key ${.scalpel.test.build.kind} must resolve as scalpel.test.build.kind; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueCrossBoundaryPlaceholder() throws Exception {
+        // Verifies that interpolateExpression rescans after substitution, matching Maven's
+        // RegexBasedInterpolator reset-and-rescan behaviour. If property "scalpel.test.prefix"
+        // resolves to "${scalpel.test." and property "scalpel.test.suffix" resolves to "kind}",
+        // then expression "${scalpel.test.prefix}${scalpel.test.suffix}" after one pass becomes
+        // "${scalpel.test.kind}" which on the next pass resolves to "ci". Without rescanning the
+        // formed placeholder is never expanded and the activation value stays unresolved.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // prefix resolves to "${scalpel.test." — intentionally a partial placeholder fragment
+        String parentPom = parentPomWithProfile(
+                """
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.prefix}kind}</value></property>
+                """,
+                "<scalpel.test.prefix>${scalpel.test.</scalpel.test.prefix>"
+                        + "<scalpel.test.kind>ci</scalpel.test.kind>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: placeholder formed across substitution boundary must be resolved on rescan; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueCachedExpansion() throws Exception {
+        // The activation <value> references the same key twice: "${scalpel.test.a}-${scalpel.test.a}".
+        // The expansion of scalpel.test.a itself contains a ${...} reference ("${scalpel.test.b}"),
+        // so the cache must correctly store the fully-resolved result "ci" after the first occurrence
+        // and reuse it for the second, producing "ci-ci". This verifies that the cache operates on
+        // completed (fully-resolved) expansions and does not store partial results.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // scalpel.test.a = "${scalpel.test.b}", scalpel.test.b = "ci"
+        // <value> = "${scalpel.test.a}-${scalpel.test.a}" → "ci-ci"
+        String parentPom = parentPomWithProfile(
+                """
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.a}-${scalpel.test.a}</value></property>
+                """, "<scalpel.test.a>${scalpel.test.b}</scalpel.test.a><scalpel.test.b>ci</scalpel.test.b>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        // required.kind = "ci-ci" in system; the interpolated value must equal "ci-ci" for both models
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci-ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: repeated key must use cached expansion; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValuePrecedenceProjectOverUser() throws Exception {
+        // Project <properties> must win over user properties when both define the same interpolation key.
+        // Maven's getInterpolatedProfiles() inserts project properties first (highest precedence), so a
+        // project property always overrides a conflicting user or system property.
+        // If the precedence were inverted, the user property "wrong" would shadow the project property "ci"
+        // and the profile would evaluate as inactive for the old model → spurious diff.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // Project property: scalpel.test.build.kind = "ci"
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${scalpel.test.build.kind}</value></property>
+                """, "<scalpel.test.build.kind>ci</scalpel.test.build.kind>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        // Project property "scalpel.test.build.kind=ci" must win over user property "wrong"
+        // and system property "wrong". required.kind=ci in system to satisfy the activator.
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+        systemProperties.setProperty("scalpel.test.build.kind", "wrong");
+        Properties userProperties = new Properties();
+        userProperties.setProperty("scalpel.test.build.kind", "wrong");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                userProperties,
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: project property must take precedence over user/system; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyNameInterpolated() throws Exception {
+        // The activation <name> (not just <value>) contains a ${...} reference. This exercises the
+        // Objects.equals check in interpolateActivationProperty for the name field, and also covers the
+        // path where only the name changes (value is literal) — the second branch of the conjunction.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // <name> is "${scalpel.test.prop.name}" which resolves to "required.kind" from project properties
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>${scalpel.test.prop.name}</name><value>ci</value></property>
+                """, "<scalpel.test.prop.name>required.kind</scalpel.test.prop.name>");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        projects.get(1)
+                .setActiveProfiles(List.of(parseModel(parentPom).getProfiles().get(0)));
+
+        // "required.kind" = "ci" in system properties; name interpolated from "${scalpel.test.prop.name}" →
+        // "required.kind"
+        Properties systemProperties = new Properties();
+        systemProperties.setProperty("required.kind", "ci");
+
+        Set<MavenProject> affected = analyzer.analyzeChanges(
+                        Set.of("pom.xml"),
+                        Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                        projects,
+                        root,
+                        true,
+                        new PomChangeAnalyzer.ModelResolutionContext(
+                                systemProperties,
+                                new Properties(),
+                                mock(RepositorySystemSession.class),
+                                List.of(),
+                                Set.of()))
+                .getAffectedProjects();
+
+        assertFalse(
+                affected.stream().anyMatch(p -> "module-a".equals(p.getArtifactId())),
+                "module-a: activation name interpolated correctly; a no-op change must NOT affect it");
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueUnterminatedPlaceholder() throws Exception {
+        // Activation <value> has an unterminated ${ placeholder. interpolateExpression() must leave it
+        // as-is (not throw). The profile appears inactive for the old model (literal vs system property
+        // value never matches), which is consistent with Maven's own behaviour.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        // <value> has an unterminated placeholder — both old and new evaluations treat the profile as inactive
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${unterminated</value></property>
+                """, "");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        // Profile is NOT active in current build (unterminated placeholder never matches)
+        // No active profiles set on module-a
+
+        // Must not throw; analyzeChanges completes without error
+        assertDoesNotThrow(() -> analyzer.analyzeChanges(
+                Set.of("pom.xml"),
+                Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                projects,
+                root,
+                true,
+                new PomChangeAnalyzer.ModelResolutionContext(
+                        new Properties(), new Properties(), mock(RepositorySystemSession.class), List.of(), Set.of())));
+    }
+
+    @Test
+    void analyzeChanges_compositeActivationPropertyValueUnresolvedPlaceholder() throws Exception {
+        // Activation <value> references a property that does not exist in any source.
+        // interpolateExpression() leaves the placeholder as-is; the profile is consistently inactive
+        // in both old and new builds — no spurious diff.
+        Path root = setupReactorRoot();
+        Files.createFile(root.resolve("module-a/marker"));
+        String parentPom = parentPomWithProfile("""
+                <file><exists>${basedir}/marker</exists></file>
+                <property><name>required.kind</name><value>${no.such.property}</value></property>
+                """, "");
+
+        writePom(root.resolve("pom.xml"), parentPom);
+        String moduleAPom = """
+                <?xml version="1.0"?>
+                <project>
+                  <modelVersion>4.0.0</modelVersion>
+                  <parent><groupId>com.example</groupId><artifactId>parent</artifactId><version>1.0</version></parent>
+                  <artifactId>module-a</artifactId>
+                </project>
+                """;
+        writePom(root.resolve("module-a/pom.xml"), moduleAPom);
+        writePom(root.resolve("module-b/pom.xml"), moduleAPom.replace("module-a", "module-b"));
+
+        List<MavenProject> projects =
+                buildProjectList(root, parentPom, moduleAPom, moduleAPom.replace("module-a", "module-b"));
+        // Profile is NOT active in current build (placeholder stays literal, never matches)
+
+        // Must not throw; analyzeChanges completes without error
+        assertDoesNotThrow(() -> analyzer.analyzeChanges(
+                Set.of("pom.xml"),
+                Map.of("pom.xml", parentPom.getBytes(StandardCharsets.UTF_8)),
+                projects,
+                root,
+                true,
+                new PomChangeAnalyzer.ModelResolutionContext(
+                        new Properties(), new Properties(), mock(RepositorySystemSession.class), List.of(), Set.of())));
     }
 
     @Test
