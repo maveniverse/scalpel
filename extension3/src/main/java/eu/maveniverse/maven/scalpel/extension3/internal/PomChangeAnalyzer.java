@@ -1076,9 +1076,24 @@ class PomChangeAnalyzer {
         }
         // Bound plugin config/execution changes (same-version, property-driven) are reported
         // under "plugins/" so they can be suppressed with -Dscalpel.excludeChanges=plugins/**.
+        // Exception: if a GA also appears in changedManagedPluginConfigs it means the plugin
+        // is simultaneously managed (pluginManagement) AND bound (build/plugins) in the parent.
+        // In that case the managed path already reports it under "managedPlugins/" with the
+        // correct category, so we skip it here to preserve excludeChanges=managedPlugins/**
+        // semantics — a user exclusion on the managed category must not be bypassed by this path.
         if (!changedBoundPluginConfigs.isEmpty()) {
             Set<String> acceptedBoundPluginConfigs = new LinkedHashSet<>();
             for (String ga : changedBoundPluginConfigs) {
+                if (changedManagedPluginConfigs.contains(ga)) {
+                    // Reported under managedPlugins/ by the managed path below — skip here.
+                    if (logger.isDebugEnabled()) {
+                        logger.debug(
+                                "Child {} bound plugin config {} also in managedPlugins — deferring to managed path",
+                                key(child),
+                                ga);
+                    }
+                    continue;
+                }
                 if (filter.accepts("plugins/" + ga)) {
                     acceptedBoundPluginConfigs.add(ga);
                 } else if (logger.isDebugEnabled()) {
@@ -1724,11 +1739,24 @@ class PomChangeAnalyzer {
             return value;
         }
         // Strategy 1: value IS an absolute path rooted at base — relativize it.
+        // Also tries the parent directory (one level up = reactor root) for relocated
+        // build output paths: when a child sets <build><directory> to
+        // ../target/${project.artifactId}, Maven resolves it to an absolute path that is
+        // outside the child basedir.  Relativising to base.getParent() normalises both the
+        // temp-dir and real-dir forms to the same reactor-relative string (e.g. target/m-a).
+        // Note: this may suppress genuine changes to plugin configs that contain absolute
+        // paths pointing to reactor-sibling directories, but that pattern is extremely rare
+        // and already guarded by the strategy-2 delimiter check for embedded-string values.
         if (value.startsWith("/") || (value.length() > 2 && value.charAt(1) == ':')) {
             try {
                 Path valuePath = Path.of(value).normalize();
                 if (valuePath.startsWith(base)) {
                     return base.relativize(valuePath).toString();
+                }
+                // Relocated output directory outside child basedir — try parent (reactor root).
+                Path parentBase = base.getParent();
+                if (parentBase != null && valuePath.startsWith(parentBase)) {
+                    return parentBase.relativize(valuePath).toString();
                 }
             } catch (IllegalArgumentException ignored) {
                 // not a valid path — fall through to strategy 2
