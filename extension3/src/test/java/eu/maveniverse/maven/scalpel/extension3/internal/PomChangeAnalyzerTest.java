@@ -2018,10 +2018,10 @@ class PomChangeAnalyzerTest {
     void analyzeChanges_compositeActivationPropertyValueCrossBoundaryPlaceholder() throws Exception {
         // Verifies that interpolateExpression rescans after substitution, matching Maven's
         // RegexBasedInterpolator reset-and-rescan behaviour. If property "scalpel.test.prefix"
-        // resolves to "${scalpel.test." and property "scalpel.test.suffix" resolves to "kind}",
-        // then expression "${scalpel.test.prefix}${scalpel.test.suffix}" after one pass becomes
-        // "${scalpel.test.kind}" which on the next pass resolves to "ci". Without rescanning the
-        // formed placeholder is never expanded and the activation value stays unresolved.
+        // resolves to "${scalpel.test.", then expression "${scalpel.test.prefix}kind}" after
+        // one pass becomes "${scalpel.test.kind}" which on the next pass resolves to "ci".
+        // Without rescanning the formed placeholder is never expanded and the activation value
+        // stays unresolved.
         Path root = setupReactorRoot();
         Files.createFile(root.resolve("module-a/marker"));
         // prefix resolves to "${scalpel.test." — intentionally a partial placeholder fragment
