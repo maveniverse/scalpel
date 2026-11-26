@@ -2968,6 +2968,12 @@ class PomChangeAnalyzer {
      * Evaluates the activation of a profile as Maven does (see {@code DefaultProfileSelector}): all the conditions
      * present must be met. The file condition is evaluated against {@code projectDirectory}, its path being
      * interpolated with the properties of {@code model}, the POM declaring the profile.
+     * <p>
+     * The activation property's {@code name} and {@code value} are interpolated using the merged properties
+     * (project + user + system), mirroring what Maven's {@code DefaultModelBuilder.getInterpolatedProfiles()}
+     * does before passing profiles to activators. Without this, a value like {@code ${build.kind}} in the
+     * activation {@code <value>} tag would be compared literally against user/system properties and never
+     * match even when a project property {@code build.kind=ci} resolves it.
      */
     private static boolean isActivationActive(
             Profile profile, Model model, File projectDirectory, ModelResolutionContext resolutionCtx) {
@@ -2982,6 +2988,10 @@ class PomChangeAnalyzer {
         if (model.getProperties() != null) {
             context.setProjectProperties(model.getProperties());
         }
+        // Interpolate activation property name/value with the merged properties, mirroring Maven's
+        // DefaultModelBuilder.getInterpolatedProfiles(). Without this, ${...} references in the activation
+        // property name or value are compared literally and never match.
+        profile = interpolateActivationProperty(profile, context);
         boolean present = false;
         for (ProfileActivator activator : PROFILE_ACTIVATORS) {
             if (activator.presentInConfig(profile, context, request -> {})) {
@@ -2992,6 +3002,179 @@ class PomChangeAnalyzer {
             }
         }
         return present;
+    }
+
+    /**
+     * Returns a profile whose activation property's {@code name} and {@code value} have been interpolated
+     * using the merged properties from {@code context} (project, user, and system properties). If the profile
+     * has no activation property or neither field contains a {@code ${...}} expression, the original profile
+     * is returned as-is.
+     */
+    private static Profile interpolateActivationProperty(Profile profile, DefaultProfileActivationContext context) {
+        Activation activation = profile.getActivation();
+        if (activation == null) {
+            return profile;
+        }
+        ActivationProperty property = activation.getProperty();
+        if (property == null) {
+            return profile;
+        }
+        String name = property.getName();
+        String value = property.getValue();
+        String interpolatedName = interpolateExpression(name, context);
+        String interpolatedValue = interpolateExpression(value, context);
+        if (Objects.equals(name, interpolatedName) && Objects.equals(value, interpolatedValue)) {
+            return profile;
+        }
+        // Clone the minimum required objects to avoid mutating the parsed model
+        ActivationProperty interpolatedProperty = property.clone();
+        interpolatedProperty.setName(interpolatedName);
+        interpolatedProperty.setValue(interpolatedValue);
+        Activation interpolatedActivation = activation.clone();
+        interpolatedActivation.setProperty(interpolatedProperty);
+        Profile interpolatedProfile = profile.clone();
+        interpolatedProfile.setActivation(interpolatedActivation);
+        return interpolatedProfile;
+    }
+
+    /**
+     * Resolves {@code ${key}} expressions in {@code expression} using the merged properties from
+     * {@code context}, mirroring Maven's {@code DefaultModelBuilder.getInterpolatedProfiles()} which uses
+     * a {@code RegexBasedInterpolator} with sources added in this order (first source wins):
+     * project {@code <properties>}, then user properties, then system properties. Resolved values are
+     * themselves interpolated recursively; cycles are broken by leaving the offending placeholder as-is.
+     * After each pass the resulting string is rescanned, so a substitution that forms a new placeholder
+     * across a boundary (e.g. {@code "${prefix}end}"} where {@code prefix} resolves to {@code "${inner"}
+     * yields {@code "${innerend}"} in the next pass) will itself be resolved, matching the reset-and-rescan
+     * behaviour of {@code Matcher} inside {@code RegexBasedInterpolator}.
+     * Fully-resolved expansions are cached for reuse within the same interpolation operation; expansions
+     * that left any placeholder unresolved (due to a cycle or a missing key) are not cached.
+     * A leading {@code .} in the captured key (e.g. {@code ${.build.kind}}) is stripped before lookup,
+     * matching the behaviour of {@code RegexBasedInterpolator} in plexus-interpolation.
+     * Unresolvable placeholders and unterminated {@code ${} tokens are preserved unchanged.
+     * Returns {@code expression} unchanged if it is {@code null} or contains no {@code ${} markers.
+     */
+    private static String interpolateExpression(String expression, DefaultProfileActivationContext context) {
+        return interpolateExpression(expression, context, new LinkedHashSet<>(), new LinkedHashMap<>());
+    }
+
+    private static String interpolateExpression(
+            String expression,
+            DefaultProfileActivationContext context,
+            Set<String> visiting,
+            Map<String, String> cache) {
+        if (expression == null || !expression.contains("${")) {
+            return expression;
+        }
+        // Mimic Maven's RegexBasedInterpolator: after each substitution the matcher is reset to the
+        // updated string and scanning restarts. A replacement can therefore form a new placeholder
+        // across the substitution boundary (e.g. "${prefix}end}" where prefix resolves to "${inner"
+        // yields "${innerend}" which is then resolved in the next pass). We loop until the string
+        // no longer changes or no longer contains "${", guarding against pathological inputs with a
+        // pass limit equal to the input length.
+        String current = expression;
+        for (int pass = 0; pass < expression.length() && current.contains("${"); pass++) {
+            String next = singlePassInterpolate(current, context, visiting, cache);
+            if (next.equals(current)) {
+                break;
+            }
+            current = next;
+        }
+        return current;
+    }
+
+    private static String singlePassInterpolate(
+            String expression,
+            DefaultProfileActivationContext context,
+            Set<String> visiting,
+            Map<String, String> cache) {
+        StringBuilder result = new StringBuilder();
+        int pos = 0;
+        int len = expression.length();
+        while (pos < len) {
+            int start = expression.indexOf("${", pos);
+            if (start < 0) {
+                // No more placeholders: append the rest and finish
+                result.append(expression, pos, len);
+                pos = len;
+            } else {
+                result.append(expression, pos, start);
+                int end = expression.indexOf('}', start + 2);
+                if (end < 0) {
+                    // Unterminated placeholder: append as-is and finish
+                    result.append(expression, start, len);
+                    pos = len;
+                } else {
+                    String rawKey = expression.substring(start + 2, end);
+                    // Strip a leading '.' to match Maven's RegexBasedInterpolator behaviour
+                    String key = rawKey.startsWith(".") ? rawKey.substring(1) : rawKey;
+                    result.append(expandKey(key, context, visiting, cache, expression, start, end));
+                    pos = end + 1;
+                }
+            }
+        }
+        return result.toString();
+    }
+
+    private static String expandKey(
+            String key,
+            DefaultProfileActivationContext context,
+            Set<String> visiting,
+            Map<String, String> cache,
+            String expression,
+            int start,
+            int end) {
+        if (cache.containsKey(key)) {
+            return cache.get(key);
+        }
+        if (visiting.contains(key)) {
+            // Cycle detected: leave the placeholder as-is
+            return expression.substring(start, end + 1);
+        }
+        String resolved = resolveProperty(key, context);
+        if (resolved == null) {
+            // Key not found: leave the placeholder as-is
+            return expression.substring(start, end + 1);
+        }
+        visiting.add(key);
+        String expanded = interpolateExpression(resolved, context, visiting, cache);
+        visiting.remove(key);
+        // Only cache fully-resolved expansions (no residual placeholders)
+        if (!expanded.contains("${")) {
+            cache.put(key, expanded);
+        }
+        return expanded;
+    }
+
+    /**
+     * Looks up {@code key} in the context's property sources, returning the first non-{@code null} value
+     * found, or {@code null} if none. The lookup order — project properties first, then user properties,
+     * then system properties — matches the {@code addValueSource} insertion order used by
+     * {@code DefaultModelBuilder.getInterpolatedProfiles()} (verified against Maven 3.9.16 bytecode).
+     */
+    private static String resolveProperty(String key, DefaultProfileActivationContext context) {
+        Map<String, String> projectProps = context.getProjectProperties();
+        if (projectProps != null) {
+            String val = projectProps.get(key);
+            if (val != null) {
+                return val;
+            }
+        }
+        Map<String, String> userProps = context.getUserProperties();
+        if (userProps != null) {
+            String val = userProps.get(key);
+            if (val != null) {
+                return val;
+            }
+        }
+        Map<String, String> sysProps = context.getSystemProperties();
+        if (sysProps != null) {
+            String val = sysProps.get(key);
+            if (val != null) {
+                return val;
+            }
+        }
+        return null;
     }
 
     static boolean sameActivation(Activation a, Activation b) {
