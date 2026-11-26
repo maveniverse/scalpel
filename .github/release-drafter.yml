@@ -5,18 +5,21 @@ categories:
   - title: '🐛 Bug Fixes'
     labels:
       - 'bug'
+    semver-increment: "patch"
   - title: '🚀 Enhancements'
     labels:
       - 'enhancement'
   - title: '📖 Documentation'
     labels:
       - 'documentation'
+    semver-increment: "patch"
   - title: '🧰 Maintenance'
     labels:
       - 'maintenance'
       - 'dependencies'
       - 'github_actions'
       - 'java'
+    semver-increment: "patch"
 
 autolabeler:
   - label: 'bug'
@@ -64,14 +67,6 @@ version-resolver:
     labels:
       - 'minor'
       - 'enhancement'
-  patch:
-    labels:
-      - 'bug'
-      - 'maintenance'
-      - 'dependencies'
-      - 'github_actions'
-      - 'java'
-      - 'documentation'
   default: patch
 
 template: |
